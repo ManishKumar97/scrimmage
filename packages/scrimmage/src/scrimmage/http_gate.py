@@ -638,12 +638,15 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
     test, and unknown tool on a request where the model could not pick a tool of its own is
     left as it is: no tools, tool_choice "none" or a named tool. The call then goes on as in
     the baseline."""
-    word = run.plan.faults[step.decision.fault or 0].do
+    planned = run.plan.faults[step.decision.fault or 0]
+    word = planned.do
     if word not in REPLY_FAULTS:
         return
     provider = provider_for(run, step)
     if why := provider.never_carried_out(word):
         not_carried_out(run, step, why)  # no reply of this provider takes it, streamed or not
+    if planned.form is not None and (why := provider.refusal_form_problem(planned.form)):
+        not_carried_out(run, step, why)  # the row's provider was not named before the run
     if step.extra.get("stream") is True:
         not_carried_out(
             run,
@@ -692,7 +695,8 @@ def built_reply(
     tokens = len(body) // CHAR_PER_TOKEN
     path = str(request.url.path)
     if word == "refuse":
-        built = provider.refusal_reply(path, fields, tokens)
+        form = ctx.run.plan.faults[step.decision.fault or 0].form
+        built = provider.refusal_reply(path, fields, tokens, form)
     else:  # reply_checks let it through only on chat, with a tool offered
         tool = provider.tool_call_tools(path, fields)[0]
         built = provider.unknown_tool_reply(fields, tokens, tool)

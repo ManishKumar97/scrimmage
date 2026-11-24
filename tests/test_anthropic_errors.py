@@ -1,5 +1,5 @@
 """The faults that need no real reply, on an Anthropic call: a status and a body that does not
-parse, and the faults that are not done yet, which refuse and name Anthropic.
+parse, and the faults that are not done yet or never can be, which refuse and name Anthropic.
 
 The anthropic library reads each as it would a real one: the class of the error follows the
 status, the body's type is Anthropic's own, and the request id header is there."""
@@ -137,16 +137,8 @@ def test_a_prompt_over_the_context_window_is_a_400_invalid_request() -> None:
     assert run.line["status"] == 400
 
 
-@pytest.mark.parametrize("word", ["replace", "garble", "truncate", "refuse", "unknown tool"])
-def test_a_fault_that_is_not_done_yet_refuses_and_says_so_and_sends_nothing(word: str) -> None:
-    kw = {"text": "NEW"} if word == "replace" else {}
-    run, provider, client = call(word, **kw)
-    if word == "replace":
-        # A replace changes the real reply, so the call is sent and the reply left as it was.
-        ask(client)
-        assert run.line.get("mistake") or run.line.get("unchanged")
-        assert "not yet for Anthropic" in json.dumps(run.line)
-        return
+def test_unknown_tool_is_not_done_yet_so_it_refuses_says_so_and_sends_nothing() -> None:
+    run, provider, client = call("unknown tool")
     with pytest.raises(anthropic.APIConnectionError) as caught:
         ask(client)
     # The library wraps what the gate raised, as it would a connection that failed.

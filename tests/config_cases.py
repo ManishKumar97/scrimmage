@@ -317,6 +317,8 @@ GOOD["anthropic"] = (
     + TEST
     + '\n[[test.fault]]\ncall = "model:anthropic"\ndo = "status 529"\nwhen = "first 3"\n'
     + '\n[[test.fault]]\ncall = "model:*/input_tokens"\ndo = "timeout"\nwhen = "first 1"\n'
+    + '\n[[test.fault]]\ncall = "model:anthropic"\ndo = "refuse"\nwhen = "first 1"\n'
+    + 'model = "claude-haiku-4-5"\nform = "classifier"\nexpect = ["shipped"]\n'
 )
 
 
@@ -505,6 +507,41 @@ BAD = [
         "text_with_refuse",
         fault('call = "model"\nmodel = "m"\ndo = "refuse"\nwhen = "first 1"\ntext = "x"\n'),
         True,
+    ),
+    Bad(
+        "form_on_status",
+        fault('call = "model"\ndo = "status 500"\nwhen = "first 1"\nform = "plain"\n'),
+        True,
+    ),
+    Bad(
+        "form_on_a_tool",
+        fault('call = "tool:t"\ndo = "timeout"\nwhen = "first 1"\nform = "plain"\n'),
+        True,
+    ),
+    Bad(
+        "form_is_not_a_form",
+        fault(
+            'call = "model"\nmodel = "m"\ndo = "refuse"\nwhen = "first 1"\nform = "loud"\n'
+            'forbid = ["x"]\n'
+        ),
+        True,
+    ),
+    Bad(
+        "form_is_not_text",
+        fault(
+            'call = "model"\nmodel = "m"\ndo = "refuse"\nwhen = "first 1"\nform = 2\n'
+            'forbid = ["x"]\n'
+        ),
+        True,
+    ),
+    # The row names OpenAI, whose refuse has one form: known before any run.
+    Bad(
+        "openai_refuse_form",
+        fault(
+            'call = "model:openai"\ndo = "refuse"\nwhen = "first 1"\nmodel = "gpt-4o-mini"\n'
+            'form = "classifier"\nexpect = ["shipped"]\n'
+        ),
+        False,
     ),
     Bad(
         "retry_after_on_status_500",

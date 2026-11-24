@@ -1581,19 +1581,78 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         ("bad tool args", {}),
         ("unknown tool", {}),
     ):
-        state = "never" if word == "bad tool args" else "not yet"
+        # unknown tool is not done yet, and bad tool args never can be: both refuse. The rest
+        # change or build a reply, on a tool call alone and on a stream.
+        state = {"bad tool args": " never", "unknown tool": " not yet"}.get(word, "")
         add(
-            f"fault {word} {state}",
+            f"fault {word}{state}",
             [(MESSAGES, message(tools=[ORDER]))],
             ["real_tool_use"],
             faults=faulted(word, **extra),
         )
         add(
-            f"fault {word} {state} stream",
+            f"fault {word}{state} stream",
             [(MESSAGES, message(stream=True))],
             ["real_stream_answer"],
             faults=faulted(word, **extra),
         )
+    # A reply with text, and one with a signed thinking block before its text.
+    for word, extra in (("replace", {"text": "NEW"}), ("garble", {}), ("truncate", {})):
+        for fixture in ("real_answer", "real_decline", "real_decline_address"):
+            add(
+                f"fault {word} {fixture}",
+                [(MESSAGES, message())],
+                [fixture],
+                faults=faulted(word, **extra),
+            )
+    add(
+        "fault replace find",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("replace", text="NEW", find="wonderful"),
+    )
+    add(
+        "fault replace find missing",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("replace", text="NEW", find="absent"),
+    )
+    add(
+        "fault truncate cut before block",
+        [(MESSAGES, message(tools=[ORDER]))],
+        ["real_tool_use_cut_before_block"],
+        faults=faulted("truncate"),
+    )
+    add(
+        "fault refuse form plain",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("refuse", form="plain"),
+    )
+    add(
+        "fault refuse form classifier",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("refuse", form="classifier"),
+    )
+    add(
+        "fault refuse form classifier stream",
+        [(MESSAGES, message(stream=True))],
+        ["real_stream_answer"],
+        faults=faulted("refuse", form="classifier"),
+    )
+    add(
+        "fault refuse form bad",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("refuse", form="loud"),
+    )
+    add(
+        "fault replace status 500",
+        [(MESSAGES, message())],
+        ["500:real_error_401"],
+        faults=faulted("replace", text="NEW"),
+    )
     # Replies the fake cannot send.
     full = anthropic_reply("doc_stream_cached.sse")
     head = full.split(b"event: message_delta")[0]
@@ -1764,7 +1823,21 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     add("billing code execution alone", [(MESSAGES, message(tools=code))], ["real_answer"])
     free_code = [*code, {"type": "web_fetch_20260209", "name": "web_fetch"}]
     add("billing code execution free", [(MESSAGES, message(tools=free_code))], ["real_answer"])
-    # A fault, then the request the agent builds from the real reply: no marker is kept yet.
+    # A faulted reply, then the request the agent builds from it: the 400 is marked.
+    for word, first in (("truncate", "real_tool_use"), ("garble", "real_answer")):
+        add(
+            f"marker {word}",
+            [(MESSAGES, message(tools=[ORDER])), (MESSAGES, anthropic_followed)],
+            [first, "real_context_too_long"],
+            faults=faulted(word, "first 1"),
+        )
+    add(
+        "marker refuse",
+        [(MESSAGES, message(tools=[ORDER])), (MESSAGES, anthropic_followed)],
+        ["real_answer", "real_context_too_long"],
+        faults=faulted("refuse", "first 1"),
+    )
+    # A fault, then the request the agent builds from the real reply: no marker is kept.
     add(
         "fault status then follow-up",
         [(MESSAGES, message(tools=[ORDER])), (MESSAGES, anthropic_followed)],

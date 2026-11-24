@@ -2,15 +2,16 @@
 
 Pure functions of a request's host, path and body, or of a reply's body: the same jobs as
 provider_openai, over the Messages API. Anthropic's replies are never put in OpenAI's form.
-The faults that change or build a reply are not done yet: each says so, and the gate refuses
-the row.
+The faults that change a reply live in providers/impl/anthropic_changes. unknown tool is not
+done yet: it says so, and the gate refuses the row.
 """
 
 import dataclasses
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+import string
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -19,6 +20,7 @@ from scrimmage.judge import normal
 from scrimmage.prices import Rates as Rates
 from scrimmage.providers.base import NO_FIELDS
 from scrimmage.providers.base import Fields as Fields
+from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
@@ -34,7 +36,7 @@ WRITE_1H = "cache_write_1h"
 REQUEST_ID = "req_scrimmage_injected"
 NOT_YET = "not yet for Anthropic"
 # The words whose reply an Anthropic call cannot be given yet.
-PENDING = ("replace", "garble", "truncate", "unknown tool", "refuse")
+PENDING = ("unknown tool",)
 # The words no Anthropic reply can take, whatever the request: a mistake in the test, known
 # before the run. In a reply that is not streamed, a tool call's input is a JSON object, not
 # JSON text; a streamed reply sends it as text, but Scrimmage changes no streamed reply.
@@ -179,8 +181,8 @@ def context_too_long_body() -> bytes:
 
 
 def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
-    """Why a fault cannot be carried out on this request: the mistake in the test. The faults
-    that change or build a reply are not done yet for Anthropic, so each says so."""
+    """Why a fault cannot be carried out on this request: the mistake in the test. A fault not
+    done yet for Anthropic says so."""
     del path, wire
     if word in NEVER:
         return NEVER[word]
@@ -197,9 +199,67 @@ def never_carried_out(word: str) -> str | None:
     return NEVER.get(word)
 
 
-def refusal_reply(path: str, wire: Fields, tokens_in: int) -> bytes:
-    del path, wire, tokens_in
-    raise NotImplementedError(f"refuse is {NOT_YET}")
+# refuse. The plain form is how Claude declines in its own words, with stop_reason end_turn: its
+# text is the first sentence of a real decline (tests/fixtures/anthropic/real_decline_address.json,
+# saved on 24 November 2026), which names no subject, so it fits any request. The classifier form
+# is the refusal of Anthropic's safety classifier: no content, stop_reason refusal and
+# stop_details, as the Refusals page shows (tests/fixtures/anthropic/doc_refusal.json).
+FORMS = ("plain", "classifier")
+PLAIN_REFUSAL = "I can't provide that."
+CLASSIFIER_DETAILS: dict[str, object] = {
+    "type": "refusal",
+    "category": "cyber",
+    "explanation": "This request was declined because it could enable cyber harm.",
+}
+BUILT_OUTPUT_TOKENS = 10  # a built plain reply's output count: about its own length
+ID_LETTERS = string.ascii_letters + string.digits
+ID_LENGTH = 24  # after msg_, as in a real reply's id
+
+
+def made_up_id(prefix: str, length: int) -> str:
+    """An id in Anthropic's form. secrets, so the agent's own random sequence is left alone."""
+    import secrets  # not at import: only a made-up reply needs it, and it pulls in random
+
+    return prefix + "".join(secrets.choice(ID_LETTERS) for _ in range(length))
+
+
+def refusal_form_problem(form: str) -> str | None:
+    """None for each form this provider builds, else why not."""
+    if form in FORMS:
+        return None
+    return f'is an Anthropic call, and refuse has the forms "plain" and "classifier", not {form!r}'
+
+
+def refusal_reply(path: str, wire: Fields, tokens_in: int, form: str | None = None) -> bytes:
+    """refuse: a whole Messages reply that declines, laid out as a real one is, with its keys in
+    the real order. Plain by default; form "classifier" builds the classifier's refusal, which
+    stopped before any output."""
+    del path
+    classifier = form == "classifier"
+    reply: dict[str, object] = {
+        "model": model_name(wire) or "",
+        "id": made_up_id("msg_", ID_LENGTH),
+        "type": "message",
+        "role": "assistant",
+        "content": [] if classifier else [{"type": "text", "text": PLAIN_REFUSAL}],
+        "container": None,
+        "stop_reason": "refusal" if classifier else "end_turn",
+        "stop_sequence": None,
+        "stop_details": CLASSIFIER_DETAILS if classifier else None,
+        "usage": {
+            "input_tokens": tokens_in,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 0 if classifier else BUILT_OUTPUT_TOKENS,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    }
+    return json.dumps(reply, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def unknown_tool_reply(wire: Fields, tokens_in: int, tool: str) -> bytes:
@@ -222,6 +282,107 @@ def no_free_tool_call(path: str, wire: Fields) -> str | None:
     if choice == "tool":
         return "the request's tool_choice names the tool to call, so a model would call that one"
     return None
+
+
+def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
+    """What this reply to this request gave the agent. ids_only: the tool call ids alone, for a
+    reply whose message any model may send, such as a call to a tool no one offered."""
+    message = _assistant(request_fields(reply))
+    ids = frozenset(
+        found
+        for block in _list(message.get("content"))
+        if _obj(block).get("type") == "tool_use"
+        and isinstance(found := _obj(block).get("id"), str)
+        and found
+    )
+    if ids_only:
+        return Given(ids)
+    asked = [_normal(_whole(item)) for item in _list(fields_dict(wire).get("messages"))]
+    prefixes = frozenset[tuple[int, bytes]]()
+    if message:
+        prefixes = frozenset([_digest([*asked, _normal(message)])])
+    return Given(ids, prefixes)
+
+
+def carries(wire: Fields, kept: Sequence[Given]) -> bool:
+    """Whether a Messages request carries what any of these faulted replies gave the agent: an
+    assistant tool_use or a user tool_result with one of its toolu_ ids, or messages that start
+    with a faulted request's messages and its reply's message. The request is hashed once,
+    message by message, so the check grows with the request, not with the faults. An id that is
+    not a string is the agent's own mistake: it matches nothing, and the request goes on to the
+    provider, which answers it."""
+    if not kept:
+        return False
+    ids = frozenset[str]().union(*(gave.ids for gave in kept))
+    messages = [_obj(item) for item in _list(fields_dict(wire).get("messages"))]
+    for message in messages:
+        for block in _list(message.get("content")):
+            held = _obj(block)
+            kind = held.get("type")
+            found = held.get("id") if kind == "tool_use" else held.get("tool_use_id")
+            if kind in ("tool_use", "tool_result") and _among(found, ids):
+                return True
+    wanted = frozenset[tuple[int, bytes]]().union(*(gave.prefixes for gave in kept))
+    counts = {count for count, _ in wanted}
+    if not counts:
+        return False
+    sent = (_normal(_whole(message)) for message in messages[: max(counts)])
+    return any(found in wanted for found in _running(sent, counts))
+
+
+def _assistant(reply: Fields | None) -> dict[str, object]:
+    """The assistant message a Messages reply is: its role and its content, which the agent
+    sends back as the next turn. Empty for a reply that is not one."""
+    content = fields_dict(reply).get("content")
+    return {"role": "assistant", "content": content} if isinstance(content, list) else {}
+
+
+def _whole(message: object) -> object:
+    """A message with its content as blocks: text sent as a string is one text block."""
+    held = _obj(message)
+    if isinstance(held.get("content"), str):
+        return {**held, "content": [{"type": "text", "text": held["content"]}]}
+    return message
+
+
+def _among(found: object, ids: frozenset[str]) -> bool:
+    """Whether an id a request sends is one of these. A list or an object as an id cannot be
+    looked up in a set, and is never one of them."""
+    return isinstance(found, str) and found in ids
+
+
+def _digest(prefix: list[object]) -> tuple[int, bytes]:
+    """The count and digest of these messages, as a request that starts with them gets."""
+    *_, last = _running(prefix, {len(prefix)})
+    return last
+
+
+def _running(messages: Iterable[object], counts: set[int]) -> Iterator[tuple[int, bytes]]:
+    """For each count in counts, the count and the sha256 of the canonical JSON of the list of
+    the first that many messages. One hash is built message by message, so a long request is
+    read once. A key order or a space does not change it; a value does."""
+    import hashlib
+
+    whole = hashlib.sha256(b"[")
+    for count, message in enumerate(messages, 1):
+        if count > 1:
+            whole.update(b",")
+        whole.update(json.dumps(message, sort_keys=True, separators=(",", ":")).encode())
+        if count in counts:
+            part = whole.copy()
+            part.update(b"]")
+            yield count, part.digest()
+
+
+def _normal(value: object) -> object:
+    """A message as a later request may write it again: None, empty and missing are alike, as a
+    client that drops None fields sends them."""
+    if isinstance(value, dict):
+        kept = {str(k): _normal(v) for k, v in cast("dict[object, object]", value).items()}
+        return {k: v for k, v in kept.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_normal(item) for item in cast("list[object]", value)]
+    return value
 
 
 def parse_reply(data: bytes) -> Reply:

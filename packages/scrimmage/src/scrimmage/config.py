@@ -80,7 +80,7 @@ WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", 
 # text and find belong to append and replace. On a model call only replace takes them.
 CHANGE_KEYS = {"text", "find"}
 FAULT_KEYS = {"call", "do", "when", "raises", *CHANGE_KEYS, *RULE_KEYS}
-MODEL_FAULT_KEYS = {*FAULT_KEYS, "model", "retry_after"}
+MODEL_FAULT_KEYS = {*FAULT_KEYS, "model", "retry_after", "form"}
 MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
 MCP_FAULT_KEYS = {"call", "do", "when", *CHANGE_KEYS, *RULE_KEYS}
 WEB_FAULT_KEYS = {
@@ -116,6 +116,8 @@ MAX_SLOW_S = 600.0
 # The replies RFC 9110 and RFC 6585 give a Retry-After header: on another status it means
 # nothing to a library.
 RETRY_AFTER = ("status 429", "status 503")
+# The ways refuse can decline: in the model's own words, or as a safety classifier does.
+FORMS = ("plain", "classifier")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
@@ -393,6 +395,7 @@ class Fault:
     text: str | None = None  # append and replace: the injected text
     find: str | None = None  # replace: the text it puts text in place of
     retry_after: int | None = None  # status 429 and 503: the reply's Retry-After, in seconds
+    form: str | None = None  # refuse: "plain", the default, or "classifier"
 
     @property
     def target(self) -> str:
@@ -818,6 +821,8 @@ def never_for_provider(test: Test, fault: Fault) -> str | None:
         return None
     provider = built_in().get(name)
     why = provider.never_carried_out(fault.do)
+    if why is None and fault.form is not None:
+        why = provider.refusal_form_problem(fault.form)
     if why is None:
         return None
     return f"[[test]] {test.name!r}: fault on {fault.target}: {fault.call} {why}"
@@ -1597,9 +1602,13 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     if "retry_after" in table and (problem := retry_after_problem(do, retry)):
         raise ConfigError(f"{where} retry_after: {problem}; see {DOCS}")
     wait = cast(int | None, retry)
+    form = table.get("form")
+    if "form" in table and (problem := form_problem(do, form)):
+        raise ConfigError(f"{where} form: {problem}; see {DOCS}")
     return Fault(
-        call, do, when, raises, method, path, expect, forbid, rate, model, injected, find, wait
-    )
+        call, do, when, raises, method, path, expect, forbid, rate, model, injected, find, wait,
+        cast(str | None, form),
+    )  # fmt: skip
 
 
 def retry_after_problem(do: str, value: object) -> str | None:
@@ -1613,6 +1622,17 @@ def retry_after_problem(do: str, value: object) -> str | None:
             f'works only with do = "status 429" or "status 503", the replies a server sends '
             f"it on, not with {do!r}"
         )
+    return None
+
+
+def form_problem(do: str, value: object) -> str | None:
+    """Why a form is not one this version builds; None when it is.
+
+    The file's reader and the SDK's plan reader both ask this, so the two cannot drift."""
+    if not isinstance(value, str) or value not in FORMS:
+        return f'expected "plain" or "classifier", got {redact(repr(value))}'
+    if do != "refuse":
+        return f'works only with do = "refuse", not with {do!r}'
     return None
 
 

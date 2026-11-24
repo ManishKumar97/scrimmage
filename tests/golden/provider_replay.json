@@ -9846,10 +9846,10 @@
   "settles": [[1, 0.000168]],
   "stops": []
 },
-"anthropic fault replace not yet": {
+"anthropic fault replace": {
   "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"],
   "lines": [
-    {"action": "real", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.001152, "error": null, "kind": "model", "method": "POST", "mistake": "is an Anthropic call, and replace is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 648, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{\"c", "sha256": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 376, "output": 50}, "unchanged": {"do": "replace", "why": "is an Anthropic call, and replace is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "under": "real", "v": 1}
+    {"action": "real", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.001152, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 648, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{\"c", "sha256": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 376, "output": 50}, "unchanged": {"do": "replace", "why": "the reply has only tool calls and no text"}, "under": "real", "v": 1}
   ],
   "replies": [
     {"body": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a", "headers": {"content-length": "648", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 648, "status": 200}
@@ -9859,10 +9859,10 @@
   "settles": [[1, 0.001152]],
   "stops": []
 },
-"anthropic fault replace not yet stream": {
+"anthropic fault replace stream": {
   "blobs": ["38bce01c592d25eb3ba757cc0eea99c316ec56d1a88b8343aa3450928bd3fad8", "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
   "lines": [
-    {"action": "real", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.000144, "error": null, "kind": "model", "method": "POST", "mistake": "is an Anthropic call, and replace is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1668, "preview": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8Bp4gQA6gFqGbmLt7\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_rea", "sha256": "38bce01c592d25eb3ba757cc0eea99c316ec56d1a88b8343aa3450928bd3fad8"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": true, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 14}, "unchanged": {"do": "replace", "why": "is an Anthropic call, and replace is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "under": "real", "v": 1}
+    {"action": "real", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.000144, "error": null, "kind": "model", "method": "POST", "mistake": "replace on a model call needs a reply that is not streamed; turn streaming off for this model, or fault it another way", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1668, "preview": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8Bp4gQA6gFqGbmLt7\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_rea", "sha256": "38bce01c592d25eb3ba757cc0eea99c316ec56d1a88b8343aa3450928bd3fad8"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": true, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 14}, "unchanged": {"do": "replace", "why": "replace on a model call needs a reply that is not streamed; turn streaming off for this model, or fault it another way"}, "under": "real", "v": 1}
   ],
   "replies": [
     {"body": "38bce01c592d25eb3ba757cc0eea99c316ec56d1a88b8343aa3450928bd3fad8", "headers": {"content-length": "1668", "content-type": "text/event-stream", "request-id": "req_fake_scrimmage"}, "length": 1668, "status": 200}
@@ -9872,20 +9872,20 @@
   "settles": [[1, 0.000144]],
   "stops": []
 },
-"anthropic fault garble not yet": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+"anthropic fault garble": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and garble is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and garble is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "garble", "why": "is an Anthropic call, and garble is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "real", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.001152, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 648, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{\"c", "sha256": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 376, "output": 50}, "unchanged": {"do": "garble", "why": "the reply has only tool calls and no text"}, "under": "real", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and garble is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a", "headers": {"content-length": "648", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 648, "status": 200}
   ],
-  "reserved": [],
-  "sent": [],
-  "settles": [],
+  "reserved": [0.00089],
+  "sent": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+  "settles": [[1, 0.001152]],
   "stops": []
 },
-"anthropic fault garble not yet stream": {
+"anthropic fault garble stream": {
   "blobs": ["e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
   "lines": [
     {"action": "refused", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is a streamed request, and garble changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is a streamed request, and garble changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": true, "test": "t", "unchanged": {"do": "garble", "why": "is a streamed request, and garble changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}, "v": 1}
@@ -9898,20 +9898,20 @@
   "settles": [],
   "stops": []
 },
-"anthropic fault truncate not yet": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+"anthropic fault truncate": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a", "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and truncate is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and truncate is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "truncate", "why": "is an Anthropic call, and truncate is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].input"], "reply": {"bytes": 636, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{},", "sha256": "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8"}}, "cost_estimated": false, "cost_usd": 0.001152, "error": null, "fault": {"do": "truncate", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 648, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{\"c", "sha256": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 376, "output": 50}, "under": "real", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and truncate is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8", "headers": {"content-length": "636", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 636, "status": 200}
   ],
-  "reserved": [],
-  "sent": [],
-  "settles": [],
+  "reserved": [0.00089],
+  "sent": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+  "settles": [[1, 0.001152]],
   "stops": []
 },
-"anthropic fault truncate not yet stream": {
+"anthropic fault truncate stream": {
   "blobs": ["e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
   "lines": [
     {"action": "refused", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is a streamed request, and truncate changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is a streamed request, and truncate changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": true, "test": "t", "unchanged": {"do": "truncate", "why": "is a streamed request, and truncate changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}, "v": 1}
@@ -9924,20 +9924,20 @@
   "settles": [],
   "stops": []
 },
-"anthropic fault refuse not yet": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+"anthropic fault refuse": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_1SLGXuXwvYhw1prf2bMghpgl\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
   "settles": [],
   "stops": []
 },
-"anthropic fault refuse not yet stream": {
+"anthropic fault refuse stream": {
   "blobs": ["e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
   "lines": [
     {"action": "refused", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": true, "test": "t", "unchanged": {"do": "refuse", "why": "is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}, "v": 1}
@@ -10000,6 +10000,227 @@
   "reserved": [],
   "sent": [],
   "settles": [],
+  "stops": []
+},
+"anthropic fault replace real_answer": {
+  "blobs": ["4f6c634c8da9331ef99051602ce610d7bd18ec1fb064023358f43df772109de3", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 545, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"NEW\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"stop_sequence\":n", "sha256": "4f6c634c8da9331ef99051602ce610d7bd18ec1fb064023358f43df772109de3"}, "text": {"bytes": 3, "preview": "NEW", "sha256": "a253ff09c5a8678e1fd1962b2c329245e139e45f9cc6ced4e5d7ad42c4108fc0"}}, "cost_estimated": false, "cost_usd": 0.000168, "error": null, "fault": {"do": "replace", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "4f6c634c8da9331ef99051602ce610d7bd18ec1fb064023358f43df772109de3", "headers": {"content-length": "545", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 545, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic fault replace real_decline": {
+  "blobs": ["1390fa5b8fb35f51a4f08b2332768b86e30d400dcb8ac42bab4394c485435550", "a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[1].text"], "reply": {"bytes": 606, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"NEW\"}],", "sha256": "1390fa5b8fb35f51a4f08b2332768b86e30d400dcb8ac42bab4394c485435550"}, "text": {"bytes": 3, "preview": "NEW", "sha256": "a253ff09c5a8678e1fd1962b2c329245e139e45f9cc6ced4e5d7ad42c4108fc0"}}, "cost_estimated": false, "cost_usd": 0.003586, "error": null, "fault": {"do": "replace", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1750, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"I can't", "sha256": "a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 45, "output": 437}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "1390fa5b8fb35f51a4f08b2332768b86e30d400dcb8ac42bab4394c485435550", "headers": {"content-length": "606", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 606, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.003586]],
+  "stops": []
+},
+"anthropic fault replace real_decline_address": {
+  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc", "e120785e7a890a33e69761a2768f8b7835854b4414f8179152e34d511fe2c7b4"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 546, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"NEW\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"stop_sequence\":n", "sha256": "e120785e7a890a33e69761a2768f8b7835854b4414f8179152e34d511fe2c7b4"}, "text": {"bytes": 3, "preview": "NEW", "sha256": "a253ff09c5a8678e1fd1962b2c329245e139e45f9cc6ced4e5d7ad42c4108fc0"}}, "cost_estimated": false, "cost_usd": 0.00113, "error": null, "fault": {"do": "replace", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1028, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that. A private individual's home address is perso", "sha256": "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 29, "output": 134}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "e120785e7a890a33e69761a2768f8b7835854b4414f8179152e34d511fe2c7b4", "headers": {"content-length": "546", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 546, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.00113]],
+  "stops": []
+},
+"anthropic fault garble real_answer": {
+  "blobs": ["91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 590, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\"}],\"container\":null,\"stop_rea", "sha256": "91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0"}}, "cost_estimated": false, "cost_usd": 0.000168, "error": null, "fault": {"do": "garble", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0", "headers": {"content-length": "590", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 590, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic fault garble real_decline": {
+  "blobs": ["a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c", "a854888fb09a2d85ffcac75b60ea499ad81f1d0c5741728057873c0e7522ac61", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 37, "parts": ["content[1].text"], "reply": {"bytes": 2217, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"I can't", "sha256": "a854888fb09a2d85ffcac75b60ea499ad81f1d0c5741728057873c0e7522ac61"}}, "cost_estimated": false, "cost_usd": 0.003586, "error": null, "fault": {"do": "garble", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1750, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"I can't", "sha256": "a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 45, "output": 437}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "a854888fb09a2d85ffcac75b60ea499ad81f1d0c5741728057873c0e7522ac61", "headers": {"content-length": "2217", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 2217, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.003586]],
+  "stops": []
+},
+"anthropic fault garble real_decline_address": {
+  "blobs": ["20ca99d2b7c41e5d705e3fbb5748981772740f90f9e740035db6b5cc5f981585", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 14, "parts": ["content[0].text"], "reply": {"bytes": 1212, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that. \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35 private individual's home address \u0e2a\u0e27\u0e31", "sha256": "20ca99d2b7c41e5d705e3fbb5748981772740f90f9e740035db6b5cc5f981585"}}, "cost_estimated": false, "cost_usd": 0.00113, "error": null, "fault": {"do": "garble", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1028, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that. A private individual's home address is perso", "sha256": "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 29, "output": 134}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "20ca99d2b7c41e5d705e3fbb5748981772740f90f9e740035db6b5cc5f981585", "headers": {"content-length": "1212", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 1212, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.00113]],
+  "stops": []
+},
+"anthropic fault truncate real_answer": {
+  "blobs": ["810c7848c0e76518ed22fcf2916c6866e29fc4e7cf4b5e510c9de2fbc15a3c2e", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 555, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's\"}],\"container\":null,\"stop_reason\":\"max_tokens\",\"stop_s", "sha256": "810c7848c0e76518ed22fcf2916c6866e29fc4e7cf4b5e510c9de2fbc15a3c2e"}}, "cost_estimated": false, "cost_usd": 0.000168, "error": null, "fault": {"do": "truncate", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "810c7848c0e76518ed22fcf2916c6866e29fc4e7cf4b5e510c9de2fbc15a3c2e", "headers": {"content-length": "555", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 555, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic fault truncate real_decline": {
+  "blobs": ["4c165b6acc0569d0f2dc1d2bc2f44286e385c88884b71608e7f2ef487b47ab25", "a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[1].text"], "reply": {"bytes": 1178, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"I can't", "sha256": "4c165b6acc0569d0f2dc1d2bc2f44286e385c88884b71608e7f2ef487b47ab25"}}, "cost_estimated": false, "cost_usd": 0.003586, "error": null, "fault": {"do": "truncate", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1750, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK9eN12t6oPwAS5GRsB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"[scrubbed]\"},{\"type\":\"text\",\"text\":\"I can't", "sha256": "a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 45, "output": 437}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "4c165b6acc0569d0f2dc1d2bc2f44286e385c88884b71608e7f2ef487b47ab25", "headers": {"content-length": "1178", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 1178, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.003586]],
+  "stops": []
+},
+"anthropic fault truncate real_decline_address": {
+  "blobs": ["334ab75b266fb3c033eeb351bb9fec6148a5224838f626b30af414a29f624c07", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 787, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that. A private individual's home address is perso", "sha256": "334ab75b266fb3c033eeb351bb9fec6148a5224838f626b30af414a29f624c07"}}, "cost_estimated": false, "cost_usd": 0.00113, "error": null, "fault": {"do": "truncate", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 1028, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChNbAWoUrZYM45WdzvDyi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that. A private individual's home address is perso", "sha256": "d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 29, "output": 134}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "334ab75b266fb3c033eeb351bb9fec6148a5224838f626b30af414a29f624c07", "headers": {"content-length": "787", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 787, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.00113]],
+  "stops": []
+},
+"anthropic fault replace find": {
+  "blobs": ["759bc94b9178bd2af7e620d356c933627573e4c234cb2cb4f8d7df44da63ff4d", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "changed": {"count": 1, "find": {"bytes": 9, "preview": "wonderful", "sha256": "ee04228c5c6d8b083f6ce93fb7d7dbe487e04a96b29d13f627b01f9ad53dd3a4"}, "parts": ["content[0].text"], "reply": {"bytes": 570, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's NEW meeting you.\"}],\"container\":null,\"stop_reason\":\"en", "sha256": "759bc94b9178bd2af7e620d356c933627573e4c234cb2cb4f8d7df44da63ff4d"}, "text": {"bytes": 3, "preview": "NEW", "sha256": "a253ff09c5a8678e1fd1962b2c329245e139e45f9cc6ced4e5d7ad42c4108fc0"}}, "cost_estimated": false, "cost_usd": 0.000168, "error": null, "fault": {"do": "replace", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "759bc94b9178bd2af7e620d356c933627573e4c234cb2cb4f8d7df44da63ff4d", "headers": {"content-length": "570", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 570, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic fault replace find missing": {
+  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.000168, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "unchanged": {"do": "replace", "why": "find is not in the result"}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431", "headers": {"content-length": "576", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 576, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic fault truncate cut before block": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "f94a91cfcbd2e4e4135f3a559d80b44b00056b0c1283ae6cf839d466d716d1aa"],
+  "lines": [
+    {"action": "real", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.001032, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 519, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8KBJxWmrBk71MXKJr\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"max_tokens\",\"stop_sequence\":null,\"stop_details\":null,\"u", "sha256": "f94a91cfcbd2e4e4135f3a559d80b44b00056b0c1283ae6cf839d466d716d1aa"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 496, "output": 5}, "unchanged": {"do": "truncate", "why": "the reply has no text and no tool call"}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "f94a91cfcbd2e4e4135f3a559d80b44b00056b0c1283ae6cf839d466d716d1aa", "headers": {"content-length": "519", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 519, "status": 200}
+  ],
+  "reserved": [0.00089],
+  "sent": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+  "settles": [[1, 0.001032]],
+  "stops": []
+},
+"anthropic fault refuse form plain": {
+  "blobs": ["d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_V1FGdlTjgiOFgz1XGxr6FWR9\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault refuse form classifier": {
+  "blobs": ["3ab4ded70c01ca986db95545fd650648d6592333aebe527727762fd226c8ead1", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 623, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_IDTMywhIYoE1qzWPy0o0bdYN\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "3ab4ded70c01ca986db95545fd650648d6592333aebe527727762fd226c8ead1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "3ab4ded70c01ca986db95545fd650648d6592333aebe527727762fd226c8ead1", "headers": {"content-length": "623", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 623, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault refuse form classifier stream": {
+  "blobs": ["e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
+  "lines": [
+    {"action": "refused", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": true, "test": "t", "unchanged": {"do": "refuse", "why": "is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}, "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageMockError", "text": "model:anthropic is a streamed request, and refuse changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault refuse form bad": {
+  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "refused", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse has the forms \"plain\" and \"classifier\", not 'loud'", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse has the forms \"plain\" and \"classifier\", not 'loud'", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse has the forms \"plain\" and \"classifier\", not 'loud'"}, "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and refuse has the forms \"plain\" and \"classifier\", not 'loud'"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault replace status 500": {
+  "blobs": ["4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "lines": [
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000318, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 138, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"authentication_error\", \"message\": \"invalid x-api-key\"}, \"request_id\": \"req_011ChKY5uroyWoRy4sdpZUsV\"}", "sha256": "4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 401, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 23, "output": 34}, "unchanged": {"do": "replace", "why": "the reply status is 401, which is not changed"}, "under": "real", "v": 1}
+  ],
+  "replies": [
+    {"body": "4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d", "headers": {"content-length": "138", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 138, "status": 401}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000318]],
   "stops": []
 },
 "anthropic stream cut": {
@@ -10354,12 +10575,12 @@
   "stops": []
 },
 "anthropic httpx2 async: fault refuse": {
-  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_CnXYSnL5yfM90F2UsAQVafyQ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10445,12 +10666,12 @@
   "stops": []
 },
 "anthropic httpx: fault refuse": {
-  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_gMZZo8o21XiHiLjkNqHAU9Lk\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10536,12 +10757,12 @@
   "stops": []
 },
 "anthropic anthropic: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"],
+  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_Z0jJT2byjBfYsfIG4S0WyXEm\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "APIConnectionError", "text": "Connection error."}
+    {"body": "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10627,12 +10848,12 @@
   "stops": []
 },
 "anthropic anthropic async: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"],
+  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call, and refuse is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_GgQRceWUBCRSoTbgjfN8N6Du\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "APIConnectionError", "text": "Connection error."}
+    {"body": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -11035,6 +11256,51 @@
   "reserved": [0.0009375],
   "sent": ["577ca4370cc4c75fdb998e9a1f4df0884e08046fa539f17bc867bf6308b54e1e"],
   "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic marker truncate": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8", "bca8bec2f3b8e2976209fc624483e33bc268182ef3535217bff8232567bba244"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].input"], "reply": {"bytes": 636, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{},", "sha256": "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8"}}, "cost_estimated": false, "cost_usd": 0.001152, "error": null, "fault": {"do": "truncate", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 648, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK8E6xyY2NP3dGSoYtK\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01WLjkWfMgjcwWSKVn3oMzfw\",\"name\":\"get_weather\",\"input\":{\"c", "sha256": "1e012ae3e44ebabc9692dae57cdd6bde50659fd8cc25faf81ba7a2862c24578a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 376, "output": 50}, "under": "real", "v": 1},
+    {"action": "real", "after_reply_fault": true, "args": {"bytes": 468, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"toolu_01WLjkWfMgjcwWSKVn3oMzfw\", \"name\": \"ge", "sha256": "bca8bec2f3b8e2976209fc624483e33bc268182ef3535217bff8232567bba244"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000578, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 117, "output": 43}, "v": 1}
+  ],
+  "replies": [
+    {"body": "69595a4a5185de66311679d852d7f5ea295b313fcc613e6aa8fc2cea69ce88e8", "headers": {"content-length": "636", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 636, "status": 200},
+    {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
+  ],
+  "reserved": [0.00089, 0.001034],
+  "sent": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "bca8bec2f3b8e2976209fc624483e33bc268182ef3535217bff8232567bba244"],
+  "settles": [[1, 0.001152], [2, 0.000578]],
+  "stops": []
+},
+"anthropic marker garble": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0", "cfbdd914c33f959579ad4edc400a9bf2138d982afd089e1d8fd617e089b1f6df", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "changed": {"count": 1, "parts": ["content[0].text"], "reply": {"bytes": 590, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\"}],\"container\":null,\"stop_rea", "sha256": "91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0"}}, "cost_estimated": false, "cost_usd": 0.000168, "error": null, "fault": {"do": "garble", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "under": "real", "v": 1},
+    {"action": "real", "after_reply_fault": true, "args": {"bytes": 347, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello, it's wonderful meeting \\u0e2a\\u0e27\\u0e", "sha256": "cfbdd914c33f959579ad4edc400a9bf2138d982afd089e1d8fd617e089b1f6df"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000516, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 86, "output": 43}, "v": 1}
+  ],
+  "replies": [
+    {"body": "91de49ead456fb5641a115566e2e8f319a3d804927ca9c2bf2b7e56369f162b0", "headers": {"content-length": "590", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 590, "status": 200},
+    {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
+  ],
+  "reserved": [0.00089, 0.000972],
+  "sent": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "cfbdd914c33f959579ad4edc400a9bf2138d982afd089e1d8fd617e089b1f6df"],
+  "settles": [[1, 0.000168], [2, 0.000516]],
+  "stops": []
+},
+"anthropic marker refuse": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2", "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_K7gnu5KowrMJz5lWoz8BWpVd\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "real", "after_reply_fault": true, "args": {"bytes": 302, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"I can't provide that.\"}]}, {\"role\": \"user\", \"c", "sha256": "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000494, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 75, "output": 43}, "v": 1}
+  ],
+  "replies": [
+    {"body": "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200},
+    {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
+  ],
+  "reserved": [0.00095],
+  "sent": ["f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
+  "settles": [[1, 0.000494]],
   "stops": []
 },
 "anthropic fault status then follow-up": {

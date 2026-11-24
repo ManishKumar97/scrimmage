@@ -1080,6 +1080,34 @@ def test_a_reply_fault_takes_no_text_find_or_retry_after(word: str) -> None:
     assert config.read_fault(reply_fault(word, when="always", forbid=["x"]), "x").forbid == ("x",)
 
 
+@pytest.mark.design("config.refuse_form")
+def test_a_refuse_form_is_plain_or_classifier_and_works_only_with_refuse() -> None:
+    assert config.read_fault(reply_fault("refuse"), "x").form is None
+    for form in ("plain", "classifier"):
+        assert config.read_fault(reply_fault("refuse", form=form), "x").form == form
+    for bad in ("loud", "", 2, True, ["plain"]):
+        with pytest.raises(ConfigError, match='form: expected "plain" or "classifier"'):
+            config.read_fault(reply_fault("refuse", form=bad), "x")
+    for word in ("garble", "truncate", "unknown tool", "bad tool args", "status 500", "timeout"):
+        with pytest.raises(ConfigError, match='form: works only with do = "refuse"'):
+            config.read_fault(reply_fault(word, form="plain"), "x")
+    with pytest.raises(ConfigError, match="form: unknown setting"):
+        config.read_fault({"call": "tool:t", "do": "timeout", "form": "plain"}, "x")
+
+
+@pytest.mark.design("config.refuse_form")
+def test_the_plan_carries_a_refuse_form_and_refuses_one_that_is_not_a_form() -> None:
+    fault = config.Fault("model", "refuse", "first 1", model="m", form="classifier")
+    doc = plan.fault_json(fault)
+    assert doc["form"] == "classifier"
+    assert plan.fault_from(doc) == fault
+    assert "form" not in plan.fault_json(dataclasses.replace(fault, form=None))
+    with pytest.raises(ValueError, match="plan fault form: expected"):
+        plan.fault_from({**doc, "form": "loud"})
+    with pytest.raises(ValueError, match='plan fault form: works only with do = "refuse"'):
+        plan.fault_from({**doc, "do": "garble"})
+
+
 @pytest.mark.design("config.reply_fault_billed_warning")
 def test_a_reply_fault_not_built_yet_gets_no_billed_warning(tmp_path: Path) -> None:
     """garble, truncate and bad tool args stop before sending until they are built."""

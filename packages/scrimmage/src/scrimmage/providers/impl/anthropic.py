@@ -3,7 +3,8 @@
 A class that holds Anthropic's functions from provider_anthropic, bound once at import, and
 adapts the few whose signature the interface changes. Anthropic has one model API, the Messages
 API, so no function here decides by path which API a call is. The faults that change or build a
-reply are not done yet: each refuses, naming Anthropic, and nothing is guessed.
+reply are built or changed in anthropic_changes, except unknown tool, which is not done yet: it
+refuses, naming Anthropic, and nothing is guessed.
 """
 
 from collections.abc import Mapping, Sequence
@@ -12,7 +13,8 @@ from scrimmage import provider_anthropic as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
-from scrimmage.providers.base import Fields, Given, ReplyChange, Usage
+from scrimmage.providers.base import Fields, ReplyChange, Usage
+from scrimmage.providers.impl import anthropic_changes
 
 
 class NotYet:
@@ -42,6 +44,28 @@ class NotYet:
         said = self.blocked(status, headers)
         assert said is not None
         return said
+
+
+class AnthropicChange:
+    """One change to an Anthropic reply, for one fault word: every call is the Messages API."""
+
+    def __init__(self, word: str, op: str) -> None:
+        self.word, self.op = word, op
+
+    def blocked(self, status: int, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
+        return anthropic_changes.reply_kind(status, self.op, headers, self.word)
+
+    def __call__(
+        self,
+        status: int,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+        fault: Fault,
+        *,
+        decoded: bool,
+    ) -> WebChanged | Unchangeable:
+        make = anthropic_changes.model_change(self.word)
+        return make(status, self.op, headers, body, fault, decoded=decoded)
 
 
 class Anthropic:
@@ -132,18 +156,19 @@ class Anthropic:
     tool_call_tools = staticmethod(table.tool_call_tools)
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     refusal_reply = staticmethod(table.refusal_reply)
+    refusal_form_problem = staticmethod(table.refusal_form_problem)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
 
     @staticmethod
-    def given(path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
-        """Nothing is built or changed yet, so no faulted reply gave the agent anything."""
-        del path, wire, reply, ids_only
-        return Given()
+    def given(path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> table.Given:
+        """What a faulted Messages reply gave the agent: its toolu_ ids and its message."""
+        del path
+        return table.given(wire, reply, ids_only=ids_only)
 
     @staticmethod
-    def carries(path: str, wire: Fields, kept: Sequence[Given]) -> bool:
-        del path, wire, kept
-        return False
+    def carries(path: str, wire: Fields, kept: Sequence[table.Given]) -> bool:
+        del path
+        return table.carries(wire, kept)
 
     # ReplyReader
     parse_reply = staticmethod(table.parse_reply)
@@ -153,5 +178,7 @@ class Anthropic:
     # ReplyChanger
     @staticmethod
     def change(word: str, op: str, path: str) -> ReplyChange:
-        del op, path
+        del path
+        if word in anthropic_changes.MESSAGES_CHANGES:
+            return AnthropicChange(word, op)
         return NotYet(word)

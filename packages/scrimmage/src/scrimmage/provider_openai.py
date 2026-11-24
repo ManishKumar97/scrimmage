@@ -395,6 +395,15 @@ def response_ids(reply: bytes) -> list[str]:
     return [i for i in found if isinstance(i, str) and i]
 
 
+def refusal_form_problem(form: str) -> str | None:
+    """OpenAI's refuse has one form, so a form is a mistake in the test whatever it says."""
+    del form
+    return (
+        "is an OpenAI call, and refuse has one form here, so form does not apply; remove form "
+        "from this row"
+    )
+
+
 def never_carried_out(word: str) -> str | None:
     """OpenAI's replies can take every fault word, so none is a mistake whatever the request."""
     del word

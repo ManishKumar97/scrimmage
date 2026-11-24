@@ -126,7 +126,12 @@ class OpenAI:
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
 
-    def refusal_reply(self, path: str, wire: Fields, tokens_in: int) -> bytes:
+    refusal_form_problem = staticmethod(table.refusal_form_problem)
+
+    def refusal_reply(
+        self, path: str, wire: Fields, tokens_in: int, form: str | None = None
+    ) -> bytes:
+        del form  # refusal_form_problem keeps a form off an OpenAI call, so none is ever given
         if table.is_responses(path):
             return table.response_refusal_reply(wire, tokens_in)
         return table.refusal_reply(wire, tokens_in)
