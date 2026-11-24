@@ -1747,7 +1747,8 @@ def record(
             )
         return 0.0
     provider = provider_for(ctx.run, step)
-    used = provider.usage(body, output_required=step.call.name == "chat")
+    asked = provider.request_fields(body_of(request) or b"") or NO_FIELDS
+    used = provider.usage(body, output_required=step.call.name == "chat", asked=asked)
     tokens_in, tokens_out, cached = used.input, used.output, used.cached
     if not used.known:
         tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
