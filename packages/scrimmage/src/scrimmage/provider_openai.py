@@ -395,6 +395,12 @@ def response_ids(reply: bytes) -> list[str]:
     return [i for i in found if isinstance(i, str) and i]
 
 
+def never_carried_out(word: str) -> str | None:
+    """OpenAI's replies can take every fault word, so none is a mistake whatever the request."""
+    del word
+    return None
+
+
 IN_INPUT = "send the conversation in input instead, as the OpenAI Agents SDK does by default"
 
 

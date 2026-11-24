@@ -1581,14 +1581,15 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         ("bad tool args", {}),
         ("unknown tool", {}),
     ):
+        state = "never" if word == "bad tool args" else "not yet"
         add(
-            f"fault {word} not yet",
+            f"fault {word} {state}",
             [(MESSAGES, message(tools=[ORDER]))],
             ["real_tool_use"],
             faults=faulted(word, **extra),
         )
         add(
-            f"fault {word} not yet stream",
+            f"fault {word} {state} stream",
             [(MESSAGES, message(stream=True))],
             ["real_stream_answer"],
             faults=faulted(word, **extra),

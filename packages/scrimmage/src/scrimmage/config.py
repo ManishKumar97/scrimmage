@@ -664,6 +664,7 @@ def check_references(config: Config) -> list[str]:
             p for fault in test.faults if (p := carried_problem(test, fault, config.agent))
         ]
         problems += [p for fault in test.faults if (p := long_wait(test, fault, config.agent))]
+        problems += [p for fault in test.faults if (p := never_for_provider(test, fault))]
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
                 continue  # a model, web or MCP label cannot be compared with anything yet
@@ -806,6 +807,20 @@ def carried_problem(test: Test, fault: Fault, agent: Agent) -> str | None:
         f"{where}: {word} lets the call run, so {fault.call} must be mocked or listed under "
         "[agent] real; as written every call it names is refused"
     )
+
+
+def never_for_provider(test: Test, fault: Fault) -> str | None:
+    """A fault that no reply of the row's provider can take, found before any run. The provider
+    is known only when the row names it, as call = "model:<provider>". A row that says "model"
+    takes whichever provider the agent calls, so the call-time refusal stays for it."""
+    name = fault.call.removeprefix("model:") if fault.call.startswith("model:") else ""
+    if not name or "/" in name or name not in labels.PROVIDERS:
+        return None
+    provider = built_in().get(name)
+    why = provider.never_carried_out(fault.do)
+    if why is None:
+        return None
+    return f"[[test]] {test.name!r}: fault on {fault.target}: {fault.call} {why}"
 
 
 def long_wait(test: Test, fault: Fault, agent: Agent) -> str | None:

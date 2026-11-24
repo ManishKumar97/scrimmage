@@ -34,7 +34,18 @@ WRITE_1H = "cache_write_1h"
 REQUEST_ID = "req_scrimmage_injected"
 NOT_YET = "not yet for Anthropic"
 # The words whose reply an Anthropic call cannot be given yet.
-PENDING = ("replace", "garble", "truncate", "unknown tool", "bad tool args", "refuse")
+PENDING = ("replace", "garble", "truncate", "unknown tool", "refuse")
+# The words no Anthropic reply can take, whatever the request: a mistake in the test, known
+# before the run. In a reply that is not streamed, a tool call's input is a JSON object, not
+# JSON text; a streamed reply sends it as text, but Scrimmage changes no streamed reply.
+NEVER = {
+    "bad tool args": (
+        "is an Anthropic call, and bad tool args cannot be built: in a reply that is not "
+        "streamed a tool call's input is a JSON object, so it cannot fail to parse, and "
+        "Scrimmage changes no streamed reply; use a status, bad body, context too long or "
+        "timeout on this one"
+    )
+}
 
 # Every body is {"type": "error", "error": {"type", "message"}, "request_id"}. The type is by
 # status, from Anthropic's errors page; any other 4xx is invalid_request_error and any other 5xx
@@ -171,12 +182,19 @@ def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
     """Why a fault cannot be carried out on this request: the mistake in the test. The faults
     that change or build a reply are not done yet for Anthropic, so each says so."""
     del path, wire
+    if word in NEVER:
+        return NEVER[word]
     if word in PENDING:
         return (
             f"is an Anthropic call, and {word} is {NOT_YET}; use a status, bad body, "
             "context too long or timeout on this one"
         )
     return None
+
+
+def never_carried_out(word: str) -> str | None:
+    """Why this fault can never be carried out on an Anthropic call, whatever the request."""
+    return NEVER.get(word)
 
 
 def refusal_reply(path: str, wire: Fields, tokens_in: int) -> bytes:

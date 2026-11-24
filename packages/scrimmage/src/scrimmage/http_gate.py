@@ -641,6 +641,9 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
     word = run.plan.faults[step.decision.fault or 0].do
     if word not in REPLY_FAULTS:
         return
+    provider = provider_for(run, step)
+    if why := provider.never_carried_out(word):
+        not_carried_out(run, step, why)  # no reply of this provider takes it, streamed or not
     if step.extra.get("stream") is True:
         not_carried_out(
             run,
@@ -648,7 +651,6 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
             f"is a streamed request, and {word} changes a reply that is not streamed; turn "
             "streaming off for this model, or use timeout or a status on this one",
         )
-    provider = provider_for(run, step)
     if why := provider.not_carried_out(word, path, fields):
         not_carried_out(run, step, why)
     if word == "unknown tool" and (why := provider.no_free_tool_call(path, fields)):

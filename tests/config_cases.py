@@ -694,4 +694,13 @@ BAD = [
         fault('call = "tool:t"\ndo = "error"\nraises = "UnicodeDecodeError"\nwhen = "first 1"\n'),
         False,
     ),
+    # The row names Anthropic, whose tool input is a JSON object in a reply: known before any run.
+    Bad(
+        "anthropic_bad_tool_args",
+        fault(
+            'call = "model:anthropic"\ndo = "bad tool args"\nwhen = "first 1"\n'
+            'model = "claude-haiku-4-5"\nexpect = ["shipped"]\n'
+        ),
+        False,
+    ),
 ]
