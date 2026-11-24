@@ -444,26 +444,59 @@ def test_the_nonce_store_drops_expired_entries_without_a_full_sweep() -> None:
 @pytest.mark.design("service.control_load")
 def test_the_last_batch_counts_control_busy_and_control_p99_ms(svc: Service) -> None:
     real_handle = svc.server.handle
+    entered = threading.Semaphore(0)  # one release per handler that has started
+    freed = threading.Event()  # set once the ninth claim has been turned away
+    holds: list[float] = []
 
     def slow(*args: Any) -> Any:
-        time.sleep(0.3)  # a control server under load: each request is held 300 ms
+        began = time.monotonic()
+        waiting = not freed.is_set()
+        entered.release()
+        assert freed.wait(30)  # a control server under load: held until the test lets go
+        # Only the eight claims block here. Once `freed` is set, a run's later requests
+        # (its batches, its close) pass at once and are not a hold to measure.
+        if waiting:
+            holds.append(time.monotonic() - began)
         return real_handle(*args)
 
     svc.server.handle = slow  # type: ignore[method-assign]
     names = [svc.open(mocks=mocked("x")) for _ in range(CAP + 1)]
 
-    async def nine() -> list[Any]:  # a ninth claim beside eight: no slot frees in 250 ms
-        return await asyncio.gather(*(drive(gated_app(), headers=[svc.header(n)]) for n in names))
+    async def nine() -> list[Any]:
+        # Eight claims in flight, each holding a slot until `freed`. Only when all eight
+        # handlers are running does the ninth claim arrive, so no slot can free for it.
+        first = [
+            asyncio.ensure_future(drive(gated_app(), headers=[svc.header(n)])) for n in names[:CAP]
+        ]
+        deadline = time.monotonic() + 30
+        count = 0
+        while count < CAP:
+            if entered.acquire(blocking=False):
+                count += 1
+                continue
+            early = [f.result().status for f in first if f.done() and not f.cancelled()]
+            assert not early, f"a claim came back before the ninth arrived: statuses {early}"
+            assert time.monotonic() < deadline, f"only {count} of {CAP} handlers entered"
+            await asyncio.sleep(0.01)
+        extra = await drive(gated_app(), headers=[svc.header(names[CAP])])
+        freed.set()
+        return [*await asyncio.gather(*first), extra]
 
-    replies = run(nine())
-    assert sorted(r.status for r in replies) == [200] * CAP + [503]
-    claimed = [n for n, r in zip(names, replies, strict=True) if r.status == 200]
+    try:
+        replies = run(asyncio.wait_for(nine(), 60))
+    finally:
+        freed.set()
+    statuses = [r.status for r in replies]
+    assert statuses == [200] * CAP + [503], f"statuses {statuses}, wanted {CAP} of 200 then 503"
+    claimed = names[:CAP]
     for name in claimed:
         svc.closed(name)
     loaded = [svc.server.runs[n] for n in claimed]
     assert all((r.control_busy or 0) >= 1 for r in loaded)
-    # Each request was held 300 ms, so every round trip, and its p99, is at least that.
-    assert all((r.control_p99_ms or 0) >= 300 for r in loaded)
+    # Every round trip lasted at least as long as its handler held it, and so does its p99.
+    assert len(holds) == CAP and all(
+        (r.control_p99_ms or 0) >= min(holds) * 1000 - 1 for r in loaded
+    )
     svc.server.handle = real_handle  # type: ignore[method-assign]
     quiet = svc.open(mocks=mocked("x"))
     assert run(drive(gated_app(), headers=[svc.header(quiet)])).status == 200
