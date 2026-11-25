@@ -215,6 +215,9 @@ ignore_imports = [
     # A table module opens the wire types through providers.impl.wire, which no other module may.
     "scrimmage.provider_openai -> scrimmage.providers.impl.wire",
     "scrimmage.provider_anthropic -> scrimmage.providers.impl.wire",
+    # and compares messages and ids through providers.impl.marks.
+    "scrimmage.provider_openai -> scrimmage.providers.impl.marks",
+    "scrimmage.provider_anthropic -> scrimmage.providers.impl.marks",
 ]
 
 [tool.coverage.run]

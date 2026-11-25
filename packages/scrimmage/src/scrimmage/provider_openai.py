@@ -12,7 +12,7 @@ import math
 import re
 import string
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -24,6 +24,7 @@ from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
+from scrimmage.providers.impl.marks import among, digest, normalised, running
 from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.openai.com",)
@@ -599,8 +600,8 @@ def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
     )
     if ids_only:
         return Given(ids)
-    asked = [_normal(item) for item in _list(fields.get("messages"))]
-    prefixes = frozenset(_digest([*asked, _normal(message)]) for message in messages if message)
+    asked = [normalised(item) for item in _list(fields.get("messages"))]
+    prefixes = frozenset(digest([*asked, normalised(message)]) for message in messages if message)
     return Given(ids, prefixes)
 
 
@@ -618,56 +619,16 @@ def carries(wire: Fields, kept: Sequence[Given]) -> bool:
     messages = [_obj(item) for item in _list(fields.get("messages"))]
     for message in messages:
         calls = [_obj(call).get("id") for call in _list(message.get("tool_calls"))]
-        if message.get("role") == "assistant" and any(_among(i, ids) for i in calls):
+        if message.get("role") == "assistant" and any(among(i, ids) for i in calls):
             return True
-        if message.get("role") == "tool" and _among(message.get("tool_call_id"), ids):
+        if message.get("role") == "tool" and among(message.get("tool_call_id"), ids):
             return True
     wanted = frozenset[tuple[int, bytes]]().union(*(gave.prefixes for gave in kept))
     counts = {count for count, _ in wanted}
     if not counts:
         return False
-    sent = (_normal(message) for message in messages[: max(counts)])
-    return any(found in wanted for found in _running(sent, counts))
-
-
-def _among(found: object, ids: frozenset[str]) -> bool:
-    """Whether a tool call id a request sends is one of these. A list or an object as an id
-    cannot be looked up in a set, and is never one of them."""
-    return isinstance(found, str) and found in ids
-
-
-def _digest(prefix: list[object]) -> tuple[int, bytes]:
-    """The count and digest of these messages, as a request that starts with them gets."""
-    *_, last = _running(prefix, {len(prefix)})
-    return last
-
-
-def _running(messages: Iterable[object], counts: set[int]) -> Iterator[tuple[int, bytes]]:
-    """For each count in counts, the count and the sha256 of the canonical JSON of the list
-    of the first that many messages. One hash is built message by message, so a long
-    request is read once. A key order or a space does not change it; a value does."""
-    import hashlib
-
-    whole = hashlib.sha256(b"[")
-    for count, message in enumerate(messages, 1):
-        if count > 1:
-            whole.update(b",")
-        whole.update(json.dumps(message, sort_keys=True, separators=(",", ":")).encode())
-        if count in counts:
-            part = whole.copy()
-            part.update(b"]")
-            yield count, part.digest()
-
-
-def _normal(value: object) -> object:
-    """A message as a later request may write it again: None, empty and missing are alike, as
-    a client that drops None fields sends them."""
-    if isinstance(value, dict):
-        kept = {str(k): _normal(v) for k, v in cast(dict[object, object], value).items()}
-        return {k: v for k, v in kept.items() if v not in (None, "", [], {})}
-    if isinstance(value, list):
-        return [_normal(item) for item in cast(list[object], value)]
-    return value
+    sent = (normalised(message) for message in messages[: max(counts)])
+    return any(found in wanted for found in running(sent, counts))
 
 
 def request_fields(body: bytes) -> Fields | None:
