@@ -9,7 +9,7 @@ Every other limit is listed below, grouped by how your agent runs.
 - **OpenAI and Anthropic only.** Model calls are understood for OpenAI's API, for Anthropic's Messages API, and for gateways that speak either format; a call to another provider stops the test until you list it.
   Either name a gateway that speaks OpenAI's or Anthropic's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
   Anthropic's Messages API is recognized and its calls are counted, but this version ships no Anthropic prices, so a call with a budget on is refused until you add a price under `[agent.prices]`.
-  `replace`, `garble`, `truncate` and `refuse` work on an Anthropic reply, but `unknown tool` is not done yet, and `bad tool args` never will be: see [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call) and [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
+  `replace`, `garble`, `truncate`, `refuse` and `unknown tool` work on an Anthropic reply, and `bad tool args` never will be: see [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call) and [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
@@ -371,14 +371,13 @@ Also read the control-path limits under An agent inside a web service.
   `bad body` on a streamed request is a mistake too.
   What reaches an agent that streams is `timeout`, `refused`, `reset`, `dns`, `status`, `context too long` and `slow`, as for any call.
 
-- **`unknown tool` is for Chat Completions.** On a Responses API call it is a mistake in the test, and nothing is sent: no source shows a model call a tool no one offered there.
-
 - **A Responses agent that chains to a faulted reply is not supported.** A request whose `previous_response_id`, or an `item_reference` in its `input`, names a reply or an item a fault changed or built is a mistake in the test, and it is not sent: OpenAI holds nothing under those made-up ids. Send the conversation in `input`, as the OpenAI Agents SDK does by default.
   A reply fault on a request that names a `conversation` is a mistake in the test too, and nothing is sent: OpenAI would keep the real reply in that conversation, or none.
 
 - **`truncate` on Responses keeps the real counts.** The reply's `usage.output_tokens` is what the model was billed for, not the request's `max_output_tokens`. With no text, the last `function_call` item is cut, as a real reply cut inside a call is.
 
 - **A 400 after a reply fault on Responses is an infrastructure error.** OpenAI takes back a Responses message or function call under an id it never made and reads it as sent, as two real requests showed, so no 400 is known to follow a fault there, and none is marked `after_reply_fault`.
+  The one exception is `unknown tool`: a request that carries the made-up `call_id` is marked, as on Chat Completions, because that call is the failure under test.
 
 - **A built Responses reply's other fields are fixed.** After `refuse`, the reply repeats the fields your request set, such as `instructions`, `store`, `temperature`, `tool_choice` and `text`. Its `tools` is empty whatever your request sent, and `model` is the name your request sent.
 
@@ -397,8 +396,9 @@ Also read the control-path limits under An agent inside a web service.
 
 - **The Structured Outputs refusal is the guide's example.** No real refusal was captured: the `refusal` text and form come from OpenAI's Structured Outputs guide, and the plain one from a forum report.
 
-- **`unknown tool` sends one form.** It is the call to `multi_tool_use.parallel` OpenAI's models have sent. A tool name you pick is not built.
-  Its arguments name your first tool with `"parameters": {}`, so an agent that unwraps the call runs that tool with no arguments.
+- **`unknown tool` calls with no arguments.** The made-up call has an empty input, `{}` on Anthropic and `"{}"` on OpenAI, whatever the tool; the row cannot set it.
+  The default name, an offered tool's name with `_v2` added, is a guess at a rename between deploys, not a name any model sent; name the tool with `tool` when the name matters.
+  The run remembers the tool names of each model request by call label, so a tool dropped on one provider's call is not remembered for another's.
   It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then.
   If your agent sends that call back, OpenAI's real 400 on the next request is judged as the run's outcome, and its line is marked `after_reply_fault`; see [The 400 after a reply fault](model-faults.md#the-400-after-a-reply-fault).
 

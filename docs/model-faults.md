@@ -94,7 +94,7 @@ Each fault copies a case seen in the real world:
 | Fault | What your agent gets | Where it was seen |
 |---|---|---|
 | `refuse` | a refusal in place of the answer | OpenAI's Structured Outputs guide, and a forum report of `gpt-4o-mini` refusing in plain text |
-| `unknown tool` | a call to `multi_tool_use.parallel`, a tool your agent never offered | OpenAI forum reports from November 2023 to July 2024 |
+| `unknown tool` | a call to a tool your agent does not have, on OpenAI and on Anthropic | a documented mechanism: tools that change during a session, as in the MCP specification's `notifications/tools/list_changed`; see [`unknown tool`](#unknown-tool) |
 | `garble` | the real reply with every fifth word replaced by `สวัสดี` | Anthropic's postmortem of August and September 2025: stray Thai or Chinese tokens in English replies |
 | `truncate` | the real reply cut short, with `finish_reason` `length`; for a reply of tool calls alone, OpenAI's 400 for a reply cut inside a tool call | real replies cut by `max_completion_tokens` |
 | `bad tool args` | the real tool calls with arguments that are not valid JSON | OpenAI's API reference: "the model does not always generate valid JSON" |
@@ -145,15 +145,55 @@ On a plain request the refusal is ordinary text, so an agent that only checks `r
 
 ### `unknown tool`
 
-The reply is one tool call, as OpenAI's models have sent it:
+The reply is one call to a tool your request does not offer, with no arguments.
+Every agent has to handle it: the model asks for a tool the agent does not have, and the agent must answer with an error, not run something else or crash.
 
-```json
-{"name": "multi_tool_use.parallel", "arguments": "{\"tool_uses\":[{\"recipient_name\":\"functions.get_order\",\"parameters\":{}}]}"}
+The real causes are documented, and the fault catalog names each:
+
+- the tools change during a session, as the MCP specification describes with `notifications/tools/list_changed`, so a tool the model was offered is gone by the next call;
+- a deploy renames or removes a tool while the conversation history still names it;
+- the agent and its MCP server are on versions that disagree about which tools exist;
+- a tool result holds text that tells the model to call a tool, such as `delete_account`.
+
+#### Which tool it calls
+
+| Order | The tool | When |
+|---|---|---|
+| 1 | the one the row names with `tool = "delete_account"` | the row has `tool` |
+| 2 | a tool an earlier model request of the run offered and this one does not | the agent has dropped a tool since, as a deploy or `list_changed` does |
+| 3 | the name of the first tool this request offers, with `_v2` added | otherwise, so it reads like a rename between two deploys |
+
+The run remembers the tool names of each model request, for each call label such as `model:openai`.
+In the third case a name the request already offers gets `_v2` added again until it is not one.
+A row whose `tool` is a tool the request offers is a mistake in the test, and nothing is sent: a call to an offered tool is not an unknown tool.
+The `_v2` name is a guess at a rename, not a name any model sent.
+Name the tool in the row when your test is about one name, such as `tool = "multi_tool_use.parallel"`, the dotted name OpenAI's models were seen to call in forum reports from November 2023 to July 2024.
+
+```toml
+[[test.fault]]
+call   = "model"
+model  = "gpt-4o-mini"
+do     = "unknown tool"
+tool   = "delete_account"
+when   = "call 2"
+expect = [["no such tool", "cannot"]]
 ```
 
-`recipient_name` names the first tool your request offers, and `finish_reason` is `tool_calls`.
-A request where the model cannot pick a tool of its own is left as it is: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or offers tools in the old `functions` field only. The call goes on as in the baseline, and the line says why.
-If your agent sends the call back in its next request, OpenAI refuses that request with a 400, because the name holds a dot.
+#### The form on each API
+
+The call has no arguments, and its layout is the one of a real tool call:
+
+| API | The reply | Where the layout comes from |
+|---|---|---|
+| Chat Completions | one `tool_calls` entry, `{"id": "call_...", "type": "function", "function": {"name": "get_order_v2", "arguments": "{}"}}`, and `finish_reason` `tool_calls` | a real `gpt-4o-mini` reply, `real_chat_tool_call.json` |
+| Responses | one `function_call` output item with `name`, `arguments` `"{}"`, a `call_id` and an `fc_` id, `status` `completed` | a real `gpt-4o-mini` reply, `real_response_function_call_truncated.json` |
+| Anthropic Messages | one `tool_use` block with an `id` of the form `toolu_01...`, `name`, an `input` of `{}` and `caller` `direct`, and `stop_reason` `tool_use` | a real `claude-haiku-5-5` reply, `real_tool_use.json` |
+
+Nothing is sent: the line costs 0 and nothing is reserved.
+A request where the model could not pick a tool of its own is left as it is, and the call goes on as in the baseline: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or on OpenAI offers tools in the old `functions` field only.
+The line says why.
+If your agent answers the call, the provider may refuse that request: OpenAI refuses a name that holds a dot, so `multi_tool_use.parallel` gets a 400 on the next request.
+That 400 is your agent's result, as the section below says.
 
 ### `garble`, `truncate` and `bad tool args`
 
@@ -184,7 +224,7 @@ A reply in gzip or deflate is unpacked, changed and sent to your agent with no e
 
 ### Reply faults on an Anthropic call
 
-`replace`, `garble`, `truncate` and `refuse` work on a call to Anthropic's Messages API, in its own form.
+`replace`, `garble`, `truncate`, `refuse` and `unknown tool` work on a call to Anthropic's Messages API, in its own form.
 A reply there is a list of content blocks, not choices.
 Each fault changes the blocks it names, and leaves every other byte as Anthropic sent it: `id`, `model`, `usage` and every other block.
 
@@ -196,6 +236,7 @@ Each fault changes the blocks it names, and leaves every other byte as Anthropic
 | `truncate`, on a reply of tool calls alone | the first `tool_use` block with an empty `input`, the blocks after it dropped, and `stop_reason` set to `max_tokens` | | a real `claude-haiku-5-5` reply cut inside a tool call, saved on 23 November 2026 |
 | `refuse` | a plain decline: one `text` block, `I can't provide that.`, and `stop_reason` `end_turn` | | a real `claude-haiku-5-5` decline, saved on 24 November 2026 |
 | `refuse`, with `form = "classifier"` | no content, `stop_reason` `refusal`, and `stop_details` of type `refusal` with a `null` category and explanation | | the shape on Anthropic's Refusals page |
+| `unknown tool` | one `tool_use` block for a tool the request does not offer, with an `input` of `{}`, and `stop_reason` `tool_use`; see [`unknown tool`](#unknown-tool) | the request offers no tool the agent runs, `tool_choice` of type `none` or `tool` | a documented mechanism, and a real `tool_use` reply for the layout |
 
 A real capture shows Anthropic's API sending a tool call cut in the middle as a 200, not as an error as OpenAI's does.
 The block is there with an `input` of `{}`, so that is what `truncate` builds.
@@ -207,8 +248,8 @@ Anthropic signs them, and your agent sends them back as they came, so a changed 
 A real request with a changed text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
 The request and the reply are saved as `real_thinking_resent_request.json` and `real_thinking_resent_reply.json` in the test fixtures.
 
-`refuse` is built, not sent: nothing is reserved and the line costs 0.
-It is made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
+`refuse` and `unknown tool` are built, not sent: nothing is reserved and the line costs 0.
+They are made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
 Its `usage` holds a rough count of your request's tokens and, for the plain form, 10 output tokens.
 
 #### The two forms of `refuse` on Anthropic
@@ -257,9 +298,9 @@ The 400 is what the real misbehaviour leads to.
 - its messages hold a tool call id the faulted reply made, as an assistant tool call or a tool result's `tool_call_id`, or on an Anthropic call an assistant `tool_use` block's `id` or a `tool_result` block's `tool_use_id`;
 - its messages start with the faulted request's messages and then the message your agent got, compared with null and empty fields left out; on an Anthropic call a message's text sent as a string is the same as one `text` block.
 
-After `unknown tool` only the first counts, as a real model sends calls to `multi_tool_use.parallel` too.
+After `unknown tool` only the first counts, as a real model may call the same tool too.
 After `refuse`, `garble`, `truncate` and `bad tool args` either counts.
-A text alone never counts: a fresh conversation that repeats the refusal, or a real call to `multi_tool_use.parallel` with an id of its own, is not built from the fault.
+A text alone never counts: a fresh conversation that repeats the refusal, or a real call to the same tool with an id of its own, is not built from the fault.
 An agent that rewrites the message it got before sending it back, such as one that keeps only part of it, is not matched, and its 400 stays an infrastructure error.
 `replace` on a model call is not a reply fault, so a 400 after it stays an infrastructure error too.
 The run is judged as it ended: an agent that does not catch the error crashes, and the row fails.
@@ -292,7 +333,8 @@ It holds on a reasoning model too: on `gpt-5-nano`, a real reasoning item follow
 So the new ids make the next turn read what your agent got.
 Under Structured Outputs, `client.responses.parse()` gives `output_parsed` as `None` after `refuse`, with the refusal part in the message.
 The built `refuse` reply is made from a real `gpt-4o-mini` Responses reply, with new `resp_` and `msg_` ids; it repeats the fields your request set, such as `instructions`, `store`, `temperature`, `text` and `previous_response_id`, as a real reply does.
-`unknown tool` on a Responses call is a mistake in the test, and nothing is sent: no source shows a model call a tool no one offered there.
+`unknown tool` builds one `function_call` item, as the table in [`unknown tool`](#unknown-tool) shows, under a new `resp_` id.
+A request that sends the conversation in `input` and answers the call with a `function_call_output` of its `call_id` is built from the fault, and a 400 to it is marked `after_reply_fault`.
 
 A Responses request can ask OpenAI to look up an earlier reply, with `previous_response_id`, or an earlier item, with an `item_reference` in `input`.
 OpenAI then builds the next turn from what it stored, and it stored nothing under a faulted reply's made-up ids.
