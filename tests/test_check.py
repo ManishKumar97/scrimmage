@@ -167,7 +167,8 @@ def test_a_valid_file_gets_one_line_with_what_it_holds(
     assert captured.err == ""
     assert captured.out == (
         f"scrimmage check: {project.toml} is valid: 1 test, 2 rows, 6 runs, 4 tools, "
-        f"a budget of $5, OpenAI prices as of {dict(prices.shipped().sections)['openai'].as_of}\n"
+        f"a budget of $5, OpenAI prices as of {dict(prices.shipped().sections)['openai'].as_of}, "
+        f"Anthropic prices as of {dict(prices.shipped().sections)['anthropic'].as_of}\n"
     )
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\nruns = 1\n')
     project.edit(

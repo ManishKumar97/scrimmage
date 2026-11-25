@@ -97,7 +97,14 @@ def test_the_top_level_alone_would_settle_under_when_the_declined_attempt_is_dea
     assert settled(cheap) > top_level_only_at_opus + 1e-3
 
 
-def test_a_hop_whose_model_has_no_row_is_priced_at_the_dearest_row_there_is() -> None:
+def test_a_hop_whose_model_has_no_row_is_priced_at_the_dearest_row_there_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The shipped file prices Opus 4.8 now, so leave its Anthropic rows out: no row names it.
+    only_openai = prices.PriceFile(
+        tuple((name, s) for name, s in prices.shipped().sections if name != "anthropic")
+    )
+    monkeypatch.setattr(prices, "shipped", lambda: only_openai)
     run = Gate(hosts=(), prices=(("claude-fable-5", FABLE),))
     send(run, fixture("doc_fallback.json"), model="claude-fable-5")
     # Opus has no row here, so its attempt costs at the dearest row, Fable's.
@@ -521,7 +528,7 @@ def test_check_warns_of_a_fee_a_provider_does_not_charge() -> None:
 
 
 def test_a_call_with_no_price_is_told_where_anthropics_rates_are_and_given_no_number() -> None:
-    """Scrimmage ships no Anthropic prices, so the line to paste names the pricing page and holds
+    """A model with no shipped row is given a line to paste that names the pricing page and holds
     no rate. A line with OpenAI's example rates would price a Claude model 20 to 25 times low."""
     example = built_in().get("anthropic").price_example
     assert "https://platform.claude.com/docs/en/about-claude/pricing" in example

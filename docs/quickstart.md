@@ -106,7 +106,7 @@ scrimmage check
 ```
 
 ```text title="Output"
-scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5, OpenAI prices as of 2026-11-22
+scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5, OpenAI prices as of 2026-11-22, Anthropic prices as of 2026-11-25
 ```
 
 Then run the test:

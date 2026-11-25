@@ -339,7 +339,7 @@ def parse_section(text: str, item: str, provider: str, raw: object) -> Section:
 
 
 RESERVED_TIERS = ("default", "auto")
-# Dollars per million tokens. The cheapest real price today is 0.02, so no honest file is
+# Dollars per million tokens. The cheapest real price today is 0.01, so no honest file is
 # below this, and a file that is has made the model free in all but name.
 FLOOR = 0.001
 # The same for a fee, in dollars for each request, whose honest values are cents: a file that

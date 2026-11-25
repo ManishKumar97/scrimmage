@@ -743,3 +743,213 @@ output = 0.0
 [openai.models."text-embedding-ada-002"]
 input = 0.10
 output = 0.0
+
+# Anthropic's prices, in dollars per million tokens, standard speed, with fast mode under tiers.fast.
+# Checked by hand against Anthropic's pricing page and fast mode page on 25 November 2026; a price
+# changes by a plain PR to this file. A team overrides or adds a model under [agent.prices].
+# A row's name is the Claude API model id, as the models page gives it. A dated snapshot, such as
+# claude-opus-4-5-20251101, costs its family's row: -YYYYMMDD is dropped.
+# Every row sets its cache writes as the page lists them, not as multiples of input: cache_write_5m
+# and cache_write_1h. cached_input is the page's "cache hits and refreshes" price: 0.1 times input
+# on most models, 0.05 times on Opus 5.5 and Sonnet 5.5, 0.025 times on Fable 5.2, Mythos 5.2,
+# Fable 5.1 and Mythos 5.1.
+# Claude Haiku 5.5 is priced by prompt length. Its [long] table holds the rates of a request whose
+# prompt is over 100,000 tokens, and Anthropic charges the whole request at them, input and output,
+# not only the tokens past the threshold: "a request over the threshold pays the higher prices even
+# when part of its prompt is a cache hit", and the prompt length counts cache reads and writes too.
+# Claude 4.6 and later models other than Haiku 5.5 include the full 1M context window at their
+# standard price, and the 4.5 models have a 200K window and one price, so none of them has a long table.
+# Fast mode is a tiers.fast row for each model the fast mode page prices: Claude Fable 5.2, Mythos 5.2,
+# Opus 5.5, Opus 5 and Opus 4.8. The page gives fast input and output only, and says the prompt
+# caching multipliers apply on top of fast pricing, so a fast row's cache rates are the page's
+# multipliers on the fast input rate: 1.25 for a 5 minute write, 2 for a 1 hour write, and the
+# model's cache read multiplier for a hit. Those cache rates are computed, not listed.
+# Claude Mythos 5.2, 5.1 and 5 are limited to organizations Anthropic has verified; the page prices
+# them, so they are here.
+# The deprecations page marks claude-opus-4-5 (and its dated id claude-opus-4-5-20251101) and
+# claude-sonnet-4-5 (claude-sonnet-4-5-20250929) deprecated, retiring on 22 January 2027 and
+# 30 November 2026. Both are still served and priced, so both rows stay, and a call to them runs.
+# Fast mode is deprecated on Opus 4.8, whose fast requests Anthropic removes on 30 November 2026,
+# and is a research preview on Opus 5.
+# Left out on purpose: the Batch API, which is not a tier a reply names; US-only inference
+# (inference_geo "us"), which costs 1.1 times and which docs/limits.md says is settled at the normal
+# rate; data residency multipliers; and the retired models Opus 4.1, Opus 4 and Sonnet 4, which the
+# page marks retired; and Claude Mythos Preview (claude-mythos-preview), which the pricing page
+# names with no price and the deprecations page marks deprecated since 9 June 2026.
+
+[anthropic]
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+as_of = "2026-11-25"
+
+# A web search costs $10 per 1,000 searches on the Claude API, plus the tokens its results use.
+[anthropic.fees]
+web_search_request = 0.01
+
+[anthropic.models."claude-fable-5-2"]
+input = 8.00
+output = 40.00
+cached_input = 0.20
+cache_write_5m = 10.00
+cache_write_1h = 16.00
+
+[anthropic.models."claude-fable-5-2".tiers.fast]
+input = 16.00
+output = 80.00
+cached_input = 0.40
+cache_write_5m = 20.00
+cache_write_1h = 32.00
+
+[anthropic.models."claude-mythos-5-2"]
+input = 8.00
+output = 40.00
+cached_input = 0.20
+cache_write_5m = 10.00
+cache_write_1h = 16.00
+
+[anthropic.models."claude-mythos-5-2".tiers.fast]
+input = 16.00
+output = 80.00
+cached_input = 0.40
+cache_write_5m = 20.00
+cache_write_1h = 32.00
+
+[anthropic.models."claude-fable-5-1"]
+input = 10.00
+output = 50.00
+cached_input = 0.25
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-mythos-5-1"]
+input = 10.00
+output = 50.00
+cached_input = 0.25
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-fable-5"]
+input = 10.00
+output = 50.00
+cached_input = 1.00
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-mythos-5"]
+input = 10.00
+output = 50.00
+cached_input = 1.00
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-opus-5-5"]
+input = 4.00
+output = 20.00
+cached_input = 0.20
+cache_write_5m = 5.00
+cache_write_1h = 8.00
+
+[anthropic.models."claude-opus-5-5".tiers.fast]
+input = 8.00
+output = 40.00
+cached_input = 0.40
+cache_write_5m = 10.00
+cache_write_1h = 16.00
+
+[anthropic.models."claude-opus-5"]
+input = 5.00
+output = 25.00
+cached_input = 0.50
+cache_write_5m = 6.25
+cache_write_1h = 10.00
+
+[anthropic.models."claude-opus-5".tiers.fast]
+input = 10.00
+output = 50.00
+cached_input = 1.00
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-opus-4-8"]
+input = 5.00
+output = 25.00
+cached_input = 0.50
+cache_write_5m = 6.25
+cache_write_1h = 10.00
+
+[anthropic.models."claude-opus-4-8".tiers.fast]
+input = 10.00
+output = 50.00
+cached_input = 1.00
+cache_write_5m = 12.50
+cache_write_1h = 20.00
+
+[anthropic.models."claude-opus-4-7"]
+input = 5.00
+output = 25.00
+cached_input = 0.50
+cache_write_5m = 6.25
+cache_write_1h = 10.00
+
+[anthropic.models."claude-opus-4-6"]
+input = 5.00
+output = 25.00
+cached_input = 0.50
+cache_write_5m = 6.25
+cache_write_1h = 10.00
+
+[anthropic.models."claude-opus-4-5"]
+input = 5.00
+output = 25.00
+cached_input = 0.50
+cache_write_5m = 6.25
+cache_write_1h = 10.00
+
+[anthropic.models."claude-sonnet-5-5"]
+input = 2.00
+output = 10.00
+cached_input = 0.10
+cache_write_5m = 2.50
+cache_write_1h = 4.00
+
+[anthropic.models."claude-sonnet-5"]
+input = 2.00
+output = 10.00
+cached_input = 0.20
+cache_write_5m = 2.50
+cache_write_1h = 4.00
+
+[anthropic.models."claude-sonnet-4-6"]
+input = 3.00
+output = 15.00
+cached_input = 0.30
+cache_write_5m = 3.75
+cache_write_1h = 6.00
+
+[anthropic.models."claude-sonnet-4-5"]
+input = 3.00
+output = 15.00
+cached_input = 0.30
+cache_write_5m = 3.75
+cache_write_1h = 6.00
+
+[anthropic.models."claude-haiku-5-5"]
+input = 0.10
+output = 0.50
+cached_input = 0.01
+cache_write_5m = 0.125
+cache_write_1h = 0.20
+
+[anthropic.models."claude-haiku-5-5".long]
+above = 100000
+input = 0.50
+output = 2.50
+cached_input = 0.05
+cache_write_5m = 0.625
+cache_write_1h = 1.00
+
+[anthropic.models."claude-haiku-4-5"]
+input = 1.00
+output = 5.00
+cached_input = 0.10
+cache_write_5m = 1.25
+cache_write_1h = 2.00
