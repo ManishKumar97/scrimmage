@@ -880,17 +880,18 @@ def test_the_three_pages_make_the_same_promise_about_connections() -> None:
 
 
 @pytest.mark.design("docs.mcp_extra_pin")
-def test_the_install_page_states_the_mcp_extras_pin_and_its_one_exception() -> None:
-    """The extra pins mcp to one minor, so the page may not say an install never changes
-    the agent's libraries without saying the extra is the exception."""
+def test_the_install_page_names_both_extras_and_only_mcps_pin() -> None:
+    """Both extras can change a library an agent uses, and only mcp is pinned to one minor."""
     import tomllib
 
     root = Path(__file__).parents[1] / "packages" / "scrimmage" / "pyproject.toml"
-    pin = tomllib.loads(root.read_text())["project"]["optional-dependencies"]["mcp"]
+    extras = tomllib.loads(root.read_text())["project"]["optional-dependencies"]
     text = page("install.md")
-    assert all(f"`{spec}`" in text for spec in [f"({pin[0]})".strip("()")])
+    assert f"`{extras['mcp'][0]}`" in text
+    assert f"`{extras['cert'][0]}`" in text
     assert "installing it never changes" not in text
-    assert "The `mcp` extra is the one exception" in text
+    assert "The two extras are the exception" in text
+    assert "Only `mcp` is pinned to one minor" in text
 
 
 @pytest.mark.design("docs.setup_cost")

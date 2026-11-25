@@ -15,7 +15,7 @@ It patches functions inside your agent's process while a test runs, so it belong
 
 It depends on nothing outside Python's standard library.
 So installing it on its own never changes the versions of the libraries your agent uses.
-The `mcp` extra is the one exception, as the next paragraph says.
+The two extras are the exception, as the next paragraphs say.
 You never type the import name: you write `scrimmage.toml` and run the commands.
 `scrimmage --version` prints the installed version.
 
@@ -23,7 +23,9 @@ It has two extras.
 `scrimmage[mcp]` adds the Scrimmage MCP server, `scrimmage-mcp`, and the `mcp` library it needs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 The server is built on that library's low-level API, so the extra asks for `mcp` 2.3 and no later minor (`mcp>=2.3,<2.4`).
 If your agent uses another `mcp` version, install the extra in its own environment, as the server runs as a separate command.
-`scrimmage[cert]` adds the `cryptography` library that `scrimmage cert` needs.
+`scrimmage[cert]` adds the `cryptography` library that `scrimmage cert` needs, as `cryptography>=46`, with no upper bound.
+If your agent uses `cryptography`, that install can raise its version.
+Only `mcp` is pinned to one minor.
 
 ## From a clone
 
