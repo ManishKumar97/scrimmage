@@ -835,7 +835,8 @@ def test_a_run_with_no_openai_key_says_which_variable_is_missing(project: Projec
     ("log", "variable"),
     [
         (
-            "openai.OpenAIError: Missing credentials ... set the `OPENAI_API_KEY` env",
+            "openai.OpenAIError: Missing credentials. Please pass an `api_key`, "
+            "or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.",
             "OPENAI_API_KEY",
         ),
         (
@@ -843,6 +844,13 @@ def test_a_run_with_no_openai_key_says_which_variable_is_missing(project: Projec
             "ANTHROPIC_API_KEY",
         ),
         ("ValueError: something else", None),
+        (
+            "openai.OpenAIError: Missing credentials. Please pass one of `api_key`, "
+            "`azure_ad_token`, or the `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AD_TOKEN` "
+            "environment variables.",
+            None,
+        ),
+        ("loaded OPENAI_API_KEY from .env\nKeyError: 'x'", None),
     ],
 )
 def test_missing_key_reads_the_providers_own_error_from_every_run_log(

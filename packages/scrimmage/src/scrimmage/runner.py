@@ -1436,7 +1436,10 @@ def provider_message(line: dict[str, object], scrub: Sequence[str] = ()) -> str:
 # What each provider's library says when it is given no key, as a run's log ends with it. The
 # OpenAI library names the variable; the Anthropic one does not, so it is named here.
 MISSING_KEY = (
-    (re.compile(r"OPENAI_API_KEY"), "OPENAI_API_KEY"),
+    # The library's own sentence: "Missing credentials. ... set the `OPENAI_API_KEY` or ...".
+    # AzureOpenAI names AZURE_OPENAI_API_KEY in the same words, and a log line may only mention
+    # the variable, so the name must stand alone and follow the sentence.
+    (re.compile(r"Missing credentials\.[^\n]*(?<![A-Z_])OPENAI_API_KEY"), "OPENAI_API_KEY"),
     (re.compile(r"Could not resolve authentication method"), "ANTHROPIC_API_KEY"),
 )
 LOG_TAIL = 16 * 1024
