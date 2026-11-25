@@ -11,6 +11,7 @@ The line "Checked by" under it names the test in the repository that fails if th
 Scrimmage has no telemetry and no hosted service, and it sends nothing to its authors.
 It makes three kinds of connection, and no others: to its own control server, to the service address your `scrimmage.toml` names for a web service, and to GitHub when you run `scrimmage prices update`, which downloads one public file of model prices.
 That command sends a GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
+If `HTTPS_PROXY` is set, the request goes to that proxy, which sees the connection, and not straight to GitHub.
 No test run makes that connection, and nothing else in Scrimmage does.
 The fetch is over HTTPS to the repository's `main` and checks the server's certificate.
 It follows no redirect to another host or to plain HTTP, and it stops after 15 seconds or 1 MB.
@@ -18,10 +19,10 @@ It is the only place Scrimmage reads from the network, and its module is loaded 
 The only processes it starts are the runs of your agent, the test copy of a service that `start` names, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
 The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
-*Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`, `tests/test_security_claims.py::test_only_the_prices_update_command_calls_the_one_fetch`, `tests/test_security_claims.py::test_loading_the_command_and_a_test_runs_modules_never_loads_the_fetch`, `tests/test_prices_update.py::test_a_redirect_is_refused_before_a_request_goes_to_the_other_place`*
+*Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`, `tests/test_security_claims.py::test_only_the_prices_update_command_calls_the_one_fetch`, `tests/test_security_claims.py::test_loading_the_command_and_a_test_runs_modules_never_loads_the_fetch`, `tests/test_prices_update.py::test_a_redirect_is_refused_before_a_request_goes_to_the_other_place`, `tests/test_prices_update.py::test_the_fetch_goes_through_the_proxy_the_environment_names`*
 
 Scrimmage's start-up inside the agent is checked by a source scan, not watched.
-It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner, its start of a service's test copy and `scrimmage-run` starts a process, and that only the SDK's client opens a connection.
+It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner, its start of a service's test copy, `scrimmage-run` and the Scrimmage MCP server, a command of its own, starts a process, and that only the SDK's client opens a connection.
 
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`*
 
@@ -30,11 +31,14 @@ A [service in a container](docker.md#a-service-in-a-container) or in a [Kubernet
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
-The `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
+Apart from its two optional extras, `scrimmage[mcp]` and `scrimmage[cert]`, the `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
+The `mcp` extra brings in the mcp library and its HTTP client, httpx2.
 
 *Checked by: `tests/test_stdlib_only.py::test_imports_only_the_standard_library`*
 
-Your agent's own calls, such as model calls to your provider, go where your agent sends them, as they would without Scrimmage.
+Your agent's own calls, such as model calls to your provider, go where your agent sends them, as they would without Scrimmage, or nowhere when a test mocks, faults or refuses them.
+
+*Checked by: `tests/test_security_claims.py::test_no_fault_but_the_carried_ones_sends_a_request`, `tests/test_mcp.py::test_the_server_never_sees_a_mocked_or_faulted_call`*
 
 ## The control channel
 
@@ -408,7 +412,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 The cap can still be passed:
 
 - Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits.md#the-budget).
-- A provider that is not OpenAI's format, listed under `real` as a web host, is not budgeted at all.
+- A provider that is neither OpenAI's nor Anthropic's format, listed under `real` as a web host, is not budgeted at all.
 - A run killed with SIGKILL can leave a reservation that never settles.
   It counts as spent, so the cap errs low, not high.
 
@@ -444,7 +448,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
   A listed tool that is neither mocked nor under `real` never runs, so a write inside it never happens.
 - **MCP requests that are not tool calls.** `resources/read`, `prompts/get` and the other requests that are not tool calls pass, and a server can act on them.
   What a stdio MCP server does by itself, such as writing to its own database, is not gated.
-- **A provider that is not OpenAI's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
+- **A provider that is neither OpenAI's nor Anthropic's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
 - **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated.
 - **Secrets of an unknown shape.** Redaction removes the shapes listed above only.
   A `password: hunter2` with a colon, a `pass=hunter2` and a bare `pw is hunter2` are recorded as written.

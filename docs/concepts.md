@@ -29,7 +29,10 @@ This version knows these labels:
 | `tool:*` | every tool (only under `real`) |
 | `model` | every chat call to a model, on any provider. A fault can name one model. See [Failing one model](model-faults.md#failing-one-model) |
 | `model:openai` | chat calls to OpenAI |
+| `model:anthropic` | chat calls to Anthropic's Messages API |
 | `model:openai/embeddings`, `model:*/embeddings` | embedding calls |
+| `model:openai/moderations` | moderation calls, which only OpenAI has |
+| `model:<provider>/input_tokens` | token counts: OpenAI's Responses token counts and Anthropic's |
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
 | `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
 | `mcp:<server>/<tool>`, `mcp:<tool>` | a tool on an MCP server. See [MCP tools](mcp.md) |
@@ -74,11 +77,11 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is; on an Anthropic call the text of every `text` block of the reply is, and `thinking` blocks and every other field stay as sent |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
-| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status; on a model call, `status 401` is OpenAI's own reply to a bad API key, so the library raises `AuthenticationError` |
-| `context too long` | a chat model call gets OpenAI's reply to a prompt over the model's context, and the openai library raises `BadRequestError` with the code `context_length_exceeded` |
-| `refused` | a model call or a web request raises the library's `ConnectError`, as if nothing listened on the server's port |
-| `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
-| `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
+| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status; on a model call, `status 401` is the provider's own reply to a bad API key, so the library raises `AuthenticationError` |
+| `context too long` | a chat model call gets the provider's reply to a prompt over the model's context, and the library raises `BadRequestError`: with the code `context_length_exceeded` on OpenAI, with the type `invalid_request_error` on Anthropic |
+| `refused` | a web request raises its HTTP library's `ConnectError` and a model call raises the library's `APIConnectionError`, as if nothing listened on the server's port |
+| `reset` | a web request raises its HTTP library's `ReadError` and a model call raises the library's `APIConnectionError`, as if the server dropped the connection |
+| `dns` | a web request raises its HTTP library's `ConnectError` and a model call raises the library's `APIConnectionError`, as if the server's name did not resolve |
 | `refuse` | a chat model call gets a 200 whose answer is a refusal, in the form a real one takes for that request; nothing is sent; on an Anthropic call it is a plain decline with `stop_reason` `end_turn`, or with `form = "classifier"` a reply with `stop_reason` `refusal` and `stop_details` |
 | `unknown tool` | a chat model call that offers tools gets a 200 in which the model calls a tool the agent does not have: the one the row names with `tool`, else one an earlier request of the same conversation offered and this one no longer does, else an offered tool's name with `_v2` added; on OpenAI a tool call on Chat Completions or a `function_call` item on Responses, on Anthropic a `tool_use` block with `stop_reason` `tool_use`; nothing is sent |
 | `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident; on an Anthropic call every `text` block of the reply is garbled and `thinking` blocks stay as sent |
@@ -115,7 +118,7 @@ A row reads `pass`, `fail` or `no result`. See [Judging an answer](judging.md).
 
 ## Records
 
-Every call is written to the run's record, a JSON Lines file in `scrimmage-runs/`.
+Every gated call is written to the run's record, a JSON Lines file in `scrimmage-runs/`.
 Each line says which call it was, which process made it, what Scrimmage did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
 A method's `self` or `cls` is never among the arguments.
 A call still going on when the run was stopped has a line whose error is `ScrimmageStopped`.

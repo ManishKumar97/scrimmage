@@ -16,7 +16,9 @@ For each call your agent makes through a gate, a test decides what it gets:
 - **fault**: a failure that looks like a real one, such as a timeout or an HTTP 429 from the model.
 
 Scrimmage does not detect writes.
-A gated call that writes, such as a listed refund tool, an MCP tool call or an httpx POST, never runs for real unless the test lists it.
+It decides by the kind of call.
+A gated call that can write, such as a refund tool listed under `tools`, an MCP tool call, or an httpx request that is not a `GET` or `HEAD`, never runs for real unless the test mocks it or lists it under `real`.
+A web `GET` or `HEAD` runs for real, even when the service changes data on it, so mock a `GET` that writes.
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
 
@@ -26,6 +28,7 @@ Scrimmage runs on your machine, in your CI or in your cluster.
 Scrimmage has no telemetry and no hosted service, and it sends nothing to its authors.
 It makes three kinds of connection, and no others: to its own control server, to the service address your `scrimmage.toml` names for a web service, and to GitHub when you run `scrimmage prices update`, which downloads one public file of model prices.
 That command sends a GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
+If `HTTPS_PROXY` is set, the request goes to that proxy, which sees the connection, and not straight to GitHub.
 No test run makes that connection, and nothing else in Scrimmage does.
 The control server listens on `127.0.0.1`, or, for a service in a container or a cluster, on the `control` address you set, over TLS.
 Your agent's own calls, such as model calls to your provider, go where your agent sends them, or nowhere when a test mocks, faults or refuses them.
@@ -58,8 +61,8 @@ To test an agent, you write two things:
 - a Python function that takes the question as text and returns the agent's answer;
 - a `scrimmage.toml` file, which names that function, its tools, and the tests.
 
-The agent calls a real model, so you need an OpenAI API key.
-To try Scrimmage without one, the repository's examples run on a fake model server; see [Examples](examples/index.md).
+The agent calls a real model, so you need an OpenAI or an Anthropic API key.
+For an agent on Anthropic's library, see [An agent that uses the anthropic library](model-faults.md#an-agent-that-uses-the-anthropic-library).
 Scrimmage is not on PyPI yet, so you install it from a clone of the repository; see [Install](install.md).
 
 The bot has two tools, one that reads and one that writes:
@@ -126,7 +129,7 @@ The whole project is on the [function agent](examples/function-agent.md) page.
   httpx2 is its successor from the Pydantic team; the `openai` and `mcp` libraries send their requests with it.
 - Tools on MCP servers.
   MCP, the Model Context Protocol, is a standard way for an agent to call tools that run in a separate program; agent frameworks and coding assistants use it.
-- OpenAI model calls, and gateways that speak the same format, with a spending limit for each test.
+- OpenAI and Anthropic model calls, and gateways that speak either format, with a spending limit for each test.
 - Rules on the answer, and a pass rate for each row.
 
 What it does not do yet is on the [Limits](limits.md) page.
@@ -151,14 +154,14 @@ These descriptions come from each project's own public pages, as of November 202
 Scrimmage reproduces this practice for a Python agent's own calls.
 What it adds is in how it applies it:
 it gates the agent's own Python tools by import path, inside the process, with no proxy;
-it refuses a gated call that could write unless the test lists it;
+it refuses a gated tool call, MCP tool call or web write unless the test lists it;
 and it judges each answer with rules you write, over repeated runs.
 
 ## Next
 
 - [Install](install.md), then the [Quickstart](quickstart.md): a failing row, then a fix.
 - [Judging an answer](judging.md), [Failing the model](model-faults.md) and [Testing your guardrails](guardrails.md): the main use cases.
-- [Examples](examples/index.md): scripts, LangGraph, MCP, web requests, judging and one model.
+- [Examples](examples/index.md): a function, a script, a web service, LangGraph, MCP, web requests, an unknown tool, judging and one model.
 - [Safety](safety.md) and [Security](security.md): what a test can and cannot do to your systems and data.
 - [Configuration](configuration.md), [Commands](cli.md) and [JSON output](json-output.md): the reference.
 - [Source on GitHub](https://github.com/ManishKumar97/scrimmage), the [License](license.md) (Apache-2.0) and [Security](security.md).

@@ -71,6 +71,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
+If your agent calls Anthropic, pass `ANTHROPIC_API_KEY` in the same `env` block, from a secret of the same name.
+
 What each part does:
 
 - `on: pull_request`

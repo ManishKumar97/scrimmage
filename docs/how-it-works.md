@@ -22,7 +22,7 @@ Nothing on disk is edited. The swaps exist only in the memory of that one progra
 
 ## Model calls
 
-The openai library hands every request to an HTTP library, httpx2, which sends each attempt through one function.
+The openai and anthropic libraries hand every request to an HTTP library, httpx2, which sends each attempt through one function.
 A tool's own requests go through the same function in httpx2 or in httpx.
 When your code first imports either one, the SDK swaps that function for a gate.
 Scrimmage never imports them itself and does not depend on them, so it uses whatever version your agent has.

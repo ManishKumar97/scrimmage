@@ -295,7 +295,7 @@ With `--runs` above 1, the line the text form prints before the first run, how m
 | `tools` | Each tool written: its import `path`, the `name` the model sees, and `found_by`. |
 | `adapter_tools` | Tools a framework's adapter sees, which need no `tools` list: `name` and `found_by`. |
 | `unresolved` | Each name that could not be mapped to one path: `name`, `candidates`, every path it could be, and `problem`. |
-| `model_hosts` | Each host to name under `model_hosts`: `host`, `provider` and `found_by`. The built-in OpenAI host is left out. |
+| `model_hosts` | Each host to name under `model_hosts`: `host`, `provider` and `found_by`. The built-in hosts of OpenAI and Anthropic are left out. |
 
 ## scrimmage show --json
 
