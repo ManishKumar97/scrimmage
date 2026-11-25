@@ -180,12 +180,16 @@ def check_runs(project: Project) -> dict[int, Done]:
     return done
 
 
-SHIPPED_SOURCE = {
-    "source": "the shipped prices.toml",
-    "provider": "openai",
-    "as_of": dict(prices.shipped().sections)["openai"].as_of,
-    "models": len(prices.shipped().models("openai")),
-}
+# One source for each provider section of the shipped file, in file order.
+SHIPPED_SOURCES = [
+    {
+        "source": "the shipped prices.toml",
+        "provider": provider,
+        "as_of": section.as_of,
+        "models": len(section.models),
+    }
+    for provider, section in prices.shipped().sections
+]
 
 
 @pytest.mark.design("json.one_document")
@@ -216,7 +220,7 @@ def test_each_command_prints_one_document_for_each_exit_code(
         "entry": {"kind": "function", "value": "acme.agent:answer"},
         "prices": {},
         "service_tier": None,
-        "price_sources": [SHIPPED_SOURCE],
+        "price_sources": SHIPPED_SOURCES,
     }
     assert checks[2].doc["summary"] is None
 
@@ -1664,7 +1668,7 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
     project.edit('real = ["tool:check_inventory", "tool:*"]', "real = []")
     assert summary_of(check_doc(project))["real"] == []
     assert summary_of(check_doc(project))["prices"] == {}  # every model at the price files
-    assert summary_of(check_doc(project))["price_sources"] == [SHIPPED_SOURCE]
+    assert summary_of(check_doc(project))["price_sources"] == SHIPPED_SOURCES
     project.edit(
         "[[test]]\n", "[agent.prices]\ngpt-4o-mini = {input = 0, output = 0.6}\n\n[[test]]\n"
     )
@@ -1681,7 +1685,7 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
     }
     assert summary_of(check_doc(project))["price_sources"] == [
         {"source": "[agent.prices]", "provider": None, "as_of": None, "models": 1},
-        SHIPPED_SOURCE,
+        *SHIPPED_SOURCES,
     ]
     assert summary_of(check_doc(project))["service_tier"] is None
 

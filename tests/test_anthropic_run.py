@@ -119,7 +119,7 @@ def run_agent(project: Project, fake: FakeAnthropic, function: str) -> Result:
 FIXTURES = Path(__file__).parent / "fixtures" / "anthropic"
 
 
-def dollars(name: str) -> float:
+def dollars(name: str, input: float = INPUT, output: float = OUTPUT) -> float:
     """What a saved reply's usage costs at the test's price, worked out here by hand.
 
     A stream's input count is in its first event and its output count in its last."""
@@ -133,7 +133,7 @@ def dollars(name: str) -> float:
     else:
         usage = json.loads(text)["usage"]
         tokens_in, tokens_out = usage["input_tokens"], usage["output_tokens"]
-    return (tokens_in * INPUT + tokens_out * OUTPUT) / 1_000_000
+    return (tokens_in * input + tokens_out * output) / 1_000_000
 
 
 def rows(result: Result, name: str) -> list[list[dict[str, Any]]]:
@@ -183,6 +183,34 @@ def test_an_anthropic_agent_runs_a_baseline_and_a_529_row_it_sees_after_three_at
         assert lines[-1]["summary"]["fault_fired"] is True
     # Only the baseline's four calls reached the server: a faulted attempt sends nothing.
     assert len(fake.requests) == 4
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mode", ["plain", "streamed"])
+def test_a_claude_agent_with_no_prices_of_its_own_runs_and_settles_at_the_shipped_price(
+    project: Project, fake_anthropic: Fake, mode: str
+) -> None:
+    """The default budget is on, and no [agent.prices] names the model: the shipped Anthropic
+    row for claude-haiku-5-5, 0.10 input and 0.50 output, prices every line."""
+    (project.root / "claude_bot.py").write_text(AGENT)
+    plain_toml = TOML.replace("FUNCTION", mode)
+    plain_toml = plain_toml.replace("max_cost_usd = 1.0\n", "")
+    plain_toml = plain_toml.replace(
+        f"[agent.prices]\n{MODEL} = {{input = {INPUT}, output = {OUTPUT}}}\n\n", ""
+    )
+    assert "[agent.prices]" not in plain_toml and "max_cost_usd" not in plain_toml
+    project.toml.write_text(plain_toml)
+    fake = fake_anthropic(MODES[mode])
+    project.monkeypatch.setenv("ANTHROPIC_BASE_URL", fake.base_url)
+    project.monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    result = project.test()
+    assert result.code == 0, result.out + result.err
+    for lines in rows(result, "baseline"):
+        calls = model_lines(lines)
+        assert [(x["action"], x["cost_estimated"]) for x in calls] == [("real", False)] * 2
+        assert [x["cost_usd"] for x in calls] == [
+            pytest.approx(dollars(name, 0.10, 0.50), abs=TOLERANCE) for name in MODES[mode]
+        ]
 
 
 @pytest.mark.slow
