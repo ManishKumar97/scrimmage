@@ -1,0 +1,67 @@
+name: Kind
+
+# Runs every test marked `kind` on a real kind cluster. ci.yml leaves them out because each
+# one makes a cluster. The tests make and delete their own cluster, so this job installs the
+# kind binary and does not start one.
+# A product-code change alone does not trigger it on a pull request (see tools/kind_needed.py);
+# the run on each push to main covers it.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/kind.yml"
+      - "tests/k8s/**"
+      - "tests/test_k8s_*.py"
+      - "tests/test_service_k8s.py"
+      - "tests/example/**"
+      - "tests/fakes/**"
+      - "tests/fixtures/openai/**"
+      - "tests/compose/harness.py"
+      - "tests/conftest.py"
+      - "images/runner/**"
+      - "docs/kubernetes.md"
+      - "tools/kind_needed.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kind-${{ github.ref }}
+  # Cancel a superseded pull request run, never a run on main: main keeps a verdict for each push.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.13.0"
+  UV_LOCKED: "1"
+
+jobs:
+  kind:
+    name: Tests on a kind cluster
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      # install_only: put kind and kubectl on the path and make no cluster.
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376  # v1.15.2
+        with:
+          install_only: true
+          version: v0.33.0
+      - run: uv sync
+      # A fresh runner has no kubeconfig or Helm files, and the test that proves the harness
+      # never writes them needs one to watch. These are placeholders, with no cluster or repository in them.
+      - name: user files for the kubeconfig guard to watch
+        run: |
+          mkdir -p ~/.kube ~/.config/helm
+          printf 'apiVersion: v1\nkind: Config\n' > ~/.kube/config
+          printf 'apiVersion: ""\nrepositories: []\n' > ~/.config/helm/repositories.yaml
+      - name: kind tests
+        run: SCRIMMAGE_KIND=1 uv run pytest -m kind -n 0 -v

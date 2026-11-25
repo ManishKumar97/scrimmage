@@ -223,6 +223,8 @@ A replay to the same worker within 120 seconds finds its nonce used and reaches 
 In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](kubernetes.md#in-kubernetes) shows.
 The shipped network policies deny all traffic in the namespace, then allow four paths: the agent's pods to the runner on port 7700, the runner to the agent on port 8000, the agent to its model host, and every pod to cluster DNS.
 The tests run Calico, which enforces them; a network plugin that does not enforce NetworkPolicy ignores them.
+The Kubernetes tests cited below run on a kind cluster in CI on every pull request that changes them or their fixtures, after every merge to main, and every week.
+A pull request that changes only product code is checked by the run after it merges.
 
 - Only the agent's pods reach the runner's control port.
   A pod in the namespace with another label gets no answer, and so does a pod in another namespace, even one with the agent's label.
