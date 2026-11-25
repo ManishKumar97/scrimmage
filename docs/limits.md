@@ -33,6 +33,8 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **The probe's placeholder keys are all or none.** With neither `OPENAI_API_KEY` nor `ANTHROPIC_API_KEY` set, the probe sets both. With one set, it sets neither, so an agent that builds an OpenAI client while only an Anthropic key is set fails at build time under the probe. Set the key of the client the agent builds.
 
+- **A client pointed at another provider's own host is not seen by the probe.** Reading the code drafts a `model_hosts` line for it, such as an `OpenAI` client at `api.anthropic.com`. The probe does not see its request, because the gate treats a POST to a host another provider owns, on a path that provider does not know, as a plain web call. List the host under `model_hosts` by hand when the base URL is not written in the code.
+
 - **`scrimmage init` reads the code, so it only guesses.** A tool made at run time, in a dict comprehension or by a framework has no mark the read can see, and the entry point is chosen by a heuristic. `--probe` finds tools by what the model is offered, at the first model request only: a tool offered later is not seen.
 
 - **The editor schema checks shape only.** `scrimmage schema` cannot see a tool name against `tools`, a type outside your packages or a program on your `PATH`. `scrimmage check` decides.

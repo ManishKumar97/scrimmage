@@ -183,3 +183,30 @@ def test_an_agent_that_picks_its_client_by_key_is_probed_on_the_key_it_has(
     assert exit_code == OK, doc
     assert fake.received == []
     assert hosts_of(doc) == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]
+
+
+@pytest.mark.parametrize(
+    ("provider", "lines"),
+    [("openai", [("api.anthropic.com", "openai")]), ("anthropic", [])],
+    ids=["another-providers-host", "its-own-host"],
+)
+def test_a_probed_host_is_a_line_unless_it_is_the_requests_own_providers(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    lines: list[tuple[str, str]],
+) -> None:
+    """The probe's request names its provider, and only that provider's own hosts need no line."""
+    request = {
+        "host": "api.anthropic.com",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "provider": provider,
+    }
+    notice = cast(dict[str, object], {"tools": [], "model_request": request})
+    outcome = "stopped at POST /v1/chat/completions on api.anthropic.com"
+    monkeypatch.setattr(drafting, "run_probe", lambda *a: drafting.Probe(True, outcome, notice))
+    write(tmp_path, {"bot.py": ANSWER})
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
+    assert [(h["host"], h["provider"]) for h in hosts_of(doc)] == lines

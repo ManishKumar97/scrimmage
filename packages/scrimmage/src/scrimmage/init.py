@@ -679,7 +679,7 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
     provider whose path the request was."""
     hosts = {pair: "static" for pair in reading.hosts}
     request = cast("dict[str, str] | None", (result.notice or {}).get("model_request"))
-    if request is not None and not built_in().is_built_in_host(request["host"]):
+    if request is not None and request["host"] not in built_in().get(request["provider"]).hosts:
         hosts[(request["host"], request["provider"])] = "probe"
     return [
         {"host": h, "provider": provider, "found_by": found_by}

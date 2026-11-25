@@ -32,6 +32,7 @@ ALL_TITLES = [
     "A changed reply keeps the real counts.",
     "A child on another venv's SDK is not version-checked.",
     "A child's gates wait for the control server.",
+    "A client pointed at another provider's own host is not seen by the probe.",
     "A client without the token can hold the control server's connections.",
     "A clock jump during a test can show as a lost connection.",
     "A command that clears Scrimmage's path.",

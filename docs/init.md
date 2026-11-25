@@ -63,6 +63,8 @@ Tools made at run time, as most real agents make them, have no such mark; `--pro
 A host read from an environment variable is not text in the code, so only the probe sees it.
 The client class says the provider: an `Anthropic` client's host is drafted with `provider = "anthropic"`, and an `OpenAI` client's with `provider = "openai"`.
 A provider's own host, such as `api.anthropic.com` for an `Anthropic` client, needs no line.
+An `OpenAI` client pointed at `api.anthropic.com`, Anthropic's OpenAI-compatible setup, is drafted from the code as `provider = "openai"`, because that host is not OpenAI's own.
+The probe does not see that request, so list such a host under `model_hosts` by hand when the base URL is not in the code as text.
 
 ## An agent that uses Claude
 
@@ -73,7 +75,7 @@ A gateway you reach with `Anthropic(base_url="https://gateway.acme.internal")` i
 model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]
 ```
 
-With `--probe`, a first request to `POST /v1/messages` on a host that is not Anthropic's own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
+With `--probe`, a first request to `POST /v1/messages` on a host that is not one of the providers' own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
 The probe sets placeholder keys, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, only when neither is in the environment, so a client can be built.
 When you have one of them set, the probe sets none, and an agent that chooses its client by which key it finds takes the branch your key selects.
 It sends nothing.
