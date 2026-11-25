@@ -33,6 +33,27 @@ uv sync --group nemo && uv run pytest tests/test_nemo_rails.py
 A later plain `uv sync` removes the group again.
 The group does not install on Python 3.14 yet.
 
+## The real-model check of the example pages
+
+`tests/test_docs_examples.py` runs each example page against a scripted fake model, so a page's answer rules never meet the words a real model uses.
+`tests/test_docs_examples_real.py` runs the same pages, and `docs/quickstart.md`, against the real provider.
+It runs each page's commands as the page gives them, with no fake model host, and asserts the exit code of each command and the pass or fail of each row.
+The failing row must fail before the fix and pass after it.
+The tests are marked `real` and `slow`.
+They are left out of every run unless `SCRIMMAGE_REAL=1` is set, and they need `OPENAI_API_KEY` in the environment.
+
+Run this check once before each release, and after any change to an example page:
+
+```sh
+SCRIMMAGE_REAL=1 uv run pytest -n 0 -s tests/test_docs_examples_real.py
+```
+
+`-s` shows what each run answered, which is what to read when a rule fails.
+Every page uses `gpt-4o-mini`, so all pages cost about two cents together.
+Each page prints `REAL SPEND`, and a page that spends more than five cents fails.
+A row that fails on a real model needs a look at the answers first: widen the rule only to a wording that is right, and never to one that is wrong.
+The check needs the extra libraries the pages import: `uv sync` installs them.
+
 ## The Docker tests
 
 `tests/test_service_compose.py` runs the example service in a container under Docker Compose, with the runner on the host.

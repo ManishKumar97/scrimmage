@@ -419,14 +419,16 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """A kind test makes a cluster, which takes minutes and memory, so it is left out unless
-    SCRIMMAGE_KIND=1. Left out, not skipped: a skip would fail a CI run."""
-    if os.environ.get("SCRIMMAGE_KIND") == "1":
-        return
-    left_out = [item for item in items if item.get_closest_marker("kind") is not None]
-    if left_out:
-        config.hook.pytest_deselected(items=left_out)
-        items[:] = [item for item in items if item not in left_out]
+    """A kind test makes a cluster, which takes minutes and memory, and a real test calls a
+    real model, which costs money, so each is left out unless SCRIMMAGE_KIND=1 or
+    SCRIMMAGE_REAL=1. Left out, not skipped: a skip would fail a CI run."""
+    for marker, variable in (("kind", "SCRIMMAGE_KIND"), ("real", "SCRIMMAGE_REAL")):
+        if os.environ.get(variable) == "1":
+            continue
+        left_out = [item for item in items if item.get_closest_marker(marker) is not None]
+        if left_out:
+            config.hook.pytest_deselected(items=left_out)
+            items[:] = [item for item in items if item not in left_out]
 
 
 # In CI a skip is expected only when the test's own marks say so, never from its reason text.
