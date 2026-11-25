@@ -82,7 +82,9 @@ It sends nothing.
 An agent that imports both `openai` and `anthropic` is named for both.
 Each client's host gets its own provider's line, and one gateway that both clients use is listed once for each provider.
 The draft plus one `[[test]]` passes `scrimmage check`.
-Model prices for Anthropic models are not shipped yet, so set them under `[agent.prices]` before a run with a budget.
+The budget is on by default, at $5, and no Anthropic model has a shipped price yet.
+So every model call in a drafted Anthropic file is refused until you set a price for the model under `[agent.prices]`, or set `max_cost_usd = "none"` to turn the budget off on purpose.
+See [Where prices come from](configuration.md#where-prices-come-from).
 
 ## What it writes
 
