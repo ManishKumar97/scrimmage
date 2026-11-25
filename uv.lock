@@ -4036,7 +4036,7 @@ wheels = [
 
 [[package]]
 name = "scrimmage"
-version = "0.1.0rc2"
+version = "0.1.0rc3"
 source = { editable = "packages/scrimmage" }
 
 [package.optional-dependencies]

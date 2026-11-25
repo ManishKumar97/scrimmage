@@ -1,6 +1,6 @@
 [project]
 name = "scrimmage"
-version = "0.1.0rc2"
+version = "0.1.0rc3"
 description = "Fault injection for AI agents under test."
 readme = "README.md"
 license = "Apache-2.0"

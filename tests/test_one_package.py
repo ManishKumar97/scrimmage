@@ -25,7 +25,7 @@ def test_one_distribution_installs_and_it_is_named_scrimmage() -> None:
     }
     assert {n for n in names if n.startswith("scrim")} == {"scrimmage"}
     dist = importlib.metadata.distribution("scrimmage")
-    assert dist.version == "0.1.0rc2"  # above the 0.0.0 placeholder on PyPI
+    assert dist.version == "0.1.0rc3"  # above the 0.0.0 placeholder on PyPI
     # Only the extras need anything: the package itself depends on nothing.
     needs = dist.requires or []
     assert needs and all("extra ==" in need for need in needs), needs
