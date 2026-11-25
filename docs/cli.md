@@ -293,6 +293,9 @@ A web service is started through it once, with `SCRIMMAGE_SERVICE=1` and the tok
 Each process that loads the app prints `scrimmage: active in service mode (pid N)`; a service with a mistake in that environment stops before it listens and says why.
 See [An agent inside a web service](services.md).
 
+`scrimmage-run --help` or `-h`, as its first argument, prints the usage line and exits 0.
+After the command's name, `--help` belongs to the command.
+
 If the command cannot start, `scrimmage-run` says why on standard error and exits with:
 
 | Code | Meaning |
