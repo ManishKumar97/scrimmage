@@ -172,8 +172,10 @@ Every run crashed.
 The log of a run ends with the error your agent raised:
 
 ```text
-openai.RateLimitError: Error code: 429 - Rate limit reached for gpt-4o-mini in organization org-{id} on requests per min. ...
+openai.RateLimitError: Error code: 429 - Rate limit reached for default-codex in organization org-{id} on requests per min. ...
 ```
+
+The body of that 429 is a saved real reply, so it names that reply's model and not yours.
 
 The bot builds its client with `max_retries=0`, so the first busy reply ends the whole answer.
 
