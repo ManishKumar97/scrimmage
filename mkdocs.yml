@@ -87,6 +87,7 @@ nav:
       - "Example: judging an answer": examples/judging.md
       - "Example: a fault on one model": examples/one-model.md
       - "Example: an agent inside a web service": examples/service-agent.md
+      - "Example: a tool the agent does not have": examples/unknown-tool.md
   - Concepts:
       - Concepts: concepts.md
       - How it works: how-it-works.md

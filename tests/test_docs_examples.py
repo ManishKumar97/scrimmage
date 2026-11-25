@@ -14,13 +14,14 @@ import shutil
 import signal
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
-from fakes.openai_server import FakeOpenAI, Guard, Rule
+from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, text_of, tool_failed
 from scrimmage.cli import main
 from scrimmage.managed import Managed
 from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
@@ -40,6 +41,48 @@ class Example:
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
+    logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
+
+
+@dataclass(frozen=True)
+class ByTools:
+    """A main model that follows the script of the tool its request offers.
+
+    A script lists the reply for each turn, `a|b` as in the fake server's replies. A page
+    with two agents on one model name gives each agent its own script this way: a request
+    that offers the tool of exactly one script gets that script, and any other request gets
+    no reply, which the fake records as an error. `needs` maps a script's tool and a turn
+    to a text some tool message of the request must hold, or that turn gets no reply.
+    `unused` names the script entries no request asked for."""
+
+    scripts: dict[str, tuple[str, ...]]
+    needs: dict[tuple[str, int], str] = field(default_factory=dict)
+    used: set[tuple[str, int]] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        for turns in self.scripts.values():
+            for name in turns:
+                Reply(name)  # a missing fixture fails before the test runs
+
+    @property
+    def unused(self) -> list[tuple[str, int]]:
+        every = {(tool, turn) for tool, turns in self.scripts.items() for turn in range(len(turns))}
+        return sorted(every - self.used)
+
+    def __call__(self, request: dict[str, Any]) -> Reply | None:
+        offered = {str(t.get("function", {}).get("name")) for t in request.get("tools", [])}
+        matching = [tool for tool in self.scripts if tool in offered]
+        messages = request.get("messages", [])
+        turn = sum(1 for m in messages if m.get("role") == "assistant")
+        if len(matching) != 1 or turn >= len(self.scripts[matching[0]]):
+            return None
+        tool = matching[0]
+        wanted = self.needs.get((tool, turn))
+        if wanted and not any(wanted in text_of(m) for m in messages if m.get("role") == "tool"):
+            return None
+        self.used.add((tool, turn))
+        reply = Reply(self.scripts[tool][turn])
+        return reply.after_failure if reply.after_failure and tool_failed(request) else reply
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -50,6 +93,26 @@ EXAMPLES = {
     "examples/script-agent.md": Example(ONE_TOOL, [MISTAKE, OK], base="examples/function-agent.md"),
     "examples/langgraph.md": Example(ONE_TOOL, [ROW_FAILED, OK]),
     "examples/mcp.md": Example(["docs_search", "docs_answer|docs_admits"], [OK]),
+    "examples/unknown-tool.md": Example(
+        [],
+        [ROW_FAILED, OK, MISTAKE, OK],
+        base="examples/function-agent.md",
+        logs={1: "KeyError: 'fetch'"},
+        by_model={
+            "gpt-4o-mini": ByTools(
+                {
+                    "search": ("docs_search", "docs_answer", "docs_answer|docs_admits"),
+                    "get_order": ("acme_get_order", "acme_answer", "acme_answer|acme_admits"),
+                },
+                # The model's last reply follows the bot's own error: the bot must have
+                # re-listed its tools, so the fault named fetch, and then answered with it.
+                needs={
+                    ("search", 2): "no tool named fetch",
+                    ("get_order", 2): "no tool named delete_account",
+                },
+            )
+        },
+    ),
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
@@ -121,12 +184,25 @@ def check_page(
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    run_blocks(name, root, codes, capsys)
+    run_blocks(name, root, codes, capsys, example.logs or {})
     assert codes == example.codes
+    for rule in (example.by_model or {}).values():
+        assert not isinstance(rule, ByTools) or not rule.unused, (
+            f"script entries never asked for: {rule.unused}"
+        )
 
 
-def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFixture[str]) -> None:
-    """Each block of the page in order: a file is written, an Output is the command run."""
+def run_blocks(
+    name: str,
+    root: Path,
+    codes: list[int],
+    capsys: pytest.CaptureFixture[str],
+    logs: dict[int, str],
+) -> None:
+    """Each block of the page in order: a file is written, an Output is the command run.
+
+    `logs` names text that a run log of an Output's records must hold, such as the error
+    that crashed the agent, so the page's crash is the one it says and not another."""
     command: list[str] = []
     for lang, title, body in FENCE.findall((DOCS / name).read_text()):
         if lang == "bash":
@@ -144,6 +220,12 @@ def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFi
         codes.append(main(command))
         out = capsys.readouterr().out
         assert normal(out) == normal(block.body), f"{name}, Output {len(codes)}:\n{out}"
+        if len(codes) in logs:
+            folder = Path(re.search(r"records in (\S+)", out).group(1))  # type: ignore[union-attr]
+            held = [log.read_text() for log in folder.glob("run-*.log")]
+            assert any(logs[len(codes)] in text for text in held), (
+                f"{name}, Output {len(codes)}: no run log holds {logs[len(codes)]!r}"
+            )
 
 
 @pytest.mark.design("docs.examples_run")
