@@ -1108,6 +1108,25 @@ def test_the_plan_carries_a_refuse_form_and_refuses_one_that_is_not_a_form() -> 
         plan.fault_from({**doc, "do": "garble"})
 
 
+SCHEMAS = Path(config.__file__).parent / "schemas"
+
+
+@pytest.mark.design("config.refuse_form")
+def test_the_forms_of_refuse_are_the_providers_and_both_schemas_list_the_same() -> None:
+    """The vocabulary lives in the providers: the config reads it from them, and the two
+    schemas, which cannot, are held to it here."""
+    forms = config.refusal_forms()
+    assert forms == ("plain", "classifier")
+    toml = json.loads((SCHEMAS / "scrimmage-toml.v1.json").read_text())
+    assert tuple(toml["$defs"]["refuse_form"]["enum"]) == forms
+    plan_schema = json.loads((SCHEMAS / "plan.v1.json").read_text())
+    assert (
+        tuple(plan_schema["properties"]["faults"]["items"]["properties"]["form"]["enum"]) == forms
+    )
+    cli = json.loads((SCHEMAS / "cli.v1.json").read_text())
+    assert "form" in json.dumps(cli), "the --json fault object has the key"
+
+
 @pytest.mark.design("config.reply_fault_billed_warning")
 def test_a_reply_fault_not_built_yet_gets_no_billed_warning(tmp_path: Path) -> None:
     """garble, truncate and bad tool args stop before sending until they are built."""

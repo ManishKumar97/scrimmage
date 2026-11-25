@@ -156,6 +156,7 @@ class Anthropic:
     tool_call_tools = staticmethod(table.tool_call_tools)
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     refusal_reply = staticmethod(table.refusal_reply)
+    refusal_forms = table.FORMS
     refusal_form_problem = staticmethod(table.refusal_form_problem)
     refusal_request_problem = staticmethod(table.refusal_request_problem)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)

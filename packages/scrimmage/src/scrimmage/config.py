@@ -116,8 +116,6 @@ MAX_SLOW_S = 600.0
 # The replies RFC 9110 and RFC 6585 give a Retry-After header: on another status it means
 # nothing to a library.
 RETRY_AFTER = ("status 429", "status 503")
-# The ways refuse can decline: in the model's own words, or as a safety classifier does.
-FORMS = ("plain", "classifier")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
@@ -1625,12 +1623,22 @@ def retry_after_problem(do: str, value: object) -> str | None:
     return None
 
 
+def refusal_forms() -> tuple[str, ...]:
+    """The forms of refuse any provider builds, each once, from the providers themselves."""
+    found: dict[str, None] = {}
+    for provider in built_in().providers:
+        found.update(dict.fromkeys(provider.refusal_forms))
+    return tuple(found)
+
+
 def form_problem(do: str, value: object) -> str | None:
     """Why a form is not one this version builds; None when it is.
 
     The file's reader and the SDK's plan reader both ask this, so the two cannot drift."""
-    if not isinstance(value, str) or value not in FORMS:
-        return f'expected "plain" or "classifier", got {redact(repr(value))}'
+    forms = refusal_forms()
+    if not isinstance(value, str) or value not in forms:
+        named = " or ".join(f'"{form}"' for form in forms)
+        return f"expected {named}, got {redact(repr(value))}"
     if do != "refuse":
         return f'works only with do = "refuse", not with {do!r}'
     return None

@@ -248,6 +248,12 @@ class FaultMaker(Protocol):
         provider's usual one."""
         ...
 
+    @property
+    def refusal_forms(self) -> tuple[str, ...]:
+        """The forms a refuse of this provider can take, the first being its usual one; none for
+        a provider whose refusal has one form. The vocabulary of a row's form is these."""
+        ...
+
     def refusal_request_problem(self, form: str | None, path: str, wire: Fields) -> str | None:
         """Why a refuse of this form is not what a real reply to this request looks like, which
         is then a mistake in the test, or None when it is."""

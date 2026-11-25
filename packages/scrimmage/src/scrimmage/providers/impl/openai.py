@@ -126,6 +126,7 @@ class OpenAI:
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
 
+    refusal_forms: tuple[str, ...] = ()
     refusal_form_problem = staticmethod(table.refusal_form_problem)
     refusal_request_problem = staticmethod(table.refusal_request_problem)
 

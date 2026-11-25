@@ -778,3 +778,17 @@ def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider)
         rates = Rates(1.0, 1.0, tiers=(("t", tier),))
         assert provider.dearest(rates, reading(100, 0, 0, {field: 100})) == tier
         assert provider.dearest(rates, reading(100, 0)) == rates
+
+
+def test_the_forms_a_provider_names_are_the_ones_it_accepts_and_no_other(
+    provider: ModelProvider,
+) -> None:
+    for form in provider.refusal_forms:
+        assert provider.refusal_form_problem(form) is None, form
+    said = provider.refusal_form_problem("not a form")
+    assert isinstance(said, str) and said
+    # A provider with no forms refuses any, and one with forms builds each for any request.
+    case = case_of(provider)
+    for form in (None, *provider.refusal_forms):
+        built = provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25, form)
+        assert isinstance(json.loads(built), dict)
