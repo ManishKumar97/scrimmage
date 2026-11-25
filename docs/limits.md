@@ -277,7 +277,10 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A hook that posts to the MCP endpoint.** An event hook on the MCP client that sends to the endpoint itself while a request is being sent passes the web gate unseen.
 
-- **A web `GET` or `HEAD` that changes data runs for real.** Scrimmage treats those two methods as reads and does not look at what the service does with them. Mock the `GET` to keep it from running. See [Safety](safety.md#what-a-web-request-may-do).
+- **A web `GET` or `HEAD` that changes data runs for real.**
+  Scrimmage treats those two methods as reads and does not look at what the service does with them.
+  Mock the `GET` to keep it from running.
+  See [Safety](safety.md#what-a-web-request-may-do).
 
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
 
@@ -321,7 +324,9 @@ Also read the control-path limits under An agent inside a web service.
 
 ### Faults and model calls
 
-- **A provider that is neither OpenAI nor Anthropic.** Listing its host under `real` lets the calls through, but they are web requests, so the budget does not see them. Name a host that speaks OpenAI's or Anthropic's format under `model_hosts` instead.
+- **A provider that is neither OpenAI nor Anthropic.**
+  Listing its host under `real` lets the calls through, but they are web requests, so the budget does not see them.
+  Name a host that speaks OpenAI's or Anthropic's format under `model_hosts` instead.
 
 - **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a chat model call.
   `append` on a model call comes later.
@@ -366,7 +371,10 @@ Also read the control-path limits under An agent inside a web service.
 
 - **`bad body` on a streamed model request.** It is a mistake in the test: the call fails at once and the fault is not counted as fired. A stream cut midway is a later fault. Fault a request that is not streamed, or use `timeout` or a status on this one.
 
-- **`context too long` is a saved real reply, not your model's.** On OpenAI's Chat Completions it is OpenAI's 400 with the code `context_length_exceeded`. On an Anthropic call it is Anthropic's 400 with the type `invalid_request_error`. On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired.
+- **`context too long` is a saved real reply, not your model's.**
+  On OpenAI's Chat Completions it is OpenAI's 400 with the code `context_length_exceeded`.
+  On an Anthropic call it is Anthropic's 400 with the type `invalid_request_error`.
+  On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired.
   The message names the numbers of the real reply it was saved from, not your model's context or your prompt's length.
 
 - **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a mistake in the test: the call fails at once and nothing is sent.
@@ -488,7 +496,10 @@ The hold covers only the models the request names, so a reply in which a model n
 
 - **A waiter keeps its place until it stops waiting.** A waiting call asks again as often as the runner says, from a quarter of a second at the head of the line to 2 seconds far back, and its place in line does not depend on how fast it asks, so a slow or loaded machine does not reorder the line. Its place ends when it is granted, when it gives up or is interrupted, or when its run ends, even by SIGKILL. A waiter that stops asking while its run goes on keeps its place for 60 seconds, then loses it, so a lost hand-back cannot block the line for good. Three cases can leave such a dead place: a child process killed while it waits, a process paused in a debugger, and an event loop blocked by sync code for 60 seconds. Until it goes, the calls behind it wait, and some are refused rather than delayed: a call kept out by its own run's holds waits at most 30 seconds, and a call kept out by another run's waits until a tenth of its own `run_timeout`, at most 10 seconds, is left, so with a `run_timeout` under about 70 seconds it can give up before the dead place goes.
 
-- **Cached input is read from the two providers' usage fields.** Cached tokens are read from OpenAI's usage fields and, on an Anthropic call, from its cache read and cache write fields. A gateway that reports them another way, or a price under `[agent.prices]` with no `cached_input`, prices every input token at the full rate, so the cost is high, never low.
+- **Cached input that a gateway reports in its own fields.**
+  Cached tokens are read from OpenAI's usage fields and, on an Anthropic call, from its cache read and cache write fields.
+  A gateway that reports them another way, or a price under `[agent.prices]` with no `cached_input`, prices every input token at the full rate.
+  So the cost is high, never low.
 
 - **Cache writes on Chat Completions are unconfirmed.** OpenAI states for Responses that written tokens are part of the input count and apart from cached ones. Scrimmage reads Chat Completions' `prompt_tokens_details.cache_write_tokens` the same way, as the openai library names it, but no real Chat Completions reply with writes has confirmed it.
 
