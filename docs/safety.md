@@ -139,14 +139,14 @@ Work outside any request, while a run is open, follows the outside rules on [An 
 
 ## A fault sends nothing
 
-Every fault but `append`, `replace` and `slow` is built by the gate, and the call it fails is never sent.
 The fault is decided before mocks and `real` are read, so a fault on a call the test would refuse, such as an unlisted web write, still runs nothing.
+Which faults send nothing, and the tests that check it, are on [Security](security.md#a-fault-sends-nothing).
 A faulted model call holds nothing and costs nothing.
 
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
-See [Failing the model, and keeping a budget](model-faults.md).
+See [The budget](budget.md).
 
 The Scrimmage MCP server adds guards for a coding agent that runs tests: every `test` and `record` call names a `max_cost_usd` the person approves, the server checks the file before any spend, refuses a file with no budget, keeps a ceiling for the session, and runs one spend at a time.
 They stop accidents, not a coding agent with a shell; see [Driving Scrimmage from a coding agent](mcp-server.md#the-guards).
@@ -177,16 +177,15 @@ See [Drafting a test file](init.md#what-the-probe-can-do).
 
 ## Staying out of production
 
-- Installing or importing Scrimmage never switches anything on.
-- The startup file is never on Python's default path; only `scrimmage-run` puts it there.
-- The SDK switches on only when a test run gives it the run token, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
-
 In production you start your agent the usual way, and Scrimmage is never loaded.
+What switches the SDK on, and the tests that check it, are on [Security](security.md#staying-out-of-production).
+The SDK prints that it is active when a test run switches it on.
+A child process that joins prints nothing, and the record lists it.
 
 ## scrimmage.toml runs code
 
 `function` names code that runs, so treat `scrimmage.toml` like code.
-A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
+What that means for a pull request is on [Running Scrimmage in CI](ci.md#scrimmagetoml-runs-code).
 
 ## Records
 

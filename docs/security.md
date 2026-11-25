@@ -453,7 +453,7 @@ The cap can still be passed:
 - A run killed with SIGKILL can leave a hold that never settles.
   It counts as spent, so the cap errs low, not high.
 
-See [Failing the model, and keeping a budget](model-faults.md).
+See [The budget](budget.md).
 
 ## Staying out of production
 
@@ -483,10 +483,10 @@ See [Failing the model, and keeping a budget](model-faults.md).
 - **Code that is not a gated call.** Only listed tools, LangChain tools, httpx and httpx2 requests, MCP tool calls and model calls are gated.
   A database driver, boto3 and other cloud SDKs, urllib3, `requests`, gRPC or a raw socket inside code that is not a listed tool runs untouched and is not recorded.
   A listed tool that is neither mocked nor under `real` never runs, so a write inside it never happens.
-- **MCP requests that are not tool calls.** `resources/read`, `prompts/get` and the other requests that are not tool calls pass, and a server can act on them.
+- **MCP requests that are not tool calls.** They pass, and a server can act on them; see [Limits](limits/calls.md#mcp-tools).
   What a stdio MCP server does by itself, such as writing to its own database, is not gated.
-- **A provider that is neither OpenAI's nor Anthropic's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
-- **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated.
+- **A provider that is neither OpenAI's nor Anthropic's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts; see [Real spending has a cap](#real-spending-has-a-cap-and-the-cap-is-soft).
+- **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated; see [Limits](limits/agents.md#a-function-or-a-script-agent).
 - **Secrets of an unknown shape.** Redaction removes the shapes listed above only.
   A `password: hunter2` with a colon, a `pass=hunter2` and a bare `pw is hunter2` are recorded as written.
   Pass secrets in the environment, which is never recorded.
@@ -496,7 +496,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
 - **Your agent's own output.** The per-run `.log` and `.out` files hold whatever your agent printed, and they are not cleaned, except of the values the file reads with `${NAME}`.
   They are readable only by you; keep them like any test log.
 - **A hostile `scrimmage.toml`.** `function`, `command` and `returns_from` name code that runs, so treat the file like code.
-  A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
+  What that means for a pull request is on [Running Scrimmage in CI](ci.md#scrimmagetoml-runs-code).
 
 [Limits](limits.md) lists every known gap of this version, and [Safety](safety.md) the rules each gate applies.
 
