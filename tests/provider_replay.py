@@ -199,12 +199,13 @@ class Scenario:
         provider: str = "openai",
         count_tokens: str | None = None,
         both: bool = False,
+        seen: tuple[str, ...] = (),
     ) -> None:
         """calls: (path, body) or (path, body, headers). client: the library that sends, httpx2,
         httpx, openai, anthropic or any of those with " async". script: a server of its own, in
         place of the fake. hosts: how many times the host is listed. dead: nothing listens at the
         host. provider: whose fake serves, and whose provider the host is listed for. both: the
-        host is listed for both providers."""
+        host is listed for both providers. seen: more tool names a gate sees."""
         self.name = name
         self.calls = calls
         self.replies = replies or []
@@ -215,6 +216,7 @@ class Scenario:
         self.client, self.script, self.hosts, self.dead = client, script, hosts, dead
         self.real, self.injected = real, injected
         self.provider, self.count_tokens, self.both = provider, count_tokens, both
+        self.seen = seen
 
 
 def scenarios() -> list[Scenario]:
@@ -1709,6 +1711,7 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         [(MESSAGES, message(tools=[ORDER, {**ORDER, "name": "get_order_v2"}]))],
         ["real_answer"],
         faults=faulted("unknown tool"),
+        seen=("get_order_v2",),
     )
     add(
         "fault unknown tool no tools",
@@ -1719,7 +1722,7 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     add(
         "marker unknown tool",
         [(MESSAGES, message(tools=[ORDER])), (MESSAGES, anthropic_followed)],
-        ["real_answer", "500:real_error_401"],
+        ["real_answer", "real_context_too_long"],
         faults=faulted("unknown tool", "first 1"),
     )
     forced = message(tool_choice={"type": "any"})
@@ -2204,6 +2207,7 @@ def run_one(scenario: Scenario) -> dict[str, object]:
         sink, budget = Sink(), Budget(scenario.budget)
         run = state.RunState(plan, sink, [])
         run.injected.extend(scenario.injected)
+        run.listed.update(scenario.seen)
         state.install(run)
         stops: list[str] = []
         ctx = http_gate.Context(run, budget, sink, stops.append)
