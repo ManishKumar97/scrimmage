@@ -13,7 +13,7 @@ Several start from the [function agent](function-agent.md) and change one thing.
 | [Judging an answer](judging.md) | `expect`, `forbid` and `pass_rate`, a rule that is too narrow, and the fix |
 | [A fault on one model](one-model.md) | A busy large model, a fallback to a small one, and `model` in a fault |
 | [An agent inside a web service](service-agent.md) | The function agent behind a FastAPI endpoint under uvicorn, tested with the same mock and fault |
-| [When the model asks for a tool your agent doesn't have](unknown-tool.md) | `unknown tool`: an MCP server that drops a tool, and a tool result that names one, each with a crash and the fix |
+| [When the model asks for a tool your agent doesn't have](unknown-tool.md) | `unknown tool`: an MCP server that drops a tool, with a crash and the fix, and a tool result that names a tool, with a refused call and the fix |
 
 ## How these pages are checked
 
