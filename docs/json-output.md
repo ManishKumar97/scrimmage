@@ -65,7 +65,7 @@ The text of a message can change in any release.
     {
       "test": "order-status",
       "row": "fault 1",
-      "fault": {"call": "tool:get_order", "do": "timeout", "when": "always", "model": null, "method": null, "path": null, "raises": null, "text": null, "find": null, "retry_after": null, "form": null},
+      "fault": {"call": "tool:get_order", "do": "timeout", "when": "always", "model": null, "method": null, "path": null, "raises": null, "text": null, "find": null, "retry_after": null, "form": null, "tool": null},
       "runs": 3,
       "fired": 3,
       "done": 3,
@@ -134,7 +134,7 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 |---|---|
 | `test` | The test's name. |
 | `row` | `baseline`, or `fault N`. |
-| `fault` | The row's fault: `call`, `do`, `when`, and `model`, `method`, `path`, `raises`, `text`, `find`, `retry_after`, `form`, `expect`, `forbid` and `pass_rate`, each `null` unless the fault sets it. `expect`, `forbid` and `pass_rate` are the fault's own rules, which judge the row in place of the test's. `null` on a baseline. |
+| `fault` | The row's fault: `call`, `do`, `when`, and `model`, `method`, `path`, `raises`, `text`, `find`, `retry_after`, `form`, `tool`, `expect`, `forbid` and `pass_rate`, each `null` unless the fault sets it. `expect`, `forbid` and `pass_rate` are the fault's own rules, which judge the row in place of the test's. `null` on a baseline. |
 | `runs` | Runs that ran. |
 | `fired` | Runs in which the fault fired. `null` on a baseline. |
 | `done` | Runs that ended with an answer. |

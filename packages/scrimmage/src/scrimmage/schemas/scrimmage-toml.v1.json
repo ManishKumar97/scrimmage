@@ -872,6 +872,16 @@
               "const": "refuse"
             }
           }
+        },
+        "tool": {
+          "required": [
+            "do"
+          ],
+          "properties": {
+            "do": {
+              "const": "unknown tool"
+            }
+          }
         }
       },
       "properties": {
@@ -900,6 +910,9 @@
         },
         "form": {
           "$ref": "#/$defs/refuse_form"
+        },
+        "tool": {
+          "$ref": "#/$defs/unknown_tool_name"
         },
         "expect": {
           "$ref": "#/$defs/fault_expect"
@@ -1104,6 +1117,11 @@
         "classifier"
       ],
       "description": "How refuse declines: \"plain\" is the model's own words with stop reason end_turn, and is the default; \"classifier\" is a safety classifier's refusal with stop reason refusal. Only with do = \"refuse\" on a call to a provider that has both."
+    },
+    "unknown_tool_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+      "description": "The name unknown tool makes the model call. Only with do = \"unknown tool\". Left out, Scrimmage calls a tool the run offered earlier and no longer offers, or else an offered tool's name with _v2 added."
     },
     "slow": {
       "type": "string",

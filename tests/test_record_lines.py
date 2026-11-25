@@ -1017,11 +1017,12 @@ def rejected(request: httpx2.Request) -> httpx2.Response:
 
 
 @contextlib.contextmanager
-def model_gate(sink: Sink, *faults: config.Fault) -> Iterator[None]:
-    """A run with these faults, the two hosts as model hosts, and httpx2 gated."""
+def model_gate(sink: Sink, *faults: config.Fault, scrub: tuple[str, ...] = ()) -> Iterator[None]:
+    """A run with these faults, the two hosts as model hosts, and httpx2 gated. scrub: the
+    team's own values to remove from every line."""
     plan = Plan(
         "run-1", "t", "fault 1", (), faults, ("acme.tools:get_order",), (), 60.0,
-        model_hosts=HOSTS, budget_usd=1.0,
+        model_hosts=HOSTS, budget_usd=1.0, scrub=scrub,
     )  # fmt: skip
     run = state.RunState(plan, sink, ALLOWED, blobs=sink)
     state.install(run)
@@ -1068,8 +1069,8 @@ def unknown_tool(when: str = "call 1") -> config.Fault:
 
 @pytest.mark.design("record.after_reply_fault")
 def test_the_line_of_a_400_after_a_reply_fault_says_so(sink: Sink) -> None:
-    """unknown tool on call 1; the code sends the call back, and the provider answers with
-    OpenAI's real 400 for the dotted name. That line says it came after a reply fault."""
+    """unknown tool on call 1; the code sends the call back, and the provider answers with a
+    400. That line says it came after a reply fault."""
     reached: list[httpx2.Request] = []
 
     def provider(request: httpx2.Request) -> httpx2.Response:
@@ -1195,7 +1196,7 @@ def test_a_400_before_a_reply_fault_fires_is_not_marked(sink: Sink) -> None:
         with pytest.raises(openai.BadRequestError):
             ask(api, ASKED)
         later = ask(api, ASKED)
-    assert later.choices[0].message.tool_calls[0].function.name == "multi_tool_use.parallel"
+    assert later.choices[0].message.tool_calls[0].function.name == "get_order_v2"
     answered, fired = lines = model_lines_of(sink)
     assert (answered["action"], answered["status"]) == ("real", 400)
     assert fired["action"] == "fault" and "after_reply_fault" not in answered
@@ -1242,17 +1243,18 @@ def test_a_400_to_a_fresh_conversation_that_repeats_the_refusal_is_not_marked(
 
 
 @pytest.mark.design("record.after_reply_fault")
-def test_a_400_to_a_real_multi_tool_use_parallel_call_is_not_marked(sink: Sink) -> None:
-    """A real model sends multi_tool_use.parallel too, with an id of its own."""
+def test_a_400_to_a_real_call_to_the_same_tool_with_an_id_of_its_own_is_not_marked(
+    sink: Sink,
+) -> None:
+    """A real model may call get_order_v2 too, with an id of its own."""
     with model_gate(sink, unknown_tool()):
         api = model_client(rejected)
         ask(api, ASKED)
         real_id = "call_" + "R" * 24
-        uses = '{"tool_uses":[{"recipient_name":"functions.get_order","parameters":{}}]}'
         call = {
             "id": real_id,
             "type": "function",
-            "function": {"name": "multi_tool_use.parallel", "arguments": uses},
+            "function": {"name": "get_order_v2", "arguments": "{}"},
         }
         fresh: list[Any] = [
             {"role": "user", "content": "Where is order 5678?"},
@@ -1387,3 +1389,18 @@ def test_in_a_service_run_only_the_request_that_carries_the_fault_is_marked(sink
     assert fired["action"] == "fault"
     marked = {sink.saved(x["args"])["user"]: "after_reply_fault" in x for x in answered}
     assert marked == {"x": True, "y": False}, marked
+
+
+@pytest.mark.design("record.after_reply_fault")
+@pytest.mark.parametrize(
+    "name", ["sk-" + "a1B2" * 10, "team_value_tool"], ids=["key-shaped", "team value"]
+)
+def test_a_tool_name_that_is_a_secret_is_removed_from_the_fired_fault_of_the_line(
+    sink: Sink, name: str
+) -> None:
+    fault = config.Fault("model", "unknown tool", "call 1", model=MODEL, tool=name)
+    with model_gate(sink, fault, scrub=("team_value_tool",)):
+        ask(model_client(rejected), ASKED)
+    [fired] = model_lines_of(sink)
+    shown = cast("dict[str, object]", fired["fault"])
+    assert shown["tool"] == "[secret removed]" and name not in json.dumps(fired)

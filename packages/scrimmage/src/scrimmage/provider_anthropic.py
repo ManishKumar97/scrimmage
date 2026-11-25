@@ -2,8 +2,8 @@
 
 Pure functions of a request's host, path and body, or of a reply's body: the same jobs as
 provider_openai, over the Messages API. Anthropic's replies are never put in OpenAI's form.
-The faults that change a reply live in providers/impl/anthropic_changes. unknown tool is not
-done yet: it says so, and the gate refuses the row.
+The faults that change a reply live in providers/impl/anthropic_changes; refuse and unknown tool
+are built here.
 """
 
 import dataclasses
@@ -24,7 +24,7 @@ from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
-from scrimmage.providers.impl.marks import among, digest, normalised, running
+from scrimmage.providers.impl.marks import among, digest, keyed, normalised, running
 from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.anthropic.com",)
@@ -35,9 +35,6 @@ MAX_TOKENS = 1_000_000_000  # a larger count is not a count
 WRITE_5M = "cache_write_5m"  # the Rates fields that price a cache write, by its lifetime
 WRITE_1H = "cache_write_1h"
 REQUEST_ID = "req_scrimmage_injected"
-NOT_YET = "not yet for Anthropic"
-# The words whose reply an Anthropic call cannot be given yet.
-PENDING = ("unknown tool",)
 # The words no Anthropic reply can take, whatever the request: a mistake in the test, known
 # before the run. In a reply that is not streamed, a tool call's input is a JSON object, not
 # JSON text; a streamed reply sends it as text, but Scrimmage changes no streamed reply.
@@ -182,17 +179,10 @@ def context_too_long_body() -> bytes:
 
 
 def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
-    """Why a fault cannot be carried out on this request: the mistake in the test. A fault not
-    done yet for Anthropic says so."""
+    """Why a fault cannot be carried out on this request: the mistake in the test. Only the
+    words no Anthropic reply can take are, and they are known before the request."""
     del path, wire
-    if word in NEVER:
-        return NEVER[word]
-    if word in PENDING:
-        return (
-            f"is an Anthropic call, and {word} is {NOT_YET}; use a status, bad body, "
-            "context too long or timeout on this one"
-        )
-    return None
+    return NEVER.get(word)
 
 
 def never_carried_out(word: str) -> str | None:
@@ -263,23 +253,40 @@ def refusal_reply(path: str, wire: Fields, tokens_in: int, form: str | None = No
     the real order. Plain by default; form "classifier" builds the classifier's refusal, which
     stopped before any output."""
     del path
-    classifier = form == "classifier"
-    reply: dict[str, object] = {
+    if form == "classifier":
+        built = message_reply(wire, tokens_in, [], "refusal", CLASSIFIER_DETAILS, 0)
+    else:
+        built = message_reply(
+            wire, tokens_in, [{"type": "text", "text": PLAIN_REFUSAL}], "end_turn"
+        )
+    return json.dumps(built, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def message_reply(
+    wire: Fields,
+    tokens_in: int,
+    content: list[dict[str, object]],
+    stop_reason: str,
+    stop_details: dict[str, object] | None = None,
+    tokens_out: int = BUILT_OUTPUT_TOKENS,
+) -> dict[str, object]:
+    """A whole Messages reply holding these blocks, with its keys in the real order."""
+    return {
         "model": model_name(wire) or "",
         "id": made_up_id("msg_", ID_LENGTH),
         "type": "message",
         "role": "assistant",
-        "content": [] if classifier else [{"type": "text", "text": PLAIN_REFUSAL}],
+        "content": content,
         "container": None,
-        "stop_reason": "refusal" if classifier else "end_turn",
+        "stop_reason": stop_reason,
         "stop_sequence": None,
-        "stop_details": CLASSIFIER_DETAILS if classifier else None,
+        "stop_details": stop_details,
         "usage": {
             "input_tokens": tokens_in,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 0 if classifier else BUILT_OUTPUT_TOKENS,
+            "output_tokens": tokens_out,
             "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
             "inference_geo": "global",
@@ -287,12 +294,41 @@ def refusal_reply(path: str, wire: Fields, tokens_in: int, form: str | None = No
         },
         "diagnostics": None,
     }
-    return json.dumps(reply, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def unknown_tool_reply(wire: Fields, tokens_in: int, tool: str) -> bytes:
-    del wire, tokens_in, tool
-    raise NotImplementedError(f"unknown tool is {NOT_YET}")
+# unknown tool: a Messages reply whose one content block is a tool_use of a tool the request does
+# not offer, as in a real one (tests/fixtures/anthropic/real_tool_use.json): an id of toolu_01 and
+# 22 letters and digits, the name, an input object and the direct caller. The input is empty: the
+# fault is the name, and an empty object is what a tool with no required argument gets.
+TOOL_ID_LENGTH = 22  # after toolu_01
+
+
+def unknown_tool_reply(path: str, wire: Fields, tokens_in: int, tool: str) -> bytes:
+    """unknown tool: a whole Messages reply that calls this tool, with stop_reason tool_use."""
+    del path
+    block: dict[str, object] = {
+        "type": "tool_use",
+        "id": made_up_id("toolu_01", TOOL_ID_LENGTH),
+        "name": tool,
+        "input": {},
+        "caller": {"type": "direct"},
+    }
+    built = message_reply(wire, tokens_in, [block], "tool_use")
+    return json.dumps(built, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def conversation_key(path: str, wire: Fields) -> str | None:
+    """The system prompt and the first user message, which every turn of one conversation sends
+    again. None when there is no user message."""
+    del path
+    fields = fields_dict(wire)
+    system = fields.get("system")
+    if isinstance(system, str):
+        system = [{"type": "text", "text": system}]
+    first = next((m for m in _list(fields.get("messages")) if _obj(m).get("role") == "user"), None)
+    if first is None:
+        return None
+    return digest([keyed(system), keyed(first)])[1].hex()
 
 
 def tool_call_tools(path: str, wire: Fields) -> list[str]:

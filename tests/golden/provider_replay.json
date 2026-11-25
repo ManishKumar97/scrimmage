@@ -1329,12 +1329,12 @@
   "stops": []
 },
 "fault unknown tool": {
-  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "df5bd690c3909336a41a352c121c67c91d279eb6ee7a1b480b3bbf19e42db0d9"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "2476cc50b746446711e2e4eacb5e407a9d4358b799ddd6f273dc5dd3cbecaed7"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-MK2xTY2xA6bznBRkirAgsXOhyl9F6\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "df5bd690c3909336a41a352c121c67c91d279eb6ee7a1b480b3bbf19e42db0d9"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-MK2xTY2xA6bznBRkirAgsXOhyl9F6\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "2476cc50b746446711e2e4eacb5e407a9d4358b799ddd6f273dc5dd3cbecaed7"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "df5bd690c3909336a41a352c121c67c91d279eb6ee7a1b480b3bbf19e42db0d9", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "2476cc50b746446711e2e4eacb5e407a9d4358b799ddd6f273dc5dd3cbecaed7", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -1368,16 +1368,16 @@
   "stops": []
 },
 "fault unknown tool responses": {
-  "blobs": ["b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
+  "blobs": ["5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685", "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}, "v": 1}
+    {"action": "real", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "cost_estimated": false, "cost_usd": 5.76e-05, "error": null, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 1552, "preview": "{\n  \"id\": \"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b\",\n  \"object\": \"response\",\n  \"created_at\": 1741476542,\n  \"status\": \"completed\",\n  \"error\": null,\n  \"incomplete_details\": null,\n  \"instru", "sha256": "5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 36, "output": 87}, "unchanged": {"do": "unknown tool", "why": "the request offers no tools, so a model would call none"}, "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}
+    {"body": "5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685", "headers": {"content-length": "1552", "content-type": "application/json"}, "length": 1552, "status": 200}
   ],
-  "reserved": [],
-  "sent": [],
-  "settles": [],
+  "reserved": [0.00245895],
+  "sent": ["b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
+  "settles": [[1, 5.76e-05]],
   "stops": []
 },
 "fault replace chat chat_answer": {
@@ -1771,18 +1771,18 @@
   "stops": []
 },
 "marker chat": {
-  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "598e7d7ffa344b06438a521aed9f7d4a9897337db848c23179dad3741e2a78ce", "bc3207c4ada762294846f2950e5a0425497bc085c7d976241537cab8be386532", "ed30425f2787ea64456b47f0a4de644edf6cfce62870331883253c32a637e45f"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "598e7d7ffa344b06438a521aed9f7d4a9897337db848c23179dad3741e2a78ce", "77372f1480c6eee4a6319f563b71d98cc2f3b7c0499bcdd72504635d74b8ab9a", "7fb4a19336299f781d9ff57151366d232ba0601f91a8e2804f249c7ab80045e9"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-nIIAp00zKLMcyKHKi7M07QbbStdd8\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "bc3207c4ada762294846f2950e5a0425497bc085c7d976241537cab8be386532"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
-    {"action": "real", "after_reply_fault": true, "args": {"bytes": 576, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_TPdoE2u6Qe1NBPBTrbEpvpDb\", \"type\": \"function\", \"function\": {", "sha256": "ed30425f2787ea64456b47f0a4de644edf6cfce62870331883253c32a637e45f"}, "call": "model:openai", "cost_estimated": true, "cost_usd": 6.06e-05, "error": null, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 260, "preview": "{\"error\": {\"message\": \"This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens. Please reduce the length of the messages.\", \"type\": \"invalid_request_erro", "sha256": "598e7d7ffa344b06438a521aed9f7d4a9897337db848c23179dad3741e2a78ce"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 144, "output": 65}, "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-nIIAp00zKLMcyKHKi7M07QbbStdd8\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "77372f1480c6eee4a6319f563b71d98cc2f3b7c0499bcdd72504635d74b8ab9a"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "real", "after_reply_fault": true, "args": {"bytes": 487, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_TPdoE2u6Qe1NBPBTrbEpvpDb\", \"type\": \"function\", \"function\": {", "sha256": "7fb4a19336299f781d9ff57151366d232ba0601f91a8e2804f249c7ab80045e9"}, "call": "model:openai", "cost_estimated": true, "cost_usd": 5.715e-05, "error": null, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 260, "preview": "{\"error\": {\"message\": \"This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens. Please reduce the length of the messages.\", \"type\": \"invalid_request_erro", "sha256": "598e7d7ffa344b06438a521aed9f7d4a9897337db848c23179dad3741e2a78ce"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 121, "output": 65}, "v": 1}
   ],
   "replies": [
-    {"body": "bc3207c4ada762294846f2950e5a0425497bc085c7d976241537cab8be386532", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200},
+    {"body": "77372f1480c6eee4a6319f563b71d98cc2f3b7c0499bcdd72504635d74b8ab9a", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200},
     {"body": "598e7d7ffa344b06438a521aed9f7d4a9897337db848c23179dad3741e2a78ce", "headers": {"content-length": "260", "content-type": "application/json"}, "length": 260, "status": 400}
   ],
-  "reserved": [0.0024792],
-  "sent": ["ed30425f2787ea64456b47f0a4de644edf6cfce62870331883253c32a637e45f"],
-  "settles": [[1, 6.0599999999999996e-05]],
+  "reserved": [0.00247575],
+  "sent": ["7fb4a19336299f781d9ff57151366d232ba0601f91a8e2804f249c7ab80045e9"],
+  "settles": [[1, 5.715e-05]],
   "stops": []
 },
 "marker garble": {
@@ -2290,12 +2290,12 @@
   "stops": []
 },
 "httpx2 async: fault unknown tool": {
-  "blobs": ["06f8bc788fcc6899032b034808262d1b016a7549b8ce1626ab3030fb3012fc85", "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "b36af21f1c443ba76b802e6fdc2b547aa5813e8f838ca33578b0ef1910bce73d"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-WVGPqbQTh4DPcT850bhhhpwdmnu4L\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "06f8bc788fcc6899032b034808262d1b016a7549b8ce1626ab3030fb3012fc85"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-WVGPqbQTh4DPcT850bhhhpwdmnu4L\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "b36af21f1c443ba76b802e6fdc2b547aa5813e8f838ca33578b0ef1910bce73d"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "06f8bc788fcc6899032b034808262d1b016a7549b8ce1626ab3030fb3012fc85", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "b36af21f1c443ba76b802e6fdc2b547aa5813e8f838ca33578b0ef1910bce73d", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -2801,12 +2801,12 @@
   "stops": []
 },
 "httpx: fault unknown tool": {
-  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "653b261dcc27f8e26531fe2fa72f8f9c3ff72a6f94098cbdd8e89157ecfe9e05"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "15203a5d48883ea63ed38d3cee38ede5a0ca585a572357c66dd9192d84c0e10b"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-GXw5zMRl5frPi9NeFsFW5BVI18Ao4\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "653b261dcc27f8e26531fe2fa72f8f9c3ff72a6f94098cbdd8e89157ecfe9e05"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-GXw5zMRl5frPi9NeFsFW5BVI18Ao4\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "15203a5d48883ea63ed38d3cee38ede5a0ca585a572357c66dd9192d84c0e10b"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "653b261dcc27f8e26531fe2fa72f8f9c3ff72a6f94098cbdd8e89157ecfe9e05", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "15203a5d48883ea63ed38d3cee38ede5a0ca585a572357c66dd9192d84c0e10b", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -3312,12 +3312,12 @@
   "stops": []
 },
 "httpx async: fault unknown tool": {
-  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "8c50b1cee62cab83d8ee419242aab318a883783d174a1942981ff30d8c18589f"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "617e9e9ad4da1a5e7ba0f606b5d47b576adefe2534105b7298aec1740f03044f"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-vm9zWxNV31eSjE8hlafb0tCYm89cZ\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "8c50b1cee62cab83d8ee419242aab318a883783d174a1942981ff30d8c18589f"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-vm9zWxNV31eSjE8hlafb0tCYm89cZ\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "617e9e9ad4da1a5e7ba0f606b5d47b576adefe2534105b7298aec1740f03044f"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "8c50b1cee62cab83d8ee419242aab318a883783d174a1942981ff30d8c18589f", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "617e9e9ad4da1a5e7ba0f606b5d47b576adefe2534105b7298aec1740f03044f", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -3823,12 +3823,12 @@
   "stops": []
 },
 "openai: fault unknown tool": {
-  "blobs": ["1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880", "f6fbb5a40271733e1840532adb7837434a88a3efd107af02b61c7b3a3e9752eb"],
+  "blobs": ["1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880", "f4452c949775dfc9e30824b0e6b95b31cc81e43497e2852628c0fcb1c3231697"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 176, "preview": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_order\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}", "sha256": "1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-Z1lIJMF7RvwVs2qEKbQWAS0T1hi0a\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "f6fbb5a40271733e1840532adb7837434a88a3efd107af02b61c7b3a3e9752eb"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 176, "preview": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_order\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}", "sha256": "1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-Z1lIJMF7RvwVs2qEKbQWAS0T1hi0a\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "f4452c949775dfc9e30824b0e6b95b31cc81e43497e2852628c0fcb1c3231697"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "f6fbb5a40271733e1840532adb7837434a88a3efd107af02b61c7b3a3e9752eb", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "f4452c949775dfc9e30824b0e6b95b31cc81e43497e2852628c0fcb1c3231697", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -4334,12 +4334,12 @@
   "stops": []
 },
 "openai async: fault unknown tool": {
-  "blobs": ["1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880", "25dac95d677e8dfa0bd2c193883aac2a513bffbd5a90d79e8da806e5950601af"],
+  "blobs": ["1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880", "55307d042b736a66a69ef072a3d57d586cfae913675417dff1a5ffce51204f4e"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 176, "preview": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_order\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}", "sha256": "1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-cQept5afS7bvMp3jfcD8uzhNN3KnQ\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "25dac95d677e8dfa0bd2c193883aac2a513bffbd5a90d79e8da806e5950601af"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 176, "preview": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_order\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}", "sha256": "1d5ad5880611b2585dd0a8427cfb5bcf305f6f6e18e3438200046530aa8bf880"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-cQept5afS7bvMp3jfcD8uzhNN3KnQ\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "55307d042b736a66a69ef072a3d57d586cfae913675417dff1a5ffce51204f4e"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "25dac95d677e8dfa0bd2c193883aac2a513bffbd5a90d79e8da806e5950601af", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "55307d042b736a66a69ef072a3d57d586cfae913675417dff1a5ffce51204f4e", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -8430,10 +8430,10 @@
 "fault unknown tool responses conversation": {
   "blobs": ["93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 60, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"conversation\": \"c\"}", "sha256": "93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}, "v": 1}
+    {"action": "refused", "args": {"bytes": 60, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"conversation\": \"c\"}", "sha256": "93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call in a conversation OpenAI keeps, and unknown tool would leave the real reply, or none, in it for the next turn; send the conversation in input instead, as the OpenAI Agents SDK does by default", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call in a conversation OpenAI keeps, and unknown tool would leave the real reply, or none, in it for the next turn; send the conversation in input instead, as the OpenAI Agents SDK does by default", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "is a Responses call in a conversation OpenAI keeps, and unknown tool would leave the real reply, or none, in it for the next turn; send the conversation in input instead, as the OpenAI Agents SDK does by default"}, "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}
+    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call in a conversation OpenAI keeps, and unknown tool would leave the real reply, or none, in it for the next turn; send the conversation in input instead, as the OpenAI Ag"}
   ],
   "reserved": [],
   "sent": [],
@@ -8519,12 +8519,12 @@
   "stops": []
 },
 "fault unknown tool responses tools": {
-  "blobs": ["5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6"],
+  "blobs": ["5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6", "b384be418b4a8b5e46597ffe742740469cdbe035bcd39263271564f422a9a62e"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 93, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"tools\": [{\"type\": \"function\", \"name\": \"get_order\"}]}", "sha256": "5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 93, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"tools\": [{\"type\": \"function\", \"name\": \"get_order\"}]}", "sha256": "5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 2103, "preview": "{\n  \"id\": \"resp_43cff159c0808960fc916686f40e1c6883ee7378458fedbeb0\",\n  \"object\": \"response\",\n  \"created_at\": 1700000000,\n  \"status\": \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"b", "sha256": "b384be418b4a8b5e46597ffe742740469cdbe035bcd39263271564f422a9a62e"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call, and a call to a tool no one offered is seen on Chat Completions only; fault a chat call"}
+    {"body": "b384be418b4a8b5e46597ffe742740469cdbe035bcd39263271564f422a9a62e", "headers": {"content-length": "2103", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 2103, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -8544,6 +8544,73 @@
   "settles": [[1, 8.85e-06]],
   "stops": []
 },
+"fault unknown tool tool named": {
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "f3cafa2ecae50251ae5b9d567eb33d5cf82e9c714fb69ff6ac3000ad81ce4d4e"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "tool": "delete_account", "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1057, "preview": "{\n  \"id\": \"chatcmpl-Yhw1prf2bMghpglV1FGdlTjgiOFgz\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "f3cafa2ecae50251ae5b9d567eb33d5cf82e9c714fb69ff6ac3000ad81ce4d4e"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "f3cafa2ecae50251ae5b9d567eb33d5cf82e9c714fb69ff6ac3000ad81ce4d4e", "headers": {"content-length": "1057", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1057, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault unknown tool tool named dotted": {
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "d1c6568c926369ea79414ab3dd9079bac675b74c13d8970493d02a59c69e4385"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "tool": "multi_tool_use.parallel", "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1066, "preview": "{\n  \"id\": \"chatcmpl-WPy0o0bdYNCnXYSnL5yfM90F2UsAQ\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "d1c6568c926369ea79414ab3dd9079bac675b74c13d8970493d02a59c69e4385"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "d1c6568c926369ea79414ab3dd9079bac675b74c13d8970493d02a59c69e4385", "headers": {"content-length": "1066", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1066, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault unknown tool tool named offered": {
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"],
+  "lines": [
+    {"action": "refused", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer", "kind": "model", "method": "POST", "mistake": "model:openai names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer"}, "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageMockError", "text": "model:openai names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault unknown tool responses tool named": {
+  "blobs": ["5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6", "c15f84cb81e73d90ca6492260a7502f4aa9d1c13f53fad4c3b0c5da121531f03"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 93, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"tools\": [{\"type\": \"function\", \"name\": \"get_order\"}]}", "sha256": "5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "tool": "delete_account", "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 2105, "preview": "{\n  \"id\": \"resp_994fe7bfadf70702bc6d9a143139666261d85eabb96ffefa18\",\n  \"object\": \"response\",\n  \"created_at\": 1700000000,\n  \"status\": \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"b", "sha256": "c15f84cb81e73d90ca6492260a7502f4aa9d1c13f53fad4c3b0c5da121531f03"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "c15f84cb81e73d90ca6492260a7502f4aa9d1c13f53fad4c3b0c5da121531f03", "headers": {"content-length": "2105", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 2105, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"marker unknown tool responses": {
+  "blobs": ["5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6", "5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685", "728384cd5105b2df8550412f491cb0ecd8b45167dfdc75a86594c89c4da218b6", "737e342619fb34c1aa0d20254a6233a4226b287453d38f0d7820a47591d9e648"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 93, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"tools\": [{\"type\": \"function\", \"name\": \"get_order\"}]}", "sha256": "5c016ff9d4ba89851c90ded37862a2f04a8dcf317cefff43e44f7fb38c5d1aa6"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 2103, "preview": "{\n  \"id\": \"resp_d9077527ed9b2d6cea901815392bebcaf855c4fe2f22f24a14\",\n  \"object\": \"response\",\n  \"created_at\": 1700000000,\n  \"status\": \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"b", "sha256": "737e342619fb34c1aa0d20254a6233a4226b287453d38f0d7820a47591d9e648"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "real", "args": {"bytes": 383, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": [{\"id\": \"fc_a1ca4d887b35cd8014a66fe282356db1880b2cd1ed2cb2c260\", \"type\": \"function_call\", \"status\": \"completed\", \"arguments\": \"{}\", \"call_id\": \"call_XEmGgQRceWUBCRSoT", "sha256": "728384cd5105b2df8550412f491cb0ecd8b45167dfdc75a86594c89c4da218b6"}, "call": "model:openai", "cost_estimated": false, "cost_usd": 5.76e-05, "error": null, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 1552, "preview": "{\n  \"id\": \"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b\",\n  \"object\": \"response\",\n  \"created_at\": 1741476542,\n  \"status\": \"completed\",\n  \"error\": null,\n  \"incomplete_details\": null,\n  \"instru", "sha256": "5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 36, "output": 87}, "v": 1}
+  ],
+  "replies": [
+    {"body": "737e342619fb34c1aa0d20254a6233a4226b287453d38f0d7820a47591d9e648", "headers": {"content-length": "2103", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 2103, "status": 200},
+    {"body": "5c4e15dc0e4e5a65e774c7087078f5e3f24c6ccec091b41705e58ce34b085685", "headers": {"content-length": "1552", "content-type": "application/json"}, "length": 1552, "status": 200}
+  ],
+  "reserved": [0.00247185],
+  "sent": ["728384cd5105b2df8550412f491cb0ecd8b45167dfdc75a86594c89c4da218b6"],
+  "settles": [[1, 5.76e-05]],
+  "stops": []
+},
 "fault unknown tool functions": {
   "blobs": ["ea99375d4780c546630c040724d83822202a23cde4102fe1a74606afd59ae5b7"],
   "lines": [
@@ -8558,12 +8625,12 @@
   "stops": []
 },
 "fault unknown tool named": {
-  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "1e78bfd8ea9efb1b51e45b98dfe6baf8a6c1b85ac0e705dcf0409e6107021ced"],
+  "blobs": ["0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca", "cebe8b2fbfe7056b78610830beba23210eb469e5c35497fae056d31170ec2bc4"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1144, "preview": "{\n  \"id\": \"chatcmpl-HBKTtWvUwE85ymy5YFw5F98hrD9ug\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "1e78bfd8ea9efb1b51e45b98dfe6baf8a6c1b85ac0e705dcf0409e6107021ced"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 193, "preview": "{\"model\": \"gpt-4o-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"get_order\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}}]}", "sha256": "0d5f705c3c8280a0c809e1d3f1785f923aa1416055bae2afe23fb4a70453b0ca"}, "call": "model:openai", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/chat/completions", "proc": {}, "provider": "openai", "result": {"bytes": 1055, "preview": "{\n  \"id\": \"chatcmpl-pVdSVh5tKCbPWYEaKkyTwbptHioyr\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"gpt-4o-mini\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        ", "sha256": "cebe8b2fbfe7056b78610830beba23210eb469e5c35497fae056d31170ec2bc4"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "1e78bfd8ea9efb1b51e45b98dfe6baf8a6c1b85ac0e705dcf0409e6107021ced", "headers": {"content-length": "1144", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1144, "status": 200}
+    {"body": "cebe8b2fbfe7056b78610830beba23210eb469e5c35497fae056d31170ec2bc4", "headers": {"content-length": "1055", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 1055, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -9925,12 +9992,12 @@
   "stops": []
 },
 "anthropic fault refuse": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44"],
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "e67c52f642eb4d40449c08944aeb61d955307c2e80de5c0abbc638edf37d5517"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_1SLGXuXwvYhw1prf2bMghpgl\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_TGMElnmjbGMNNeoOJEG5yS5S\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "e67c52f642eb4d40449c08944aeb61d955307c2e80de5c0abbc638edf37d5517"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "b5fef7f051bdd0d06ae3e775e082c80c8c4709ceeaa1ba1f2b39ff09a93dca44", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "e67c52f642eb4d40449c08944aeb61d955307c2e80de5c0abbc638edf37d5517", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -9976,20 +10043,20 @@
   "settles": [],
   "stops": []
 },
-"anthropic fault unknown tool not yet": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+"anthropic fault unknown tool": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "3548ffe9d49f48c5a7f21131982d28db5938d25e1164a997a060f4a6feceffe9"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call, and unknown tool is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call, and unknown tool is not yet for Anthropic; use a status, bad body, context too long or timeout on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "is an Anthropic call, and unknown tool is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 631, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_s7figUlqWQUuMKT4fOREMdkI\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01yIc4oH7dkN32ffKN2ofDyN\",\"name\":\"get_order_v2\",\"input\":{},\"c", "sha256": "3548ffe9d49f48c5a7f21131982d28db5938d25e1164a997a060f4a6feceffe9"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call, and unknown tool is not yet for Anthropic; use a status, bad body, context too long or timeout on this one"}
+    {"body": "3548ffe9d49f48c5a7f21131982d28db5938d25e1164a997a060f4a6feceffe9", "headers": {"content-length": "631", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 631, "status": 200}
   ],
   "reserved": [],
   "sent": [],
   "settles": [],
   "stops": []
 },
-"anthropic fault unknown tool not yet stream": {
+"anthropic fault unknown tool stream": {
   "blobs": ["e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"],
   "lines": [
     {"action": "refused", "args": {"bytes": 110, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"stream\": true}", "sha256": "e39832223fda69d5b6aea10b4fd98e367861e427b7df958efdac9fc174991112"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is a streamed request, and unknown tool changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "kind": "model", "method": "POST", "mistake": "model:anthropic is a streamed request, and unknown tool changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": true, "test": "t", "unchanged": {"do": "unknown tool", "why": "is a streamed request, and unknown tool changes a reply that is not streamed; turn streaming off for this model, or use timeout or a status on this one"}, "v": 1}
@@ -10159,12 +10226,12 @@
   "stops": []
 },
 "anthropic fault refuse form plain": {
-  "blobs": ["d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "f6e9e3d4687219b0b7c11e958fc2994ce253454deeb99c6e947376783690e759"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "plain", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_V1FGdlTjgiOFgz1XGxr6FWR9\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "plain", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_2GXyozTSrWg3Jb4v7pwOkccO\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "f6e9e3d4687219b0b7c11e958fc2994ce253454deeb99c6e947376783690e759"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "d11187cfb73241b5909c80003675e882998c95969722ea0cc231785df01d0d0f", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "f6e9e3d4687219b0b7c11e958fc2994ce253454deeb99c6e947376783690e759", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10172,12 +10239,12 @@
   "stops": []
 },
 "anthropic fault refuse form classifier": {
-  "blobs": ["7b2dba9b5173926168c8673ec231aac8a6e62261a891881ba99baaa1dd7b8af0", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["4a6a60cfcec6c7eb14c3bdef42cb413d5477f88680235486f9df35025130ad27", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "classifier", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 561, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_IDTMywhIYoE1qzWPy0o0bdYN\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "7b2dba9b5173926168c8673ec231aac8a6e62261a891881ba99baaa1dd7b8af0"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "classifier", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 561, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_cH7ls9SuS0kygsu1uFrX33f1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "4a6a60cfcec6c7eb14c3bdef42cb413d5477f88680235486f9df35025130ad27"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "7b2dba9b5173926168c8673ec231aac8a6e62261a891881ba99baaa1dd7b8af0", "headers": {"content-length": "561", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 561, "status": 200}
+    {"body": "4a6a60cfcec6c7eb14c3bdef42cb413d5477f88680235486f9df35025130ad27", "headers": {"content-length": "561", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 561, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10210,6 +10277,73 @@
   "settles": [],
   "stops": []
 },
+"anthropic fault unknown tool named": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "c0a74af4b0b37a5728651921ca9151c0e0878d67d528e5e3cfb81e4bbe08a7c8"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "unknown tool", "n": 1, "tool": "delete_account", "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 633, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_88Up6urCHPMhqQc3KXFQIWxm\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01uwvqx6i9wLrvNYCSy02IzE\",\"name\":\"delete_account\",\"input\":{},", "sha256": "c0a74af4b0b37a5728651921ca9151c0e0878d67d528e5e3cfb81e4bbe08a7c8"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "c0a74af4b0b37a5728651921ca9151c0e0878d67d528e5e3cfb81e4bbe08a7c8", "headers": {"content-length": "633", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 633, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault unknown tool named offered": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+  "lines": [
+    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer", "kind": "model", "method": "POST", "mistake": "model:anthropic names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "unknown tool", "why": "names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer"}, "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageMockError", "text": "model:anthropic names 'get_order', which this request offers, so a call to it is not a call to an unknown tool; name a tool the agent does not offer"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault unknown tool v2 offered": {
+  "blobs": ["36ee7f9412abade49453adea20b61e21d8be86b35a647677a0422c2523b1aeae", "a4529e40b46a326df04e9f8bc74b880ef2b2c476f723920824768f5b5ba097aa"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 262, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}, {\"name\": \"get_orde", "sha256": "36ee7f9412abade49453adea20b61e21d8be86b35a647677a0422c2523b1aeae"}, "call": "model:anthropic", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 634, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_YdxCjbHQrt1fPMAAWa0Rlc8c\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01BG8q1fIyBb1oHvaO9otvzF\",\"name\":\"get_order_v2_v2\",\"input\":{}", "sha256": "a4529e40b46a326df04e9f8bc74b880ef2b2c476f723920824768f5b5ba097aa"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "a4529e40b46a326df04e9f8bc74b880ef2b2c476f723920824768f5b5ba097aa", "headers": {"content-length": "634", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 634, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault unknown tool no tools": {
+  "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
+  "lines": [
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.000168, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 576, "preview": "{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_011ChLK89QC5hfqpA15gZ9Mi\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello, it's wonderful meeting you.\"}],\"container\":null,\"stop_reaso", "sha256": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 16, "output": 17}, "unchanged": {"do": "unknown tool", "why": "the request offers no tools the agent runs, so a model would call none"}, "v": 1}
+  ],
+  "replies": [
+    {"body": "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431", "headers": {"content-length": "576", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 576, "status": 200}
+  ],
+  "reserved": [0.000846],
+  "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "settles": [[1, 0.000168]],
+  "stops": []
+},
+"anthropic marker unknown tool": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "350ddb8e821a65a85424f2f509436aa479b5afea03a2bd9205ce4c08e0584a61", "817d2157a841a584a28b7e497c716802a21811763d0962d2e189f748a6c0116a"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "unknown tool", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 631, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_AUxGLFNPPkbPiARD87QbtmTX\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01oMH9ofsPFnxnmOQm3IzOwK\",\"name\":\"get_order_v2\",\"input\":{},\"c", "sha256": "350ddb8e821a65a85424f2f509436aa479b5afea03a2bd9205ce4c08e0584a61"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "real", "after_reply_fault": true, "args": {"bytes": 469, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"toolu_01oMH9ofsPFnxnmOQm3IzOwK\", \"name\": \"ge", "sha256": "817d2157a841a584a28b7e497c716802a21811763d0962d2e189f748a6c0116a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000578, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 117, "output": 43}, "v": 1}
+  ],
+  "replies": [
+    {"body": "350ddb8e821a65a85424f2f509436aa479b5afea03a2bd9205ce4c08e0584a61", "headers": {"content-length": "631", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 631, "status": 200},
+    {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
+  ],
+  "reserved": [0.001034],
+  "sent": ["817d2157a841a584a28b7e497c716802a21811763d0962d2e189f748a6c0116a"],
+  "settles": [[1, 0.000578]],
+  "stops": []
+},
 "anthropic fault refuse forced call": {
   "blobs": ["b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"],
   "lines": [
@@ -10224,12 +10358,12 @@
   "stops": []
 },
 "anthropic fault refuse forced call classifier": {
-  "blobs": ["26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756", "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"],
+  "blobs": ["b0307a189750dc6c62f709b5eae48b7b3fe2b12889f3eff78c92a0ce47ce71a5", "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 126, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tool_choice\": {\"type\": \"any\"}}", "sha256": "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "classifier", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 561, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_CnXYSnL5yfM90F2UsAQVafyQ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 126, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tool_choice\": {\"type\": \"any\"}}", "sha256": "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "classifier", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 561, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_kHUzYl71ByqubnLwVRtwnxgw\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "b0307a189750dc6c62f709b5eae48b7b3fe2b12889f3eff78c92a0ce47ce71a5"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756", "headers": {"content-length": "561", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 561, "status": 200}
+    {"body": "b0307a189750dc6c62f709b5eae48b7b3fe2b12889f3eff78c92a0ce47ce71a5", "headers": {"content-length": "561", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 561, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10601,12 +10735,12 @@
   "stops": []
 },
 "anthropic httpx2 async: fault refuse": {
-  "blobs": ["349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["66cd3cd07a58c74f69957b39956ba5e3c4932a4ce7e4d73122faeaf881e047a6", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_gMZZo8o21XiHiLjkNqHAU9Lk\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_gziLIi4If58KdTSBl8xS6xU2\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "66cd3cd07a58c74f69957b39956ba5e3c4932a4ce7e4d73122faeaf881e047a6"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "66cd3cd07a58c74f69957b39956ba5e3c4932a4ce7e4d73122faeaf881e047a6", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10692,12 +10826,12 @@
   "stops": []
 },
 "anthropic httpx: fault refuse": {
-  "blobs": ["45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["3ce62f928c5c21348f12f6093a80277a6a96f40f39d75de77760588d6105acde", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_Z0jJT2byjBfYsfIG4S0WyXEm\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_uk46UA7YEFCvEolG0kNwQCiC\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "3ce62f928c5c21348f12f6093a80277a6a96f40f39d75de77760588d6105acde"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "3ce62f928c5c21348f12f6093a80277a6a96f40f39d75de77760588d6105acde", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10783,12 +10917,12 @@
   "stops": []
 },
 "anthropic anthropic: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"],
+  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "3ef9c15dc61ea28db8d6db42c3137d14ee4e690c7587c4121d9243abab90d77d"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_GgQRceWUBCRSoTbgjfN8N6Du\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_33uvSQoaVXtvuqQakSVPhHDJ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "3ef9c15dc61ea28db8d6db42c3137d14ee4e690c7587c4121d9243abab90d77d"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "3ef9c15dc61ea28db8d6db42c3137d14ee4e690c7587c4121d9243abab90d77d", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10874,12 +11008,12 @@
   "stops": []
 },
 "anthropic anthropic async: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431"],
+  "blobs": ["0505ac4b57625ffdc50f23183a8435e3f51cdec24f40941b20da4c504f659fdc", "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_K7gnu5KowrMJz5lWoz8BWpVd\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_sWCeD9nZxbrKn2b2WRQC400s\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "0505ac4b57625ffdc50f23183a8435e3f51cdec24f40941b20da4c504f659fdc"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "0505ac4b57625ffdc50f23183a8435e3f51cdec24f40941b20da4c504f659fdc", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -11315,13 +11449,13 @@
   "stops": []
 },
 "anthropic marker refuse": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303", "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "80d0eb0d0060a0b88e2f9d27c32cec0bc9279f50b99e8338ff541550257f95c9", "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_SVh5tKCbPWYEaKkyTwbptHio\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_Az6T56RB8WMCIkPgAGYNxcTe\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "80d0eb0d0060a0b88e2f9d27c32cec0bc9279f50b99e8338ff541550257f95c9"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
     {"action": "real", "after_reply_fault": true, "args": {"bytes": 302, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"I can't provide that.\"}]}, {\"role\": \"user\", \"c", "sha256": "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000494, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 75, "output": 43}, "v": 1}
   ],
   "replies": [
-    {"body": "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200},
+    {"body": "80d0eb0d0060a0b88e2f9d27c32cec0bc9279f50b99e8338ff541550257f95c9", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200},
     {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
   ],
   "reserved": [0.00095],

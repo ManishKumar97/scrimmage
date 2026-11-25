@@ -1139,6 +1139,80 @@ def test_the_forms_of_refuse_are_the_providers_and_both_schemas_list_the_same() 
     assert tuple(held["enum"]) == forms
 
 
+@pytest.mark.design("config.unknown_tool_name")
+def test_an_unknown_tool_name_is_a_tool_name_and_works_only_with_unknown_tool() -> None:
+    assert config.read_fault(reply_fault("unknown tool"), "x").tool is None
+    for name in ("delete_account", "get-order", "multi_tool_use.parallel", "a" * 128):
+        assert config.read_fault(reply_fault("unknown tool", tool=name), "x").tool == name
+    for bad in (
+        "",
+        "delete account",
+        "get_order()",
+        "a" * 129,
+        "x\n",
+        2,
+        True,
+        ["a"],
+        None,
+    ):
+        with pytest.raises(ConfigError, match="tool: expected a tool name"):
+            config.read_fault(reply_fault("unknown tool", tool=bad), "x")
+    for word in ("refuse", "garble", "truncate", "bad tool args", "status 500", "timeout"):
+        with pytest.raises(ConfigError, match='tool: works only with do = "unknown tool"'):
+            config.read_fault(reply_fault(word, tool="delete_account"), "x")
+    with pytest.raises(ConfigError, match="tool: unknown setting"):
+        config.read_fault({"call": "tool:t", "do": "timeout", "tool": "x"}, "x")
+
+
+@pytest.mark.design("config.unknown_tool_name")
+def test_the_plan_carries_an_unknown_tool_name_and_refuses_one_that_is_not_a_name() -> None:
+    fault = config.Fault("model", "unknown tool", "first 1", model="m", tool="delete_account")
+    doc = plan.fault_json(fault)
+    assert doc["tool"] == "delete_account"
+    assert plan.fault_from(doc) == fault
+    assert "tool" not in plan.fault_json(dataclasses.replace(fault, tool=None))
+    with pytest.raises(ValueError, match="plan fault tool: expected a tool name"):
+        plan.fault_from({**doc, "tool": "two words"})
+    with pytest.raises(ValueError, match='plan fault tool: works only with do = "unknown tool"'):
+        plan.fault_from({**doc, "do": "garble"})
+
+
+@pytest.mark.design("config.unknown_tool_name")
+def test_the_schemas_know_the_unknown_tool_name_and_hold_its_rules() -> None:
+    """The plan schema, with the key and without it, for the reason each plan breaks; and the
+    pattern in the two schemas, which cannot read the config, is the same one."""
+    schema = json.loads((SCHEMAS / "plan.v1.json").read_text())
+    check = jsonschema.Draft202012Validator(schema)
+    fault = config.Fault("model", "unknown tool", "first 1", model="m", tool="delete_account")
+    doc: Any = plan.Plan("run-1", "t", "row", (), (fault,), (), (), 60.0).to_json()
+    check.validate(doc)
+    stripped = copy.deepcopy(schema)
+    del stripped["properties"]["faults"]["items"]["properties"]["tool"]
+    assert list(jsonschema.Draft202012Validator(stripped).iter_errors(doc)), "tool is in it"
+    for fault_doc, why in (
+        ({**doc["faults"][0], "tool": "two words"}, "does not match"),
+        ({**doc["faults"][0], "do": "garble"}, "'unknown tool' was expected"),
+    ):
+        said = [error.message for error in check.iter_errors({**doc, "faults": [fault_doc]})]
+        assert any(why in message for message in said), (fault_doc, said)
+    toml = json.loads((SCHEMAS / "scrimmage-toml.v1.json").read_text())
+    patterns = {
+        schema["properties"]["faults"]["items"]["properties"]["tool"]["pattern"],
+        toml["$defs"]["unknown_tool_name"]["pattern"],
+    }
+    assert patterns == {"^[A-Za-z0-9_.-]{1,128}$"} and config.MAX_TOOL_NAME == 128
+    cli = json.loads((SCHEMAS / "cli.v1.json").read_text())
+    assert any(
+        "tool" in found["properties"] and "find" in found["properties"]
+        for found in schema_objects(cli)
+    ), "the --json fault object has the key"
+    record = json.loads((SCHEMAS / "record.v1.json").read_text())
+    assert any(
+        "tool" in found["properties"] and "retry_after" in found["properties"]
+        for found in schema_objects(record)
+    ), "the record's fired fault has the key"
+
+
 def schema_objects(node: object) -> list[dict[str, Any]]:
     """Every schema object in a JSON schema that lists properties."""
     found: list[dict[str, Any]] = []
@@ -1187,3 +1261,15 @@ def test_a_reply_fault_not_built_yet_gets_no_billed_warning(tmp_path: Path) -> N
         cfg = example(tmp_path, FAULT, block)
         cfg = dataclasses.replace(cfg, agent=dataclasses.replace(cfg.agent, max_cost_usd=None))
         assert len(config.carried_model_warnings(cfg)) == warned, word
+
+
+@pytest.mark.design("config.unknown_tool_name")
+def test_a_tool_name_that_looks_like_a_key_is_redacted_in_json() -> None:
+    from scrimmage import runner
+
+    name = "sk-" + "a1B2" * 10
+    fault = config.Fault("model", "unknown tool", "first 1", model="m", tool=name)
+    shown = runner.fault_json(fault)
+    assert shown is not None and shown["tool"] == "[secret removed]"
+    plain = runner.fault_json(dataclasses.replace(fault, tool="delete_account"))
+    assert plain is not None and plain["tool"] == "delete_account"

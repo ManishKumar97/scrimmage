@@ -173,6 +173,10 @@
                 "classifier"
               ],
               "description": "The form a refuse fault was asked for; absent when the row names none."
+            },
+            "tool": {
+              "type": "string",
+              "description": "The tool name an unknown tool fault was asked to call; absent when the row names none."
             }
           }
         },

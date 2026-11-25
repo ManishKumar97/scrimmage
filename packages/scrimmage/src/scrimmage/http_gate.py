@@ -17,6 +17,7 @@ import errno
 import hashlib
 import http
 import inspect
+import itertools
 import json
 import math
 import os
@@ -587,6 +588,8 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
 def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = provider_for(run, step).offered(path, fields)
+    if (conversation := provider_for(run, step).conversation_key(path, fields)) is not None:
+        run.remember_offered(step.call.label, conversation, tools.agent)
     if tools.hosted_reads:
         step.extra["hosted_reads"] = tools.hosted_reads
     if tools.unknown:
@@ -658,9 +661,17 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
         )
     if why := provider.not_carried_out(word, path, fields):
         not_carried_out(run, step, why)
-    if word == "unknown tool" and (why := provider.no_free_tool_call(path, fields)):
-        run.unchanged(step, why)
-        step.decision = Decision("real")
+    if word == "unknown tool":
+        if why := provider.no_free_tool_call(path, fields):
+            run.unchanged(step, why)
+            step.decision = Decision("real")
+        elif planned.tool in provider.offered(path, fields).agent:
+            not_carried_out(
+                run,
+                step,
+                f"names {planned.tool!r}, which this request offers, so a call to it is not a "
+                "call to an unknown tool; name a tool the agent does not offer",
+            )
 
 
 def chain_check(
@@ -700,11 +711,44 @@ def built_reply(
         form = ctx.run.plan.faults[step.decision.fault or 0].form
         built = provider.refusal_reply(path, fields, tokens, form)
     else:  # reply_checks let it through only on chat, with a tool offered
-        tool = provider.tool_call_tools(path, fields)[0]
-        built = provider.unknown_tool_reply(fields, tokens, tool)
+        calls = provider.tool_call_tools(path, fields)
+        offered = provider.offered(path, fields).agent
+        named = ctx.run.plan.faults[step.decision.fault or 0].tool
+        conversation = provider.conversation_key(path, fields)
+        tool = unknown_tool_name(ctx.run, step.call.label, conversation, named, offered, calls)
+        built = provider.unknown_tool_reply(path, fields, tokens, tool)
     headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
+
+
+MAX_MADE_UP_NAME = 64  # the longest function name OpenAI takes, the smaller limit of the two APIs
+
+
+def unknown_tool_name(
+    run: RunState,
+    label: str,
+    conversation: str | None,
+    named: str | None,
+    offered: list[str],
+    calls: list[str],
+) -> str:
+    """The tool unknown tool calls: the one the row names; else one an earlier request of this
+    conversation to this label offered and this one does not, which needs a conversation key,
+    so one agent's tool is never named in another's; else the name of the first tool the model
+    could call with _v2 added, an arbitrary name close to an offered one. offered: every tool this
+    request offers, in any field; calls: the ones a call may name. The made-up name is cut to fit
+    MAX_MADE_UP_NAME, and is never one the request offers."""
+    if named is not None:
+        return named
+    if conversation is not None and (dropped := run.dropped_tool(label, conversation, offered)):
+        return dropped
+    for n in itertools.count(1):
+        suffix = "_v2" * n if n < 10 else f"_v{n}"
+        name = calls[0][: MAX_MADE_UP_NAME - len(suffix)] + suffix
+        if name not in offered:
+            return name
+    raise AssertionError("unreachable")
 
 
 def faulted(

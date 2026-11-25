@@ -122,6 +122,7 @@ class OpenAI:
     context_too_long_body = staticmethod(table.context_too_long_body)
     not_carried_out = staticmethod(table.not_carried_out)
     never_carried_out = staticmethod(table.never_carried_out)
+    conversation_key = staticmethod(table.conversation_key)
     tool_call_tools = staticmethod(table.tool_call_tools)
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
@@ -139,14 +140,17 @@ class OpenAI:
         return table.refusal_reply(wire, tokens_in)
 
     def given(self, path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
-        """Chat Completions replies are carried back by their tool call ids and messages;
-        a Responses reply is kept by OpenAI and named by id, so it gives nothing to carry."""
+        """Chat Completions replies are carried back by their tool call ids and messages.
+        A Responses reply is kept by OpenAI and named by id, so it gives nothing to carry
+        but the call ids of a reply any model may send, as a call to an unknown tool is."""
         if table.is_responses(path):
-            return Given()
+            return table.response_calls(reply) if ids_only else Given()
         return table.given(wire, reply, ids_only=ids_only)
 
     def carries(self, path: str, wire: Fields, kept: Sequence[Given]) -> bool:
-        return False if table.is_responses(path) else table.carries(wire, kept)
+        if table.is_responses(path):
+            return table.carries_response_call(wire, kept)
+        return table.carries(wire, kept)
 
     # ReplyReader
     parse_reply = staticmethod(table.parse_reply)

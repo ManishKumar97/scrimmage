@@ -199,12 +199,13 @@ class Scenario:
         provider: str = "openai",
         count_tokens: str | None = None,
         both: bool = False,
+        seen: tuple[str, ...] = (),
     ) -> None:
         """calls: (path, body) or (path, body, headers). client: the library that sends, httpx2,
         httpx, openai, anthropic or any of those with " async". script: a server of its own, in
         place of the fake. hosts: how many times the host is listed. dead: nothing listens at the
         host. provider: whose fake serves, and whose provider the host is listed for. both: the
-        host is listed for both providers."""
+        host is listed for both providers. seen: more tool names a gate sees."""
         self.name = name
         self.calls = calls
         self.replies = replies or []
@@ -215,6 +216,7 @@ class Scenario:
         self.client, self.script, self.hosts, self.dead = client, script, hosts, dead
         self.real, self.injected = real, injected
         self.provider, self.count_tokens, self.both = provider, count_tokens, both
+        self.seen = seen
 
 
 def scenarios() -> list[Scenario]:
@@ -1279,6 +1281,37 @@ def responses_faults(add: Callable[..., None]) -> None:
         ["chat_answer"],
         faults=faulted("unknown tool"),
     )
+    # unknown tool on both APIs: the name the row gives, else an offered tool's name with _v2.
+    add(
+        "fault unknown tool tool named",
+        [(CHAT, WITH_TOOL)],
+        ["chat_answer"],
+        faults=faulted("unknown tool", tool="delete_account"),
+    )
+    add(
+        "fault unknown tool tool named dotted",
+        [(CHAT, WITH_TOOL)],
+        ["chat_answer"],
+        faults=faulted("unknown tool", tool="multi_tool_use.parallel"),
+    )
+    add(
+        "fault unknown tool tool named offered",
+        [(CHAT, WITH_TOOL)],
+        ["chat_answer"],
+        faults=faulted("unknown tool", tool="get_order"),
+    )
+    add(
+        "fault unknown tool responses tool named",
+        [(RESPONSES, offered)],
+        response="response_text",
+        faults=faulted("unknown tool", tool="delete_account"),
+    )
+    add(
+        "marker unknown tool responses",
+        [(RESPONSES, offered), (RESPONSES, responses_followed)],
+        response="response_text",
+        faults=faulted("unknown tool", "first 1"),
+    )
     add(
         "fault unknown tool functions",
         [(CHAT, chat(functions=[{"name": "f"}]))],
@@ -1421,6 +1454,18 @@ def anthropic_reply(name: str) -> bytes:
     return (ANTHROPIC_FIXTURES / name).read_bytes()
 
 
+def responses_followed(prior: list[bytes]) -> dict[str, Any]:
+    """The next stateless Responses request an agent builds from the reply it got: the reply's
+    items, then the output of each function call it made."""
+    output = json.loads(prior[-1]).get("output") or []
+    results = [
+        {"type": "function_call_output", "call_id": item["call_id"], "output": "ok"}
+        for item in output
+        if item.get("type") == "function_call"
+    ]
+    return responses(tools=[{"type": "function", "name": "get_order"}], input=[*output, *results])
+
+
 def anthropic_followed(prior: list[bytes]) -> dict[str, Any]:
     """The next Messages request an agent builds from the reply it got: its content, then the
     result of each tool it called."""
@@ -1443,8 +1488,8 @@ def tiered(tier: str, **usage: Any) -> bytes:
 
 def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     """Anthropic's Messages API through the same gate: each fixture, the hold by cache_control and
-    max_tokens, the tiers, the tools, the status and bad body faults, and the faults that are not
-    done yet, which are mistakes in the test."""
+    max_tokens, the tiers, the tools, the status and bad body faults, and the reply faults, of
+    which bad tool args is a mistake in the test."""
 
     def add(name: str, calls: list[Any], replies: list[str] | None = None, **kw: Any) -> None:
         add_to(f"anthropic {name}", calls, replies, provider="anthropic", **kw)
@@ -1581,9 +1626,9 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         ("bad tool args", {}),
         ("unknown tool", {}),
     ):
-        # unknown tool is not done yet, and bad tool args never can be: both refuse. The rest
-        # change or build a reply, on a tool call alone and on a stream.
-        state = {"bad tool args": " never", "unknown tool": " not yet"}.get(word, "")
+        # bad tool args never can be built: it refuses. The rest change or build a reply, on a
+        # tool call alone and on a stream.
+        state = {"bad tool args": " never"}.get(word, "")
         add(
             f"fault {word}{state}",
             [(MESSAGES, message(tools=[ORDER]))],
@@ -1646,6 +1691,39 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         [(MESSAGES, message())],
         ["real_answer"],
         faults=faulted("refuse", form="loud"),
+    )
+    # unknown tool names the tool the row names, or else an offered tool with _v2 added; a name the
+    # request offers is a mistake.
+    add(
+        "fault unknown tool named",
+        [(MESSAGES, message(tools=[ORDER]))],
+        ["real_answer"],
+        faults=faulted("unknown tool", tool="delete_account"),
+    )
+    add(
+        "fault unknown tool named offered",
+        [(MESSAGES, message(tools=[ORDER]))],
+        ["real_answer"],
+        faults=faulted("unknown tool", tool="get_order"),
+    )
+    add(
+        "fault unknown tool v2 offered",
+        [(MESSAGES, message(tools=[ORDER, {**ORDER, "name": "get_order_v2"}]))],
+        ["real_answer"],
+        faults=faulted("unknown tool"),
+        seen=("get_order_v2",),
+    )
+    add(
+        "fault unknown tool no tools",
+        [(MESSAGES, message())],
+        ["real_answer"],
+        faults=faulted("unknown tool"),
+    )
+    add(
+        "marker unknown tool",
+        [(MESSAGES, message(tools=[ORDER])), (MESSAGES, anthropic_followed)],
+        ["real_answer", "real_context_too_long"],
+        faults=faulted("unknown tool", "first 1"),
     )
     forced = message(tool_choice={"type": "any"})
     add("fault refuse forced call", [(MESSAGES, forced)], ["real_answer"], faults=faulted("refuse"))
@@ -2129,6 +2207,7 @@ def run_one(scenario: Scenario) -> dict[str, object]:
         sink, budget = Sink(), Budget(scenario.budget)
         run = state.RunState(plan, sink, [])
         run.injected.extend(scenario.injected)
+        run.listed.update(scenario.seen)
         state.install(run)
         stops: list[str] = []
         ctx = http_gate.Context(run, budget, sink, stops.append)

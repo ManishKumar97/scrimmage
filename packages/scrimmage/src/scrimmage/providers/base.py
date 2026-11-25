@@ -264,11 +264,20 @@ class FaultMaker(Protocol):
         test known before the run, or None when it can."""
         ...
 
+    def conversation_key(self, path: str, wire: Fields) -> str | None:
+        """A digest of what makes a request one agent's conversation: its system or instructions
+        text and its first user message, the same on every turn. None when the request does not
+        carry them, as a Responses request that continues by id."""
+        ...
+
     def tool_call_tools(self, path: str, wire: Fields) -> list[str]: ...
 
     def no_free_tool_call(self, path: str, wire: Fields) -> str | None: ...
 
-    def unknown_tool_reply(self, wire: Fields, tokens_in: int, tool: str) -> bytes: ...
+    def unknown_tool_reply(self, path: str, wire: Fields, tokens_in: int, tool: str) -> bytes:
+        """A whole reply in which the model asks for this tool, which the request does not
+        offer: one tool call with no arguments, in the shape of the API this path is."""
+        ...
 
     def given(self, path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
         """What this faulted reply to a request to this path gave the agent, in the forms a
