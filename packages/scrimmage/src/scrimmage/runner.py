@@ -1419,6 +1419,34 @@ def provider_message(line: dict[str, object]) -> str:
     return text if len(text) <= ERROR_SHOWN else text[: ERROR_SHOWN - 3] + "..."
 
 
+# What each provider's library says when it is given no key, as a run's log ends with it. The
+# OpenAI library names the variable; the Anthropic one does not, so it is named here.
+MISSING_KEY = (
+    (re.compile(r"OPENAI_API_KEY"), "OPENAI_API_KEY"),
+    (re.compile(r"Could not resolve authentication method"), "ANTHROPIC_API_KEY"),
+)
+LOG_TAIL = 16 * 1024
+
+
+def missing_key(folder: Path, runs: Sequence[RunResult]) -> str | None:
+    """The environment variable a provider's library asked for, when every one of these runs
+    ended in its error for a missing key; None when any did not, or no log says it."""
+    found: set[str] = set()
+    for r in runs:
+        try:
+            with open(folder / f"{r.run}.log", "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - LOG_TAIL))
+                tail = handle.read().decode("utf-8", "replace")
+        except OSError:
+            return None
+        names = {name for pattern, name in MISSING_KEY if pattern.search(tail)}
+        if len(names) != 1:
+            return None
+        found |= names
+    return found.pop() if len(found) == 1 else None
+
+
 def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object]]) -> bool:
     """Whether a fault in a model's reply fired in the same process before this line. The
     gate's mark alone is not trusted."""
@@ -2044,6 +2072,12 @@ def build_report(
                     f"{test.name}: no baseline run made a model call, so the budget is not "
                     "working; check for a cache in front of the model or a client Scrimmage "
                     "does not gate"
+                )
+            elif (variable := missing_key(folder, ran)) is not None:
+                mistakes.append(
+                    f"{test.name}: every baseline run stopped before its first model call "
+                    f"because {variable} is not set in the environment of the test; set it "
+                    "and run again"
                 )
             else:  # the agent never got that far, which says nothing about the budget
                 mistakes.append(

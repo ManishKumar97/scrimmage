@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import jsonschema
@@ -20,7 +21,7 @@ from fakes.openai_server import FakeOpenAI, ToolNames
 from scrimmage import config, state, tool_gate
 from scrimmage import runner as runner_module
 from scrimmage.plan import Plan
-from scrimmage.runner import INFRA_LINE, Runner, report
+from scrimmage.runner import INFRA_LINE, Runner, RunResult, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
 RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
@@ -815,3 +816,41 @@ def test_a_failed_calls_line_carries_the_providers_message_cut_to_200_characters
         "result": {"preview": preview},
     }
     assert runner_module.real_error(line) == "model:openai returned 404" + said
+
+
+@pytest.mark.design("runner.missing_key")
+@pytest.mark.slow
+def test_a_run_with_no_openai_key_says_which_variable_is_missing(project: Project) -> None:
+    project.monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    project.monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+    result = project.test()
+    said = result.out + result.err
+    assert result.code == 2, said
+    assert "because OPENAI_API_KEY is not set in the environment of the test" in said, said
+    assert "see the run logs" not in said, said
+
+
+@pytest.mark.design("runner.missing_key")
+@pytest.mark.parametrize(
+    ("log", "variable"),
+    [
+        (
+            "openai.OpenAIError: Missing credentials ... set the `OPENAI_API_KEY` env",
+            "OPENAI_API_KEY",
+        ),
+        (
+            "TypeError: Could not resolve authentication method. Expected either api_key",
+            "ANTHROPIC_API_KEY",
+        ),
+        ("ValueError: something else", None),
+    ],
+)
+def test_missing_key_reads_the_providers_own_error_from_every_run_log(
+    tmp_path: Path, log: str, variable: str | None
+) -> None:
+    (tmp_path / "run-a.log").write_text("noise\n" * 5000 + log + "\n")
+    (tmp_path / "run-b.log").write_text(log + "\n")
+    runs = [cast(RunResult, SimpleNamespace(run=name)) for name in ("run-a", "run-b")]
+    assert runner_module.missing_key(tmp_path, runs) == variable
+    gone = cast(RunResult, SimpleNamespace(run="run-gone"))
+    assert runner_module.missing_key(tmp_path, [*runs, gone]) is None
