@@ -499,7 +499,7 @@ The hold covers only the models the request names, so a reply in which a model n
 - **Cached input that a gateway reports in its own fields.**
   Cached tokens are read from OpenAI's usage fields and, on an Anthropic call, from its cache read and cache write fields.
   A gateway that reports them another way, or a price under `[agent.prices]` with no `cached_input`, prices every input token at the full rate.
-  So the cost is high, never low.
+  The cost is then high, never low.
 
 - **Cache writes on Chat Completions are unconfirmed.** OpenAI states for Responses that written tokens are part of the input count and apart from cached ones. Scrimmage reads Chat Completions' `prompt_tokens_details.cache_write_tokens` the same way, as the openai library names it, but no real Chat Completions reply with writes has confirmed it.
 
