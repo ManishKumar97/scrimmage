@@ -139,7 +139,7 @@ With `runs = 3`, 0.8 means all judged runs, as 2 of 3 is below it.
 
 `no result` means the test did not test, so it exits with code 2, or 3 if an infrastructure error caused it.
 
-Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused or reached the budget in every run skips its fault rows.
+Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused, reached the budget or hit an infrastructure error (such as a provider's 400 or 404) in every run skips its fault rows.
 
 ## A fault row beside a failing baseline
 

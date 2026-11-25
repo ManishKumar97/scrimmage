@@ -100,6 +100,9 @@ CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 PROCESS_LABEL = "process:python"
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached", "not reserved")
+# A baseline of only these runs did not work, so its fault rows are not run: a provider's 400
+# or 404 would only be paid for again, as it is for a refused call.
+BASELINE_FAILED_OUTCOMES = (*FAILED, "infrastructure error")
 BUDGET_REASONS = ("budget", "budget_held")  # refusals for the budget
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
@@ -1208,7 +1211,11 @@ class Runner:
                 results += settled(pool.map(self.one, base))
                 for test in self.config.tests:
                     mine = [r for r in results if r is not None and r.row.test == test]
-                    if test.faults and mine and all(r.outcome in FAILED for r in mine):
+                    if (
+                        test.faults
+                        and mine
+                        and all(r.outcome in BASELINE_FAILED_OUTCOMES for r in mine)
+                    ):
                         self.skipped.append(test.name)
                 faulted = [
                     r for r in rows if r.fault is not None and r.test.name not in self.skipped
@@ -1974,8 +1981,8 @@ def build_report(
     skipped = runner.skipped if runner is not None else []
     for name in skipped:
         mistakes.append(
-            f"{name}: baseline failed: every baseline run crashed, timed out, was refused or "
-            "reached the budget, so its fault rows did not run"
+            f"{name}: baseline failed: every baseline run crashed, timed out, was refused, "
+            "reached the budget or hit an infrastructure error, so its fault rows did not run"
         )
     if stopped_by in BUDGET_REASONS:
         numbers = stop_numbers(results, stopped_by)

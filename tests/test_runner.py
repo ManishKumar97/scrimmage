@@ -718,21 +718,24 @@ def test_a_400_after_unknown_tool_is_the_runs_outcome_not_infrastructure(
 def test_a_400_with_no_reply_fault_before_it_is_still_infrastructure(
     project: Project, fake_openai: Fake
 ) -> None:
-    """The same 400 on the second call, with no reply fault fired before it: the baseline
-    has none, and the fault row's is on call 3, which the bot never reaches, as it crashes
-    on the 400. OpenAI failing by itself. A fault that fires after a caught 400 is in
-    test_record_lines.py."""
+    """The same 400 on the second call, with no reply fault fired before it: OpenAI failing by
+    itself. Its baseline is an infrastructure error, so the fault row is not run, as for a
+    refused baseline. A fault that fires after a caught 400 is in test_record_lines.py."""
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
-    result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
+    fake = fake_openai(["acme_get_order", "real_error_tool_name"])
+    result = project.test(fake)
     said = result.out + result.err
     assert result.code == 3, said
     assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}
     assert "model:openai returned 400, not injected" in said, said
-    for row in ("baseline", "fault 1"):
-        model = model_lines(result, row)
-        assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
-        assert not any("after_reply_fault" in x for x in model), model
+    model = model_lines(result, "baseline")
+    assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
+    assert not any("after_reply_fault" in x for x in model), model
+    # The baseline failed by infrastructure, so the fault row is not run and spends nothing.
+    assert [lines[-1]["row"] for lines in result.records()] == ["baseline"], said
+    assert len(fake.requests) == 2, fake.requests
+    assert "baseline failed" in said and "its fault rows did not run" in said, said
 
 
 @pytest.mark.design("runner.after_reply_fault")
