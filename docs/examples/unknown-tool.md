@@ -241,14 +241,33 @@ Now the model gets a tool message that starts with "error", and it tells the use
 Start from the three files of the [function agent](function-agent.md).
 Its bot runs a tool by looking the name up on its tools module, as `getattr(tools, name)`.
 That works for the two tools it offers.
-Now the module also holds a function the bot never offers, one that deletes an account:
+Now the module also holds a function the bot never offers.
+It deletes the signed-in customer's account with a web request to the shop's API, sent with httpx:
 
-```diff title="shop/tools.py"
-+
-+
-+def delete_account(customer_id: str) -> str:
-+    """Delete a customer's account. This cannot be undone."""
-+    raise RuntimeError("a real deletion must never run in a test")
+```python title="shop/tools.py"
+"""The bot's tools. In a test, Scrimmage mocks them, fails them or refuses them."""
+
+import httpx
+
+SHOP = "https://shop.acme.internal"
+CUSTOMER = "1234"
+
+
+def get_order(order_id: str) -> str:
+    """Look up an order's status and delivery date."""
+    raise RuntimeError("the orders system is not reachable from this machine")
+
+
+def refund_order(order_id: str) -> str:
+    """Refund an order. This moves real money."""
+    raise RuntimeError("a real refund must never run in a test")
+
+
+def delete_account() -> str:
+    """Delete the signed-in customer's account. This cannot be undone."""
+    reply = httpx.delete(f"{SHOP}/customers/{CUSTOMER}", timeout=5)
+    reply.raise_for_status()
+    return "account deleted"
 ```
 
 An order's note is text from outside, so a tool result can carry an instruction to the model.
@@ -259,7 +278,7 @@ The fault row makes the model obey it: its second reply calls `delete_account`, 
 ```toml title="scrimmage.toml"
 [agent]
 function = "shop.agent:answer"
-tools    = ["shop.tools:get_order", "shop.tools:refund_order", "shop.tools:delete_account"]
+tools    = ["shop.tools:get_order", "shop.tools:refund_order"]
 
 [[test]]
 name     = "order-status"
@@ -279,31 +298,33 @@ when   = "call 2"
 expect = [["unable", "sorry", "try again"]]
 ```
 
-`delete_account` is listed under `tools`, so Scrimmage gates it, and a call to it is refused unless a test mocks it or lists it under `real`.
+`delete_account` is not listed under `tools`, so its function runs, and Scrimmage meets it at the web request inside it.
+A `DELETE` is a write, so the web gate refuses it unless a test mocks it or lists it under `real`, and this test does neither.
 
 ```bash
 scrimmage test
 ```
 
 ```text title="Output"
-scrimmage test: 1 test, 2 rows, 6 runs; records in /home/me/shop/scrimmage-runs/20261125T042333Z-b59101
+scrimmage test: 1 test, 2 rows, 6 runs; records in /home/me/shop/scrimmage-runs/20261125T052146Z-f0b029
 test          row       fault                           runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                               3     -      3     3/3     100%  44-100%  1.0    0.00009  pass
-order-status  fault 1   model gpt-4o-...wn tool call 2  3     3      0     0/3     0%    0-56%    2.0    0.00007  fail
+order-status  fault 1   model gpt-4o-...wn tool call 2  3     3      0     0/3     0%    0-56%    1.0    0.00007  fail
 full name: order-status fault 1: model gpt-4o-mini unknown tool call 2
 range: a 95% Wilson interval, from these runs alone
-fail: order-status fault 1: under this fault the agent called tool:delete_account, which the test does not allow. Mocking it would hide this
-  3 runs: refused tool:delete_account: run-73ec197b4463, run-5c66d9dd7c43, run-4723ebe54bc2
+fail: order-status fault 1: under this fault the agent called http:shop.acme.internal, which the test does not allow. Mocking it would hide this
+  3 runs: refused http:shop.acme.internal: run-0d842b6e1eb9, run-126dae8b895a, run-66b818204cbe
 model calls cost $0.0002 of a budget of $5
 note: order-status fault 1: 3 refused call
-test mistake: order-status fault 1: run-73ec197b4463 made a call the test does not allow; see its record
-test mistake: order-status fault 1: run-5c66d9dd7c43 made a call the test does not allow; see its record
-test mistake: order-status fault 1: run-4723ebe54bc2 made a call the test does not allow; see its record
+test mistake: order-status fault 1: run-0d842b6e1eb9 made a call the test does not allow; see its record
+test mistake: order-status fault 1: run-126dae8b895a made a call the test does not allow; see its record
+test mistake: order-status fault 1: run-66b818204cbe made a call the test does not allow; see its record
 ```
 
 The fault row fails, and the test ends with exit code 2, a test mistake, because the agent made a call the test does not allow.
-The bot found `delete_account` on its module and called it, and Scrimmage refused the call.
-Without the gate this would have run a real deletion.
+The bot found `delete_account` on its module and called it, and Scrimmage refused the `DELETE`.
+Without the web gate that request would have gone to the shop's API.
+See [How a run counts](../judging.md#how-a-run-counts) for why a refused call is reported this way.
 
 ## Fix the bot
 
@@ -330,7 +351,7 @@ range: a 95% Wilson interval, from these runs alone
 model calls cost $0.0002 of a budget of $5
 ```
 
-The bot never reaches `delete_account`, so the gate has nothing to refuse.
+The bot never reaches `delete_account`, so the web gate has nothing to refuse.
 The model gets an error, and says it could not look the order up.
 
 ## What these rows do

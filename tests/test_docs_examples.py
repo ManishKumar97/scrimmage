@@ -106,7 +106,10 @@ EXAMPLES = {
                 },
                 # The model's last reply follows the bot's own error: the bot must have
                 # re-listed its tools, so the fault named fetch, and then answered with it.
-                needs={("search", 2): "no tool named fetch"},
+                needs={
+                    ("search", 2): "no tool named fetch",
+                    ("get_order", 2): "no tool named delete_account",
+                },
             )
         },
     ),
