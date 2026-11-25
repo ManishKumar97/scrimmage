@@ -1486,8 +1486,8 @@ def tiered(tier: str, **usage: Any) -> bytes:
 
 def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     """Anthropic's Messages API through the same gate: each fixture, the hold by cache_control and
-    max_tokens, the tiers, the tools, the status and bad body faults, and the faults that are not
-    done yet, which are mistakes in the test."""
+    max_tokens, the tiers, the tools, the status and bad body faults, and the reply faults, of
+    which bad tool args is a mistake in the test."""
 
     def add(name: str, calls: list[Any], replies: list[str] | None = None, **kw: Any) -> None:
         add_to(f"anthropic {name}", calls, replies, provider="anthropic", **kw)

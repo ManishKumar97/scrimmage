@@ -623,7 +623,7 @@ def unknown_tool_reply(path: str, wire: Fields, tokens_in: int, tool: str) -> by
 
 def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
     """What this reply to this request gave the agent. ids_only: the tool call ids alone, for
-    a reply whose message any model may send, such as a call to multi_tool_use.parallel."""
+    a reply whose message any model may send, such as a call to a tool no one offered."""
     fields = fields_dict(wire)
     messages = [
         _obj(_obj(choice).get("message"))
