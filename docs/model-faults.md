@@ -110,7 +110,7 @@ when   = "call 2"
 expect = [["sorry", "could not"]]
 ```
 
-They work on a chat call, `model` or `model:openai`, and take no `text`, `find` or `retry_after`.
+They work on a chat call, `model`, `model:openai` or `model:anthropic`, and take no `text`, `find` or `retry_after`.
 `refuse` alone takes `form`, which is for an Anthropic call: see [Reply faults on an Anthropic call](#reply-faults-on-an-anthropic-call).
 Under `when = "always"` each needs its own `expect` or `forbid`, as any fault that hides the data does.
 
@@ -197,8 +197,8 @@ Each fault changes the blocks it names, and leaves every other byte as Anthropic
 | `refuse` | a plain decline: one `text` block, `I can't provide that.`, and `stop_reason` `end_turn` | | a real `claude-haiku-5-5` decline, saved on 24 November 2026 |
 | `refuse`, with `form = "classifier"` | no content, `stop_reason` `refusal`, and `stop_details` of type `refusal` with a `null` category and explanation | | the shape on Anthropic's Refusals page |
 
-Anthropic's API never sends a tool call cut in the middle as an error, as OpenAI's does.
-A real reply cut inside a tool call is a 200 with the block there and an `input` of `{}`, so that is what `truncate` builds.
+A real capture shows Anthropic's API sending a tool call cut in the middle as a 200, not as an error as OpenAI's does.
+The block is there with an `input` of `{}`, so that is what `truncate` builds.
 `usage` stays as the model billed it, and the line's cost is that.
 A reply that is left as it is goes to your agent unchanged, and the line says why in `unchanged`.
 
