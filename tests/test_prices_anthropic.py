@@ -1,6 +1,8 @@
 """The Anthropic rows of the shipped price file, pinned as read from Anthropic's pricing page and
 fast mode page on 25 November 2026. A rate that changes by a cent must fail here."""
 
+import json
+
 import pytest
 
 from config_cases import BAD
@@ -145,3 +147,26 @@ def test_check_passes_a_claude_agent_with_no_prices_of_its_own_and_shows_the_dat
     assert cli.main(["check", str(project.toml)]) == outcomes.OK
     out = capsys.readouterr().out
     assert "a budget of $5" in out and "Anthropic prices as of 2026-11-25" in out
+
+
+def reply(cache_reads: int) -> bytes:
+    usage = {"input_tokens": 10, "cache_read_input_tokens": cache_reads, "output_tokens": 1000}
+    return json.dumps(
+        {"type": "message", "role": "assistant", "content": [], "usage": usage}
+    ).encode()
+
+
+@pytest.mark.design("prices.shipped_file")
+def test_haiku_5_5_cache_reads_count_toward_the_100000_token_threshold() -> None:
+    rates = provider_anthropic.price("claude-haiku-5-5", {})
+    assert rates is not None
+    long = provider_anthropic.usage(reply(99_991))
+    assert (long.input, long.cached) == (100_001, 99_991)
+    assert provider_anthropic.cost(long.input, long.output, rates, long.cached) == pytest.approx(
+        (10 * 0.50 + 99_991 * 0.05 + 1000 * 2.50) / 1e6, abs=1e-8
+    )
+    base = provider_anthropic.usage(reply(99_990))
+    assert (base.input, base.cached) == (100_000, 99_990)
+    assert provider_anthropic.cost(base.input, base.output, rates, base.cached) == pytest.approx(
+        (10 * 0.10 + 99_990 * 0.01 + 1000 * 0.50) / 1e6, abs=1e-8
+    )
