@@ -14,14 +14,14 @@ import shutil
 import signal
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
-from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, tool_failed
+from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, text_of, tool_failed
 from scrimmage.cli import main
 from scrimmage.managed import Managed
 from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
@@ -45,28 +45,43 @@ class Example:
 
 @dataclass(frozen=True)
 class ByTools:
-    """A main model that follows the script of the one tool its request offers.
+    """A main model that follows the script of the tool its request offers.
 
     A script lists the reply for each turn, `a|b` as in the fake server's replies. A page
-    with two agents on one model name gives each agent its own script this way."""
+    with two agents on one model name gives each agent its own script this way: a request
+    that offers the tool of exactly one script gets that script, and any other request gets
+    no reply, which the fake records as an error. `needs` maps a script's tool and a turn
+    to a text some tool message of the request must hold, or that turn gets no reply.
+    `unused` names the script entries no request asked for."""
 
     scripts: dict[str, tuple[str, ...]]
+    needs: dict[tuple[str, int], str] = field(default_factory=dict)
+    used: set[tuple[str, int]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         for turns in self.scripts.values():
             for name in turns:
                 Reply(name)  # a missing fixture fails before the test runs
 
+    @property
+    def unused(self) -> list[tuple[str, int]]:
+        every = {(tool, turn) for tool, turns in self.scripts.items() for turn in range(len(turns))}
+        return sorted(every - self.used)
+
     def __call__(self, request: dict[str, Any]) -> Reply | None:
         offered = {str(t.get("function", {}).get("name")) for t in request.get("tools", [])}
-        turn = sum(1 for m in request.get("messages", []) if m.get("role") == "assistant")
-        for tool, turns in self.scripts.items():
-            if tool in offered and turn < len(turns):
-                reply = Reply(turns[turn])
-                return (
-                    reply.after_failure if reply.after_failure and tool_failed(request) else reply
-                )
-        return None
+        matching = [tool for tool in self.scripts if tool in offered]
+        messages = request.get("messages", [])
+        turn = sum(1 for m in messages if m.get("role") == "assistant")
+        if len(matching) != 1 or turn >= len(self.scripts[matching[0]]):
+            return None
+        tool = matching[0]
+        wanted = self.needs.get((tool, turn))
+        if wanted and not any(wanted in text_of(m) for m in messages if m.get("role") == "tool"):
+            return None
+        self.used.add((tool, turn))
+        reply = Reply(self.scripts[tool][turn])
+        return reply.after_failure if reply.after_failure and tool_failed(request) else reply
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -163,6 +178,10 @@ def check_page(
     codes: list[int] = []
     run_blocks(name, root, codes, capsys)
     assert codes == example.codes
+    for rule in (example.by_model or {}).values():
+        assert not isinstance(rule, ByTools) or not rule.unused, (
+            f"script entries never asked for: {rule.unused}"
+        )
 
 
 def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFixture[str]) -> None:
