@@ -56,5 +56,12 @@ jobs:
           install_only: true
           version: v0.33.0
       - run: uv sync
+      # A fresh runner has no kubeconfig or Helm files, and the test that proves the harness
+      # never writes them needs one to watch. These are placeholders, with no cluster or repository in them.
+      - name: user files for the kubeconfig guard to watch
+        run: |
+          mkdir -p ~/.kube ~/.config/helm
+          printf 'apiVersion: v1\nkind: Config\n' > ~/.kube/config
+          printf 'apiVersion: ""\nrepositories: []\n' > ~/.config/helm/repositories.yaml
       - name: kind tests
         run: SCRIMMAGE_KIND=1 uv run pytest -m kind -n 0 -v
