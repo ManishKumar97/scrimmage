@@ -46,6 +46,16 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `bad body` | `json.JSONDecodeError`, at once: a complete 200 whose JSON does not parse |
 
 Any status from 400 to 599 works.
+
+The table above names the openai library's classes.
+The anthropic library raises the same class names for 400, 401, 429 and 500.
+On a 401 the body is Anthropic's, with the error type `authentication_error`.
+Two statuses are particular to it:
+
+| Fault | What an anthropic-library agent sees |
+|---|---|
+| `status 529` | the library's `OverloadedError`, after its retries |
+| `status 413` | the library's `ContentTooLargeError`, at once: the library does not retry a 413 |
 `bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
 The library does not retry a 200, so `bad body` meets one attempt.
 On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.

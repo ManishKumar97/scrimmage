@@ -47,6 +47,7 @@ def ask(client: anthropic.Anthropic) -> anthropic.types.Message:
         (403, anthropic.PermissionDeniedError, "permission_error"),
         (404, anthropic.NotFoundError, "not_found_error"),
         (409, anthropic.ConflictError, "conflict_error"),
+        (413, anthropic.ContentTooLargeError, "request_too_large"),
         (429, anthropic.RateLimitError, "rate_limit_error"),
         (500, anthropic.InternalServerError, "api_error"),
         (529, anthropic.OverloadedError, "overloaded_error"),
