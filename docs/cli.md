@@ -311,5 +311,6 @@ scrimmage-mcp --config PATH [--root DIR] [--max-session-usd USD] [--allow-no-bud
 ```
 
 The Scrimmage MCP server, installed with the `mcp` extra.
+Without the extra it prints how to install it and exits 2.
 It lets a coding agent run `check`, `test`, `record`, `init` and `show` as tools, over stdio, with a cost cap on every spend.
 See [Driving Scrimmage from a coding agent](mcp-server.md).
