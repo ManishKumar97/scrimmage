@@ -60,8 +60,8 @@ To test an agent, you write two things:
 - a Python function that takes the question as text and returns the agent's answer;
 - a `scrimmage.toml` file, which names that function, its tools, and the tests.
 
-The agent calls a real model, so you need an OpenAI API key.
-To try Scrimmage without one, the repository's examples run on a fake model server; see [Examples](examples/index.md).
+The agent calls a real model, so you need an OpenAI or an Anthropic API key.
+For an agent on Anthropic's library, see [Failing the model](model-faults.md#an-agent-that-uses-the-anthropic-library).
 Scrimmage is not on PyPI yet, so you install it from a clone of the repository; see [Install](install.md).
 
 The bot has two tools, one that reads and one that writes:
@@ -128,7 +128,7 @@ The whole project is on the [function agent](examples/function-agent.md) page.
   httpx2 is its successor from the Pydantic team; the `openai` and `mcp` libraries send their requests with it.
 - Tools on MCP servers.
   MCP, the Model Context Protocol, is a standard way for an agent to call tools that run in a separate program; agent frameworks and coding assistants use it.
-- OpenAI model calls, and gateways that speak the same format, with a spending limit for each test.
+- OpenAI and Anthropic model calls, and gateways that speak either format, with a spending limit for each test.
 - Rules on the answer, and a pass rate for each row.
 
 What it does not do yet is on the [Limits](limits.md) page.

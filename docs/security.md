@@ -406,7 +406,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 The cap can still be passed:
 
 - Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits.md#the-budget).
-- A provider that is not OpenAI's format, listed under `real` as a web host, is not budgeted at all.
+- A provider that is neither OpenAI's nor Anthropic's format, listed under `real` as a web host, is not budgeted at all.
 - A run killed with SIGKILL can leave a reservation that never settles.
   It counts as spent, so the cap errs low, not high.
 
@@ -442,7 +442,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
   A listed tool that is neither mocked nor under `real` never runs, so a write inside it never happens.
 - **MCP requests that are not tool calls.** `resources/read`, `prompts/get` and the other requests that are not tool calls pass, and a server can act on them.
   What a stdio MCP server does by itself, such as writing to its own database, is not gated.
-- **A provider that is not OpenAI's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
+- **A provider that is neither OpenAI's nor Anthropic's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
 - **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated.
 - **Secrets of an unknown shape.** Redaction removes the shapes listed above only.
   A `password: hunter2` with a colon, a `pass=hunter2` and a bare `pw is hunter2` are recorded as written.

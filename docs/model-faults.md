@@ -37,8 +37,8 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `status 429` | the library's `RateLimitError`, after its retries |
 | `status 500` | the library's `InternalServerError`, after its retries |
 | `status 400` | the library's `BadRequestError`, at once |
-| `status 401` | the library's `AuthenticationError`, at once, with the code `invalid_api_key`: OpenAI's reply to a bad API key |
-| `context too long` | the library's `BadRequestError`, at once, with the code `context_length_exceeded`: OpenAI's reply to a prompt over the model's context |
+| `status 401` | the library's `AuthenticationError`, at once; on OpenAI with the code `invalid_api_key`, on Anthropic with the type `authentication_error`: each provider's own reply to a bad API key |
+| `context too long` | the library's `BadRequestError`, at once; on OpenAI with the code `context_length_exceeded`, on Anthropic with the type `invalid_request_error` and a message that says the prompt is too long: each provider's own reply to a prompt over the model's context |
 | `timeout` | the library's `APITimeoutError`, after its retries |
 | `refused` | the library's `APIConnectionError`, after its retries |
 | `reset` | the library's `APIConnectionError`, after its retries |
@@ -103,7 +103,7 @@ The test suite runs such an agent against a fake of the Messages API, plain and 
 ## A bad API key, and a prompt that is too long
 
 `status 401` is the auth error.
-Its body is copied from a real OpenAI 401, the reply to a request with a key that was not real: the code `invalid_api_key`, and the message `Incorrect API key provided: sk-proj-****...xxxx. You can find your API key at ...`.
+On an OpenAI call its body is copied from a real OpenAI 401, the reply to a request with a key that was not real: the code `invalid_api_key`, and the message `Incorrect API key provided: sk-proj-****...xxxx. You can find your API key at ...`.
 The key fragment in the message is made up.
 As in the real reply, the content type is `text/plain` while the body is JSON; the openai library reads it either way.
 
@@ -122,6 +122,9 @@ The body is copied from a real reply, so its message names that request's number
 They are not your model's context or your prompt's length.
 It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
 On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
+On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
+Its numbers are copied from a real reply too.
+The label is `model:anthropic`, and it does not work on a call that only counts tokens, such as `model:anthropic/input_tokens`.
 
 ## A reply that comes back wrong
 
@@ -493,8 +496,11 @@ When two model calls run at once, such as a guardrail next to the main call, Scr
 |---|---|
 | `model` | every chat call, on any provider |
 | `model:openai` | chat calls to OpenAI |
+| `model:anthropic` | chat calls to Anthropic's Messages API |
 | `model:openai/embeddings` | embedding calls to OpenAI |
 | `model:*/embeddings` | embedding calls on any provider |
+| `model:<provider>/moderations` | moderation calls |
+| `model:anthropic/input_tokens` | token counts on Anthropic |
 
 A fault on `model` leaves embeddings alone, so you can fail the chat and keep your retrieval working, or the other way around.
 To tell two models apart, see [Failing one model](#failing-one-model).

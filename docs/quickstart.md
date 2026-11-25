@@ -3,7 +3,8 @@
 This page takes you from a fresh clone to a test that fails, and then passes after a fix.
 It uses the small order bot in the repository, under `tests/example`.
 
-You need Python 3.11 or newer, an OpenAI API key, and about five minutes.
+You need Python 3.11 or newer, an OpenAI API key for the example bot, and about five minutes.
+An agent on Anthropic's library works the same way; see [An agent that uses the anthropic library](model-faults.md#an-agent-that-uses-the-anthropic-library).
 
 If you already have an agent, start from your own code: run `scrimmage init` in its folder, and it writes a first `scrimmage.toml` from reading the code, with no import and no run.
 See [Drafting a test file](init.md).
@@ -171,7 +172,7 @@ Every run crashed.
 The log of a run ends with the error your agent raised:
 
 ```text
-openai.RateLimitError: Error code: 429 - Rate limit reached for default-codex in organization org-{id} on requests per min. ...
+openai.RateLimitError: Error code: 429 - Rate limit reached for gpt-4o-mini in organization org-{id} on requests per min. ...
 ```
 
 The bot builds its client with `max_retries=0`, so the first busy reply ends the whole answer.
