@@ -387,3 +387,32 @@ def test_the_deadline_covers_the_name_lookup_before_a_connection_exists(
     assert "took longer than 0.5 seconds" in capsys.readouterr().err
     assert server.asked == 0  # no request was sent on a connection that came too late
     assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update")
+@pytest.mark.parametrize("name", ["HTTPS_PROXY", "https_proxy"])
+def test_the_fetch_goes_through_the_proxy_the_environment_names(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The privacy page says the request goes to the proxy, not straight to GitHub."""
+    for other in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(other, raising=False)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(10)
+    monkeypatch.setenv(name, f"http://127.0.0.1:{listener.getsockname()[1]}")
+    first: list[bytes] = []
+
+    def accept() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            first.append(connection.recv(200))
+
+    thread = threading.Thread(target=accept, daemon=True)
+    thread.start()
+    with pytest.raises(prices_update.FetchError):  # the listener never answers the CONNECT
+        prices_update.fetch(prices_update.URL)
+    thread.join(10)
+    listener.close()
+    assert first[0].startswith(b"CONNECT raw.githubusercontent.com:443 ")
