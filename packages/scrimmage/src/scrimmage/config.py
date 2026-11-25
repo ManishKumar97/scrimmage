@@ -563,6 +563,11 @@ def load(path: Path, env: Mapping[str, str] | None = None) -> Config:
         raise ConfigError(f"{path.name}: {exc}") from None
     except UnicodeDecodeError:
         raise ConfigError(f"{path.name}: the file is not UTF-8 text") from None
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"{path.name}: cannot read it: {exc.strerror}; run 'scrimmage init' to draft one, "
+            f"or see {docs_url('quickstart')}"
+        ) from None
     except OSError as exc:
         raise ConfigError(f"{path.name}: cannot read it: {exc.strerror}") from None
     reject_unsendable(data, path.name)
