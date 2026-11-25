@@ -3,6 +3,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -1125,6 +1126,26 @@ def test_the_forms_of_refuse_are_the_providers_and_both_schemas_list_the_same() 
     )
     cli = json.loads((SCHEMAS / "cli.v1.json").read_text())
     assert "form" in json.dumps(cli), "the --json fault object has the key"
+
+
+@pytest.mark.design("config.refuse_form")
+def test_a_plan_that_carries_a_form_is_valid_against_the_plan_schema_and_only_then() -> None:
+    schema = json.loads((SCHEMAS / "plan.v1.json").read_text())
+    check = jsonschema.Draft202012Validator(schema)
+    fault = config.Fault("model", "refuse", "first 1", model="m", form="classifier")
+    doc: Any = plan.Plan("run-1", "t", "row", (), (fault,), (), (), 60.0).to_json()
+    assert doc["faults"][0]["form"] == "classifier"
+    check.validate(doc)
+    # The schema must know the key: with it removed the same plan is refused.
+    props = schema["properties"]["faults"]["items"]["properties"]
+    del props["form"]
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(doc)), "form is in the schema"
+    # And it must hold the vocabulary and the word: another form, or another fault, is refused.
+    for fault_doc in (
+        {**doc["faults"][0], "form": "loud"},
+        {**doc["faults"][0], "do": "garble"},
+    ):
+        assert list(check.iter_errors({**doc, "faults": [fault_doc]})), fault_doc
 
 
 @pytest.mark.design("config.reply_fault_billed_warning")
