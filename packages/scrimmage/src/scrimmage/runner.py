@@ -53,6 +53,7 @@ from scrimmage.decide import MISTAKE_REFUSAL
 from scrimmage.managed import START_TRIES, CopyFailed, Managed, free_port
 from scrimmage.outcomes import (  # the runner's names for them
     INFRA,
+    INFRA_ERROR,
     INFRA_ERRORS,
     MISTAKE,
     MISTAKES,
@@ -100,11 +101,12 @@ NOT_A_FAILURE = (
 # The agent chose this call. Under a fault that is what it did about the failure.
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 PROCESS_LABEL = "process:python"
-# A baseline whose every run ended so cannot be compared with, so its faults are skipped.
+# Outcomes of a run that ended with no answer to judge: a test whose runs all ended so shows
+# nothing, so its unused mocks are not reported.
 FAILED = ("crashed", "timed out", "refused call", "budget reached", "not reserved")
-# A baseline of only these runs did not work, so its fault rows are not run: a provider's 400
-# or 404 would only be paid for again, as it is for a refused call.
-BASELINE_FAILED_OUTCOMES = (*FAILED, "infrastructure error")
+# A baseline whose every run ended so cannot be compared with, so its fault rows are not run: a
+# provider's 400 or 404 would only be paid for again, as a refused call would be.
+BASELINE_FAILED_OUTCOMES = (*FAILED, INFRA_ERROR)
 BUDGET_REASONS = ("budget", "budget_held")  # refusals for the budget
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
@@ -113,7 +115,7 @@ PREFIXES = {
     MISTAKES: "test mistake",
     NOTES: "note",
     WARNINGS: "warning",
-    INFRA_ERRORS: "infrastructure error",
+    INFRA_ERRORS: INFRA_ERROR,
 }
 TOOL_STAR_LINE = 'every tool that is not mocked runs for real (real = ["tool:*"])'
 # Said in the text and in --json alike, so it names a field both can show.
@@ -596,7 +598,7 @@ class Runner:
             or ended.infra
             or changed
         ):
-            outcome = "infrastructure error"
+            outcome = INFRA_ERROR
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
         elif chosen or kept_out:
@@ -1534,7 +1536,7 @@ def unused_mocks(
     for test in config.tests:
         mine = [r for r in results if r.row.test == test]
         used = {index for r in mine for index in r.mocked}
-        if not mine or all(r.outcome in FAILED for r in mine):
+        if not mine or all(r.outcome in BASELINE_FAILED_OUTCOMES for r in mine):
             continue
         nearest = {
             int(str(cast(dict[str, object], m["nearest"])["mock"]))
@@ -2035,7 +2037,7 @@ def build_report(
                 for b in r.judgement.broken
             )
             mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes if shown]
-            if r.outcome == "infrastructure error":
+            if r.outcome == INFRA_ERROR:
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
     unused, wrong, recorded = (
