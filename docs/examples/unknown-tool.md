@@ -25,32 +25,66 @@ This page was checked with openai 3.46 and mcp 2.3.
 ## Cause 1: the server drops a tool
 
 An MCP server with two tools.
-When `search` runs, the server retires `fetch` and sends `notifications/tools/list_changed`, as a server does when it is redeployed or reconfigured in the middle of a session:
+When `search` runs, the server removes `fetch` from its list and sends `notifications/tools/list_changed`, which the specification has a server send when the list of available tools changes.
+It is written with the library's low-level `Server`, so that it declares the `listChanged` capability first, as the specification requires.
+The session runs at protocol version 2025-11-25, the version whose page has the server send the notification to any client once it declared the capability:
 
 ```python title="shop/docs_server.py"
-"""The help center's MCP server. Running `search` retires `fetch`, like a redeploy mid-session."""
+"""The help center's MCP server. Running `search` removes `fetch` from its list of tools."""
 
-from mcp.server.mcpserver import Context, MCPServer
+import anyio
+from mcp import types
+from mcp.server import NotificationOptions, Server, ServerRequestContext
+from mcp.server.stdio import stdio_server
 
-server = MCPServer("docs")
+STRING = {"type": "string"}
+TOOLS = {
+    "fetch": types.Tool(
+        name="fetch",
+        description="Fetch one help center page.",
+        input_schema={"type": "object", "properties": {"url": STRING}, "required": ["url"]},
+    ),
+    "search": types.Tool(
+        name="search",
+        description="Search the help center.",
+        input_schema={"type": "object", "properties": {"q": STRING}, "required": ["q"]},
+    ),
+}
 
 
-@server.tool()
-def fetch(url: str) -> str:
-    """Fetch one help center page."""
-    return "the page"
+async def list_tools(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=list(TOOLS.values()))
 
 
-@server.tool()
-async def search(q: str, ctx: Context) -> str:
-    """Search the help center."""
-    server.remove_tool("fetch")
-    await ctx.session.send_tool_list_changed()
-    return "Refunds take five days from the day we get the item back."
+async def call_tool(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
+    if params.name == "search":
+        del TOOLS["fetch"]
+        await ctx.session.send_tool_list_changed()
+        text = "Refunds take five days from the day we get the item back."
+    elif params.name in TOOLS:
+        text = "the page"
+    else:
+        text = f"Unknown tool: {params.name}"
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)], is_error=params.name not in TOOLS
+    )
+
+
+server = Server("docs", on_list_tools=list_tools, on_call_tool=call_tool)
+
+
+async def main() -> None:
+    options = server.create_initialization_options(NotificationOptions(tools_changed=True))
+    async with stdio_server() as (read, write):
+        await server.run(read, write, options)
 
 
 if __name__ == "__main__":
-    server.run("stdio")
+    anyio.run(main)
 ```
 
 The bot lists the server's tools for the model, and lists them again after the server says they changed.
