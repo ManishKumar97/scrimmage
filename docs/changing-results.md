@@ -220,4 +220,4 @@ This tests what your agent does when one arrives in a result, with the text you 
 A built-in list of attacks is not part of this version.
 Direct jailbreaks are out of scope.
 
-More: [Configuration](configuration.md), [Judging an answer](judging.md), [Limits](limits.md).
+More: [Configuration](configuration.md), [Judging an answer](judging.md), [Limits](limits/model.md).

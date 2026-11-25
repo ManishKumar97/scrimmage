@@ -42,7 +42,7 @@ Python after the claim is a child. So with `python pre.py; python bot.py` in a w
 Write that as `python bot.py` with `pre.py` started by `bot.py`, or run the step before `scrimmage test`, or set `children = true`.
 
 Listed tools must live in a module your program imports. A tool defined in `bot.py` itself, or in the module of `python -m`, runs as `__main__`, is never imported and cannot be gated, so the run stops and says to move it.
-That check reads Python's own command line, so it does not see a file another program runs for you, such as `python -m cProfile bot.py` or `runpy.run_path("bot.py")`. Such a tool writes for real: see [Limits](limits.md).
+That check reads Python's own command line, so it does not see a file another program runs for you, such as `python -m cProfile bot.py` or `runpy.run_path("bot.py")`. Such a tool writes for real: see [Limits](limits/agents.md#a-function-or-a-script-agent).
 A tool's file is gated under any name it is imported by, so `tools` and `deep.tools` are the same tool.
 
 ## The answer
@@ -108,7 +108,7 @@ The message gives the fix. Pass `env={**os.environ, ...}` so the child joins, or
 A child that is not Python passes with any environment, and so does a Python elsewhere that has its own environment, such as a venv with its own `pyvenv.cfg`, even one made from the same binary.
 The binary your venv was made from, run directly, counts as this Python, so with a clean environment it is refused.
 A stdio MCP server started by the MCP library passes too, on the library's small default environment, because the MCP gate decides what it is asked.
-Only starts made from Python are seen. See [Limits](limits.md).
+Only starts made from Python are seen. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 ### A tool on another Python
 
@@ -134,7 +134,7 @@ A forked child sends each record line as it makes it, so a line is not lost when
 Its refusal reaches the runner before the error reaches your code.
 
 The other start methods of `multiprocessing`, `spawn` and `forkserver`, start a new Python with your program's environment, which joins as a child.
-They start it in a way no audit event reports, so if your code has removed `PYTHONPATH` from `os.environ`, that child runs blind. See [Limits](limits.md).
+They start it in a way no audit event reports, so if your code has removed `PYTHONPATH` from `os.environ`, that child runs blind. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 ### MCP servers over stdio
 
@@ -153,7 +153,7 @@ The SDK handles SIGTERM in each process that joined: it sends its last record li
 A program with its own SIGTERM handler replaces the SDK's, and then it decides what happens.
 
 A child still running when your program ends is stopped the same way.
-A daemon that starts its own session leaves the group. After the group stops, Scrimmage finds it by the exact `SCRIMMAGE_RUN` in its environment, kills it, and records a `left_group` line, and the run table prints a note. See [Limits](limits.md).
+A daemon that starts its own session leaves the group. After the group stops, Scrimmage finds it by the exact `SCRIMMAGE_RUN` in its environment, kills it, and records a `left_group` line, and the run table prints a note. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 A call still going on when your program exits normally, on a daemon thread, gets its line too.
 

@@ -20,7 +20,7 @@ After the call, the real cost from the reply replaces the reservation.
 Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
 So calls at once cannot together pass the limit while each costs no more than it reserved.
 A call can cost more: a reply with no output limit that writes more than `reserve_output_tokens`, or an input with more tokens than the estimate, such as an image.
-Then the limit can be passed by what the calls cost above their reservations, added together; see [A call can cost more than its hold](limits.md#the-budget).
+Then the limit can be passed by what the calls cost above their reservations, added together; see [A call can cost more than its hold](limits/budget.md#the-budget).
 The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 
 To turn the budget off on purpose:

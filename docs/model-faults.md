@@ -265,7 +265,7 @@ What your agent's code meets is what it meets on a real reply of that kind:
 To `garble`, a word is what lies between spaces or line breaks, and those stay as they were.
 Text in a script that puts no spaces between words, such as Thai or Japanese, is one word to it.
 
-A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits.md).
+A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits/model.md).
 
 ### Reply faults on an Anthropic call
 

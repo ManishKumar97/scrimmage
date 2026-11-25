@@ -193,7 +193,7 @@ A version of `unknown`, from a `scrimmage` with no package metadata, never match
 
 Every claim of a run's plan carries the SDK's version too, so a process added later, such as a second worker from another image, is checked at its first run.
 A claim from another version, or with no version in it, is refused with `503 version`, unlike the other gate codes it stops the test with exit 2, because every run from that process would fail the same way.
-A function or a script whose child runs on another venv's SDK is not version-checked: see [limits](limits.md).
+A function or a script whose child runs on another venv's SDK is not version-checked: see [limits](limits/agents.md#programs-and-processes).
 
 **The ping.**
 Before it answers a probe, the service sends one signed request to the control server, through the same connection and certificate check as every other control request.
@@ -313,7 +313,7 @@ While a run is open, such code follows the outside rules: a read or a model call
 Either way every open run is told, and ends as an infrastructure error, since the call could have been its own.
 A call `background_real` lets through is told too, and ends nothing.
 The setup request lists each such call it saw with the entry to add.
-See [Limits](limits.md) for the cost of this rule.
+See [Limits](limits/agents.md#an-agent-inside-a-web-service) for the cost of this rule.
 
 ## What is not covered
 
@@ -324,4 +324,4 @@ See [Limits](limits.md) for the cost of this rule.
 - A Python child joining a service run: every process start in a run is refused unless `real` lists its program. See [Safety](safety.md#an-agent-inside-a-web-service).
 - An MCP server over stdio started inside a request: its start is a process start, so it needs `process:<command>` under `real`, such as `process:npx`. A server started at the service's startup needs nothing; its tool calls are gated either way.
 
-[Limits](limits.md) lists the rest.
+[Limits](limits/agents.md#an-agent-inside-a-web-service) lists the rest.

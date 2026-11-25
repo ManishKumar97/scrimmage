@@ -114,7 +114,13 @@ nav:
       - JSON output: json-output.md
       - Configuration: configuration.md
       - Schemas: schemas.md
-      - Limits: limits.md
+      - Limits:
+          - Will Scrimmage work for your agent: limits.md
+          - How your agent runs: limits/agents.md
+          - Tools, MCP and web requests: limits/calls.md
+          - Faults and model calls: limits/model.md
+          - The budget and prices: limits/budget.md
+          - Judging and records: limits/judging.md
   - Safety and security:
       - Safety: safety.md
       - Security: security.md

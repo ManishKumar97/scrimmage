@@ -274,7 +274,7 @@ Without them, every pod and every node in the cluster can.
 | Anyone who can make a Service named `scrimmage` in the namespace | answer the agent's control requests | its certificate fails the check, and the agent sends nothing |
 | Anyone who can read Secrets, or create or edit workloads (pods, Deployments, Jobs and the like), in the namespace | the token and the control server's key: a pod they start mounts any Secret of the namespace, with no RBAC on Secrets | everything. **This is the boundary.** Grant those rights in a test's namespace only to those you would give the token |
 | A runner pod that is taken over | call the Kubernetes API | nothing: no token is mounted, and its egress reaches only DNS and the agent |
-| A process in the agent's pods | reach any other address | the egress policy drops it. A process can still put data in the names it looks up, which cluster DNS passes on; see [Limits](limits.md#in-a-kubernetes-cluster) |
+| A process in the agent's pods | reach any other address | the egress policy drops it. A process can still put data in the names it looks up, which cluster DNS passes on; see [Limits](limits/agents.md#in-a-kubernetes-cluster) |
 
 The runner's requests to the agent stay `http://`, so request bodies, the `headers` from the file and every answer cross the pod network in clear.
 On one node that path is inside the node; between nodes Calico carries it unencrypted unless its WireGuard encryption is on.
@@ -378,7 +378,7 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
   The key-name rule, which replaces a string under a key such as `"password"`, runs for mocks (web JSON replies, tool values and MCP values) and for miss evidence, and it reports what it removed.
   The side folder of blobs and the `.log` previews pass through the patterns only, so a JSON key such as `"password": "x"` stays there word for word.
   A `\u` escape is decoded before the check, so `p\u0061ssword=x` in JSON is found.
-  In text that is not valid JSON a raw `\uXXXX` escape is a break before a field name, as a space is, so `psql\u0020password=x` loses the password; an escape inside a name there is not read as a letter, as [Limits](limits.md) says.
+  In text that is not valid JSON a raw `\uXXXX` escape is a break before a field name, as a space is, so `psql\u0020password=x` loses the password; an escape inside a name there is not read as a letter, as [How redaction cuts a value](#how-redaction-cuts-a-value) says.
   A URL-encoded comma, `&`, `;`, space or `|` (`%2C`, `%26`, `%3B`, `%20`, `%7C`) is a break too; an encoded letter, as in `%70assword=x`, is not.
   If writing it back fails, the whole text is replaced by a JSON string `"[secret removed]"` and never left broken.
 
@@ -396,6 +396,43 @@ Tool results, model requests and replies in `scrimmage-runs/<time>/blobs/` keep 
 Scrimmage never deletes records.
 Delete old ones yourself, and keep them where you would keep that data.
 
+### How redaction cuts a value
+
+The rules below say where a form field, a name or a JSON text is cut, and what is read as code.
+They are the detail behind the limit "A form field is cut at the first space, quote or `&`" on the [Limits](limits/judging.md#records-and-secrets) page.
+
+`password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
+Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are on the security page.
+`None`, `True` and `False` alone as a value are taken for code and kept, and so is a bare name as an argument of a call that has a name, as in `f(password=changeme)`, right after the parenthesis or after `, `.
+After a bare comma it is not read as code, so `f(token=tok,secret=sec)` loses `secret=sec)`: a removal is the safe side.
+A parenthesis with no name before it, as in `set it (PASSWORD=hunter2) then`, is not a call.
+`user=admin, password=changeme, host=db` outside a call, and `password=Summer.Time`, are removed.
+Other names glued to an ASCII letter or digit are kept: `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed by name, but `mytoken=5`, `dbpassword=x` and similar are not.
+A raw quote after a field name that sits inside a quote, as in a JSON fragment cut out of its string, does not open a value.
+`Authorization=Basic%20...`, a double-encoded `password%253D`, and a multipart body with `name="password"` on one line and the value on another are not cleaned.
+JSON inside other text, as in `Result: {...}`, or across NDJSON lines, is not read as JSON: it goes through the patterns, which cut at a quote, and the result can come out broken. Only a text that is JSON as a whole is kept valid.
+A JSON text that is redacted is written back with the input's spacing where it can be told, but pretty-printed JSON comes back on one line, and a `\u` escape style follows whether the input held any `\u`, so a text may be written with different escapes. Numbers are kept as written.
+Two keys that redact to the same text are kept apart by a suffix, in JSON text and in recorded mocks and tool values: the second becomes `[secret removed] 2`.
+A backslash followed by `n` or `r` ends a form value, since it is a line break in escaped text; any other backslash, as in `PGPASSWORD=p\$ss` or `password=hun\ter2`, is part of the value.
+An escaped quote with more of the value after it is part of the value, as in `password=abc\"2zz`; one before a space, a comma, a colon, a bracket or the end closes an escaped string and ends the value.
+In a string read out of a JSON text, and in a Python string, such as what a tool takes or returns or the agent's answer, a `\n` or `\r` with more of the value after it is a backslash and a letter, as in the path `password=C:\new2zz`, and is part of the value.
+There a raw quote with more of the value after it is part of the value too, unless the field name sits inside a quote, which the quote then closes.
+A text that is one whole JSON string literal, as in `"password=C:\newhunt1"`, is read as JSON, so a `\n` in it is a line break and ends a value there: `ewhunt1` after it is kept.
+This holds for a Python string of that shape too, and redaction did the same before these rules.
+The same text outside JSON, where `\n` cannot be told from an escaped line break, still ends the value at `\n`: `password=C:\new2zz` as plain text keeps `\new2zz`.
+The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
+A kept value, such as a paging token, ends where a field name or a key shape begins in it, and the rest is read again: `next_page_token=ab,password=x` keeps `next_page_token=ab,` and removes the password.
+A field name begins there as it does anywhere else, after any character that is not an ASCII letter or digit, `_` or a backslash, so `next_page_token=a/token=b` loses `token=b`, and `next_page_token=a_token=b` is read as the field `a_token=b`, which is removed.
+A name also begins after a `\n`, `\r`, `\t` or `\uXXXX` escape, and after a URL-encoded comma, `&`, `;`, space or `|` (`%2C`, `%26`, `%3B`, `%20`, `%7C`, in either case), so `next_page_token=ab%2Cpassword=x` loses the password.
+An encoded letter, as in `%70assword=x`, is not read as a letter of a name: RFC 3986 says a letter is never percent-encoded, so no encoder writes one.
+A key shape such as `sk-`, `AKIA` or `ghp_` is removed anywhere in a kept value, even glued to a letter.
+In text that is not valid JSON, such as a log that cut a JSON body off, a raw `\uXXXX` escape is a break before a name, whatever it holds: `psql\u0020password=x` and `a=1\u0026token=x` lose the value.
+An escape inside a name, as in `p\u0061ssword=x`, is not read as a name there, since no JSON writer escapes an ASCII letter; in a text that is JSON as a whole the escape is undone first, and the name is found.
+An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
+Redaction is a heuristic on known shapes.
+
+*Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`, `tests/test_redact.py::test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it`*
+
 ## Real spending has a cap, and the cap is soft
 
 Model calls run for real, so a test has a budget, $5 unless you change `max_cost_usd`.
@@ -411,7 +448,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 
 The cap can still be passed:
 
-- Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits.md#the-budget).
+- Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits/budget.md#the-budget).
 - A provider that is neither OpenAI's nor Anthropic's format, listed under `real` as a web host, is not budgeted at all.
 - A run killed with SIGKILL can leave a reservation that never settles.
   It counts as spent, so the cap errs low, not high.

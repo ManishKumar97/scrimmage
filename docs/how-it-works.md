@@ -63,7 +63,7 @@ So a fake server listening at the same address cannot hand your agent a plan, an
 
 If the SDK cannot switch on fully, for any reason, the program stops before your agent's code runs.
 A program that never runs the startup file cannot stop itself, so `command` is checked when the file is read: `python -E`, `-I` or `-S` there is a mistake in the test, exit 2, before any run.
-A program that reaches no gate some other way, such as `env PYTHONPATH=. python bot.py`, runs for real, and the run reads infrastructure error. See [Limits](limits.md).
+A program that reaches no gate some other way, such as `env PYTHONPATH=. python bot.py`, runs for real, and the run reads infrastructure error. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 The one exception is a child program on a different Python, such as a cloud command-line tool your agent starts.
 It inherits the environment, but it is not the run's Python, so it is left to run as normal.
@@ -104,7 +104,7 @@ The runner stops a whole process group, and waits on the group, not on your prog
 
 SIGTERM reaches every process in the group. Each one that joined the run gives any call still going on a line, sends its lines, and then ends by the same signal, so the exit status is what it would have been without Scrimmage.
 The handler runs on your program's main thread, so a thread does the sending, and the wait for it is limited to four seconds, under the five the runner gives before SIGKILL.
-Scrimmage's own threads block SIGTERM and SIGINT, so the kernel never gives the signal to one of them while your main thread waits on a call. See [Limits](limits.md) for threads your code starts.
+Scrimmage's own threads block SIGTERM and SIGINT, so the kernel never gives the signal to one of them while your main thread waits on a call. See [Limits](limits/agents.md#a-function-or-a-script-agent) for threads your code starts.
 
 Then the runner sweeps `/proc` for any process that left the group but still holds the exact `SCRIMMAGE_RUN` of this run in its own environment. It kills those and records each one. A process it misses gets a 409 on its next record line, which refuses all its later calls.
 
