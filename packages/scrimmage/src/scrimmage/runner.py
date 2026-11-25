@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -29,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage import judge, labels, protocol, service_client
+from scrimmage import judge, labels, protocol, render, service_client
 from scrimmage import plan as planner
 from scrimmage.budget import Ledger
 from scrimmage.config import (
@@ -573,7 +574,9 @@ class Runner:
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
         # The provider failing by itself says nothing about the agent.
-        real_errors = [e for e in (real_error(x, model) for x in model) if e is not None]
+        real_errors = [
+            e for e in (real_error(x, model, self.scrub) for x in model) if e is not None
+        ]
         broken = any(n.get("notice") == "structure" for n in notices)
         # No plan, or a call made outside the run's context: says nothing about the agent.
         no_plan = "no_plan" in state.refusals or context_lost(lines)
@@ -1366,9 +1369,14 @@ def nothing() -> None:
     """The release of a signal setup that set nothing."""
 
 
-def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ()) -> str | None:
+def real_error(
+    line: dict[str, object],
+    model: Sequence[dict[str, object]] = (),
+    scrub: Sequence[str] = (),
+) -> str | None:
     """How a model call the gate let through failed by itself, if it did. model: the run's
-    model lines, which a 400 the gate marked as after a reply fault is checked against."""
+    model lines, which a 400 the gate marked as after a reply fault is checked against.
+    scrub: the run's secrets, taken out of the provider's words again after they are decoded."""
     if line.get("action") != "real":
         return None
     error = str(line.get("error") or "")
@@ -1380,7 +1388,7 @@ def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ())
         return None
     if status < 400:
         return None
-    said = provider_message(line)
+    said = provider_message(line, scrub)
     return f"{line.get('call')} returned {status}" + (f" ({said})" if said else "")
 
 
@@ -1388,7 +1396,7 @@ ERROR_MESSAGE = re.compile(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)')
 ERROR_SHOWN = 200  # characters of a provider's error message the report line keeps
 
 
-def provider_message(line: dict[str, object]) -> str:
+def provider_message(line: dict[str, object], scrub: Sequence[str] = ()) -> str:
     """The provider's own words for a failed call, from the line's reply preview, which was
     redacted when it was kept. The JSON error's message when there is one, else the text."""
     result = line.get("result")
@@ -1415,7 +1423,13 @@ def provider_message(line: dict[str, object]) -> str:
             text = message
     elif isinstance(found, str):
         text = found
-    text = " ".join(text.split())
+    # The preview was redacted as JSON text, where a secret can still sit behind an escape
+    # (\/ or \u0026). Decoding made it plain, so redact it again as the plain text it is, and
+    # show what a terminal would act on as escapes.
+    text = render.plain(redact_decoded(" ".join(text.split()), scrub))
+    text = "".join(
+        f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cf", "Zl", "Zp") else c for c in text
+    )
     return text if len(text) <= ERROR_SHOWN else text[: ERROR_SHOWN - 3] + "..."
 
 

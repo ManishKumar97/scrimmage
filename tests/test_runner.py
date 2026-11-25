@@ -854,3 +854,52 @@ def test_missing_key_reads_the_providers_own_error_from_every_run_log(
     assert runner_module.missing_key(tmp_path, runs) == variable
     gone = cast(RunResult, SimpleNamespace(run="run-gone"))
     assert runner_module.missing_key(tmp_path, [*runs, gone]) is None
+
+
+SLASHED = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE"
+SIGNED = "Tr0ub4dor&3horse<staple>"
+
+
+def go_escape(text: str) -> str:
+    return text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    ("secret", "escape"),
+    [
+        (SLASHED, lambda t: t.replace("/", "\\/")),
+        (SIGNED, go_escape),
+        (SLASHED, lambda t: t),
+    ],
+    ids=["php_slash", "go_html", "plain"],
+)
+@pytest.mark.parametrize("long", [False, True], ids=["whole", "cut"])
+def test_a_secret_the_provider_echoes_in_an_escape_is_not_printed(
+    secret: str, escape: Callable[[str], str], long: bool
+) -> None:
+    pad = "x" * 150 if long else ""
+    body = escape(json.dumps({"error": {"message": f"{pad} bad key {secret}" + "y" * 300}}))
+    entry = state.blob(body.encode(), None, scrub=[secret])
+    line: dict[str, object] = {"action": "real", "call": "model:openai", "status": 401}
+    line["result"] = entry
+    said = runner_module.real_error(line, (), [secret]) or ""
+    assert secret not in said and "returned 401" in said, said
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    "message",
+    [
+        "\\u001b[2J\\u001b]0;title\\u0007red",
+        "abc\\u202edcba",
+        "a\\r\\nfake: line\\u2028b\\u0085c",
+        "\\u001b[31m" + "y" * 300,
+    ],
+)
+def test_a_providers_control_characters_are_shown_as_escapes(message: str) -> None:
+    body = '{"error": {"message": "' + message + '"}}'
+    line: dict[str, object] = {"action": "real", "call": "model:openai", "status": 400}
+    line["result"] = state.blob(body.encode(), None)
+    said = runner_module.real_error(line) or ""
+    assert said.isprintable() and "\u202e" not in said, repr(said)
