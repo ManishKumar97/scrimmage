@@ -607,6 +607,8 @@ SEARCH = "web_search_request"
 # (pricing page, "Web search tool"). A search that fails with an error is not billed, and the
 # reply counts only the searches it did. A price file's [anthropic.fees] and a row's own
 # web_search_request come before this.
+# The shipped prices.toml [anthropic.fees] holds the same $0.01, so a change on the page must
+# change both.
 DEFAULT_FEES = {SEARCH: 0.01}
 # How many searches a request that offers web search with no max_uses is held for. The docs give
 # no default; they say a question of one fact takes 1 to 3 searches and research 10 or more.
