@@ -135,6 +135,33 @@ A rate that `long` leaves out costs its `input`, as it does for the model.
 A tier may have its own long rates, such as `[openai.models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
 `long` works the same in a price file and in `[agent.prices]`.
 
+### Anthropic prices
+
+The shipped file prices the current Claude models, from Anthropic's pricing page and fast mode page, with each model's cache reads, its 5 minute and 1 hour cache writes, and a `tiers.fast` row for the models that have fast mode.
+Claude Haiku 5.5 has a `long` table: Anthropic charges the whole request at the higher rates when its prompt is over 100,000 tokens.
+A web search is settled at $0.01, the page's $10 for 1,000 searches, from `[anthropic.fees]`.
+It leaves out the Batch API, US-only inference at 1.1 times, data residency multipliers and the retired models; the date of the prices is on the `scrimmage check` budget line.
+
+To override a shipped Anthropic price, name the model under `[agent.prices]`.
+Your row replaces the shipped one whole, so give the cache rates, the fast tier and the `long` table you use as well.
+
+```toml
+[agent.prices."claude-haiku-5-5"]
+input = 0.10
+cached_input = 0.01
+cache_write_5m = 0.125
+cache_write_1h = 0.20
+output = 0.50
+
+[agent.prices."claude-haiku-5-5".long]
+above = 100000
+input = 0.50
+cached_input = 0.05
+cache_write_5m = 0.625
+cache_write_1h = 1.0
+output = 2.50
+```
+
 A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
 
 ### Where prices come from
@@ -144,7 +171,7 @@ The first place that names the model gives the whole price.
 
 1. `[agent.prices]` in `scrimmage.toml`.
 2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
-3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's prices.
+3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's and Anthropic's prices.
 
 A price file has one section for each provider, and a call is priced from the section of its own provider.
 A row of the same name in another provider's section is not used.
@@ -189,7 +216,7 @@ That is far below any real price, the cheapest today being 0.02.
 A tier cannot be named `default` or `auto`, in any case.
 Only `[agent.prices]` may price a model at 0, as your own choice.
 A file that fails its checks is exit 2, and the message names the file and the line.
-`scrimmage check` prints the date of each provider's prices on its budget line, such as `OpenAI prices as of 2026-11-22`, and, when you have prices of your own, the source of each.
+`scrimmage check` prints the date of each provider's prices on its budget line, such as `OpenAI prices as of 2026-11-22, Anthropic prices as of 2026-11-25`, and, when you have prices of your own, the source of each.
 A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
 
 A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that cost and the cost of its tokens at your prices.
