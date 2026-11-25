@@ -647,6 +647,8 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
         not_carried_out(run, step, why)  # no reply of this provider takes it, streamed or not
     if planned.form is not None and (why := provider.refusal_form_problem(planned.form)):
         not_carried_out(run, step, why)  # the row's provider was not named before the run
+    if word == "refuse" and (why := provider.refusal_request_problem(planned.form, path, fields)):
+        not_carried_out(run, step, why)
     if step.extra.get("stream") is True:
         not_carried_out(
             run,

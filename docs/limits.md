@@ -456,6 +456,11 @@ The hold covers only the models the request names, so a reply in which a model n
   An agent that branches on a category, such as `cyber` or `bio`, is not reached by this fault.
   No real classifier refusal could be captured with a harmless request, so none is copied.
 
+- **A plain `refuse` on a forced tool call or JSON is a mistake in the test.**
+  A request with `tool_choice` of type `any` or `tool`, or with `output_config.format` of type `json_schema`, is answered by a real model with the tool call or the JSON, not with words.
+  The plain form stops at the call, nothing is sent, and the message says to write `form = "classifier"` on the row, which builds for any request.
+  OpenAI's `refuse` has the same gap on a forced `tool_choice` and builds a text refusal anyway.
+
 - **A reply fault on an Anthropic stream is a mistake in the test.**
   `garble`, `truncate` and `refuse` stop before sending, and `replace` lets the real stream through with the mistake on the line.
   An agent that streams, as the anthropic library requires for a large `max_tokens`, is reached by `status`, `timeout` and the connection faults only.

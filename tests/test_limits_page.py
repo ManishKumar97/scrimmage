@@ -68,6 +68,7 @@ ALL_TITLES = [
     "A module reached through a `__path__` its parent changes.",
     "A name lookup can carry data out.",
     "A new certificate needs the agent's pods restarted.",
+    "A plain `refuse` on a forced tool call or JSON is a mistake in the test.",
     "A plumbing type imported under another name.",
     "A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.",
     "A process that leaves the copy's group with `setsid` is not stopped.",

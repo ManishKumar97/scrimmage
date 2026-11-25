@@ -127,6 +127,7 @@ class OpenAI:
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
 
     refusal_form_problem = staticmethod(table.refusal_form_problem)
+    refusal_request_problem = staticmethod(table.refusal_request_problem)
 
     def refusal_reply(
         self, path: str, wire: Fields, tokens_in: int, form: str | None = None

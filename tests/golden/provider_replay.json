@@ -10210,6 +10210,32 @@
   "settles": [],
   "stops": []
 },
+"anthropic fault refuse forced call": {
+  "blobs": ["b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"],
+  "lines": [
+    {"action": "refused", "args": {"bytes": 126, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tool_choice\": {\"type\": \"any\"}}", "sha256": "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"}, "call": "model:anthropic", "error": "ScrimmageMockError: model:anthropic is an Anthropic call whose request sets tool_choice \"any\", which makes the model call a tool, so a plain decline in words is not a reply a real model gives it; write form = \"classifier\" on this row", "kind": "model", "method": "POST", "mistake": "model:anthropic is an Anthropic call whose request sets tool_choice \"any\", which makes the model call a tool, so a plain decline in words is not a reply a real model gives it; write form = \"classifier\" on this row", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "refuse", "why": "is an Anthropic call whose request sets tool_choice \"any\", which makes the model call a tool, so a plain decline in words is not a reply a real model gives it; write form = \"classifier\" on this row"}, "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageMockError", "text": "model:anthropic is an Anthropic call whose request sets tool_choice \"any\", which makes the model call a tool, so a plain decline in words is not a reply a real model gives it; write form = \"classifier"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"anthropic fault refuse forced call classifier": {
+  "blobs": ["26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756", "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 126, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tool_choice\": {\"type\": \"any\"}}", "sha256": "b9296bdc53449ecfec98892caa7ec3a592fec6d83d0476533843bb22180ce07c"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "form": "classifier", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 561, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_CnXYSnL5yfM90F2UsAQVafyQ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":\"refusal\",\"stop_sequence\":null,\"stop_details\":{\"type\":\"refu", "sha256": "26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "26855ad789a0428b5f1468a551bd7eb1571b13c9c6ba6fe7a41ce9d0330c9756", "headers": {"content-length": "561", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 561, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
 "anthropic fault replace status 500": {
   "blobs": ["4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
@@ -10575,12 +10601,12 @@
   "stops": []
 },
 "anthropic httpx2 async: fault refuse": {
-  "blobs": ["75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_CnXYSnL5yfM90F2UsAQVafyQ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_gMZZo8o21XiHiLjkNqHAU9Lk\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "75ceedebaef389b73f2bd742cb5642f7a4375e127fc33ee8aa154fc5eee4a192", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10666,12 +10692,12 @@
   "stops": []
 },
 "anthropic httpx: fault refuse": {
-  "blobs": ["349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
+  "blobs": ["45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_gMZZo8o21XiHiLjkNqHAU9Lk\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_Z0jJT2byjBfYsfIG4S0WyXEm\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "349fb3007d5f37926b70131a8c43043883b2fa0db1993c14fa23bfae2bb79699", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "45a61b7791c256f7728b6f51a5a0c259ebde9e9e4f603cc90e2de0950826a5f7", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10757,12 +10783,12 @@
   "stops": []
 },
 "anthropic anthropic: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1"],
+  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_Z0jJT2byjBfYsfIG4S0WyXEm\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_GgQRceWUBCRSoTbgjfN8N6Du\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "93a206ba59e6bc510f29659d4c95dfe5f150861489e3bf53efe0d54d4ee160a1", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -10848,12 +10874,12 @@
   "stops": []
 },
 "anthropic anthropic async: fault refuse": {
-  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"],
+  "blobs": ["0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d", "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_GgQRceWUBCRSoTbgjfN8N6Du\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 86, "preview": "{\"model\":\"claude-replay\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "sha256": "0c6a3a1255f44993d23a61749dabce8d14dcc570a7e310c6bbc8136fe024855d"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_K7gnu5KowrMJz5lWoz8BWpVd\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "26a4fa6bd481a8959ca09ceb484e1c8bd050ff6d0c9f945eae752f394aa7ea45", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
+    {"body": "ef75e5b3a950490e13ba4d8ece49ff95dd171df68cf2868881a520eef6f35431", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200}
   ],
   "reserved": [],
   "sent": [],
@@ -11289,13 +11315,13 @@
   "stops": []
 },
 "anthropic marker refuse": {
-  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2", "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311", "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303", "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_K7gnu5KowrMJz5lWoz8BWpVd\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
+    {"action": "fault", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": null, "fault": {"do": "refuse", "n": 1, "when": "first 1"}, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 560, "preview": "{\"model\":\"claude-replay\",\"id\":\"msg_SVh5tKCbPWYEaKkyTwbptHio\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I can't provide that.\"}],\"container\":null,\"stop_reason\":\"end_turn\",\"s", "sha256": "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "v": 1},
     {"action": "real", "after_reply_fault": true, "args": {"bytes": 302, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}, {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"I can't provide that.\"}]}, {\"role\": \"user\", \"c", "sha256": "f76fc0c9cae46f7531bef8625f5f99a32241e2fa2765f0f9d49d2122e1ea577c"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000494, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 172, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"prompt is too long: 210023 tokens > 200000 maximum\"}, \"request_id\": \"req_011ChLKBz21BgnQGeXAh2ah5\"}", "sha256": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1"}, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "status": 400, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 75, "output": 43}, "v": 1}
   ],
   "replies": [
-    {"body": "20c675e6db467fb87ee6c767612b2fb58d64f01c3ede6632d154cc7a2ef684d2", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200},
+    {"body": "8021d218508dd1d772cba2d936e6727a0f5334af620fa75220111bdf505a8303", "headers": {"content-length": "560", "content-type": "application/json", "request-id": "req_scrimmage_injected"}, "length": 560, "status": 200},
     {"body": "1f8a2067bb1ab5c663930f77f84f34e9975c05bb319663fd749f8fd129f0d7d1", "headers": {"content-length": "172", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 172, "status": 400}
   ],
   "reserved": [0.00095],

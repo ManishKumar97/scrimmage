@@ -1647,6 +1647,14 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         ["real_answer"],
         faults=faulted("refuse", form="loud"),
     )
+    forced = message(tool_choice={"type": "any"})
+    add("fault refuse forced call", [(MESSAGES, forced)], ["real_answer"], faults=faulted("refuse"))
+    add(
+        "fault refuse forced call classifier",
+        [(MESSAGES, forced)],
+        ["real_answer"],
+        faults=faulted("refuse", form="classifier"),
+    )
     add(
         "fault replace status 500",
         [(MESSAGES, message())],

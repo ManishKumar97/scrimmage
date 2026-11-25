@@ -248,6 +248,11 @@ class FaultMaker(Protocol):
         provider's usual one."""
         ...
 
+    def refusal_request_problem(self, form: str | None, path: str, wire: Fields) -> str | None:
+        """Why a refuse of this form is not what a real reply to this request looks like, which
+        is then a mistake in the test, or None when it is."""
+        ...
+
     def refusal_form_problem(self, form: str) -> str | None:
         """Why this provider's refuse cannot take this form, which is then a mistake in the
         test known before the run, or None when it can."""

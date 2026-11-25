@@ -395,6 +395,12 @@ def response_ids(reply: bytes) -> list[str]:
     return [i for i in found if isinstance(i, str) and i]
 
 
+def refusal_request_problem(form: str | None, path: str, wire: Fields) -> str | None:
+    """OpenAI's builder makes a refusal for every request, so none is a mistake here."""
+    del form, path, wire
+    return None
+
+
 def refusal_form_problem(form: str) -> str | None:
     """OpenAI's refuse has one form, so a form is a mistake in the test whatever it says."""
     del form

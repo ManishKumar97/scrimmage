@@ -419,11 +419,59 @@ def test_two_refuse_rows_that_differ_only_by_form_are_told_apart_in_json_and_in_
     schema = json.loads(path.read_text())
     seen: list[tuple[object, object]] = []
     for form in ("plain", "classifier", None):
-        extra = {} if form is None else {"form": form}
-        fault = Fault("model", "refuse", "always", model=MODEL, **extra)
+        extra: dict[str, Any] = {} if form is None else {"form": form}
+        fault = Fault("model", "refuse", "always", model=MODEL, form=form)
         run = new_gate("refuse", **extra)
         asked(anthropic_client(Provider(run.events)))
         jsonschema.Draft202012Validator(schema).validate(run.line)
-        seen.append((runner.fault_json(fault)["form"], run.line["fault"].get("form")))
+        shown = runner.fault_json(fault)
+        assert shown is not None
+        seen.append((shown["form"], run.line["fault"].get("form")))
     assert seen == [("plain", "plain"), ("classifier", "classifier"), (None, None)]
     assert "form" not in run.line["fault"], "a row that names no form says none"
+
+
+FORCED = [
+    {"tool_choice": {"type": "any"}},
+    {"tool_choice": {"type": "tool", "name": "get_order"}},
+    {"output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}}},
+]
+FREE = [
+    {},
+    {"tool_choice": {"type": "auto"}},
+    {"tool_choice": {"type": "none"}},
+    {"output_config": {"effort": "high"}},
+]
+
+
+@pytest.mark.parametrize("asked_for", FORCED, ids=lambda x: next(iter(x)) + str(x)[-30:])
+@pytest.mark.parametrize("form", [None, "plain"])
+def test_a_plain_refuse_reply_to_a_request_that_forces_a_call_or_json_is_a_mistake_at_the_call(
+    asked_for: dict[str, Any], form: str | None
+) -> None:
+    run = new_gate("refuse", **({} if form is None else {"form": form}))
+    provider = Provider(run.events)
+    with pytest.raises(anthropic.APIConnectionError) as caught:
+        asked(anthropic_client(provider), **asked_for)
+    said = str(caught.value.__cause__)
+    assert 'write form = "classifier" on this row' in said
+    assert provider.sent == [] and run.line["reason"] == "mistake"
+
+
+@pytest.mark.parametrize("asked_for", FORCED, ids=lambda x: next(iter(x)) + str(x)[-30:])
+def test_a_classifier_refuse_reply_to_a_request_that_forces_a_call_or_json_is_still_built(
+    asked_for: dict[str, Any],
+) -> None:
+    run = new_gate("refuse", form="classifier")
+    provider = Provider(run.events)
+    message = asked(anthropic_client(provider), **asked_for).parse()
+    assert message.stop_reason == "refusal" and provider.sent == []
+
+
+@pytest.mark.parametrize("asked_for", FREE, ids=lambda x: str(x)[:30])
+def test_a_plain_refuse_reply_to_a_request_that_may_answer_in_words_is_built(
+    asked_for: dict[str, Any],
+) -> None:
+    run = new_gate("refuse")
+    message = asked(anthropic_client(Provider(run.events)), **asked_for).parse()
+    assert message.stop_reason == "end_turn"

@@ -232,6 +232,28 @@ def refusal_form_problem(form: str) -> str | None:
     return f'is an Anthropic call, and refuse has the forms "plain" and "classifier", not {form!r}'
 
 
+def refusal_request_problem(form: str | None, path: str, wire: Fields) -> str | None:
+    """A plain decline is text. A request that forces a tool call with tool_choice "any" or
+    "tool", or asks for structured output with output_config.format, is answered by a model with
+    that call or that JSON, not with words, so a text decline is not a real reply to it. The
+    classifier's refusal has no content and fits any request."""
+    del path
+    if form == "classifier":
+        return None
+    fields = fields_dict(wire)
+    choice = _obj(fields.get("tool_choice")).get("type")
+    if choice in ("any", "tool"):
+        why = f'sets tool_choice "{choice}", which makes the model call a tool'
+    elif _obj(_obj(fields.get("output_config")).get("format")).get("type") == "json_schema":
+        why = "sets output_config.format, which makes the model answer in JSON"
+    else:
+        return None
+    return (
+        f"is an Anthropic call whose request {why}, so a plain decline in words is not a reply "
+        'a real model gives it; write form = "classifier" on this row'
+    )
+
+
 def refusal_reply(path: str, wire: Fields, tokens_in: int, form: str | None = None) -> bytes:
     """refuse: a whole Messages reply that declines, laid out as a real one is, with its keys in
     the real order. Plain by default; form "classifier" builds the classifier's refusal, which
