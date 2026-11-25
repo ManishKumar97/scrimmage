@@ -36,7 +36,7 @@ returns = "shipped, Oct 30"
 [[test.fault]]
 call   = "tool:get_order"
 do     = "timeout"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["Oct 30"]
 ```
 
