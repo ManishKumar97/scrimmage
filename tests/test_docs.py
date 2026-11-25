@@ -877,3 +877,17 @@ def test_the_three_pages_make_the_same_promise_about_connections() -> None:
     assert "any third party" not in readme and "any third party" not in page("security.md")
     assert "your IP address" in blocks[0] and "`User-Agent`" in blocks[0]
     assert "test_only_the_prices_update_command_calls_the_one_fetch" in page("security.md")
+
+
+@pytest.mark.design("docs.mcp_extra_pin")
+def test_the_install_page_states_the_mcp_extras_pin_and_its_one_exception() -> None:
+    """The extra pins mcp to one minor, so the page may not say an install never changes
+    the agent's libraries without saying the extra is the exception."""
+    import tomllib
+
+    root = Path(__file__).parents[1] / "packages" / "scrimmage" / "pyproject.toml"
+    pin = tomllib.loads(root.read_text())["project"]["optional-dependencies"]["mcp"]
+    text = page("install.md")
+    assert all(f"`{spec}`" in text for spec in [f"({pin[0]})".strip("()")])
+    assert "installing it never changes" not in text
+    assert "The `mcp` extra is the one exception" in text
