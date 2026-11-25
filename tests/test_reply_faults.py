@@ -1100,6 +1100,23 @@ def test_the_memory_of_offered_tools_is_bounded() -> None:
 
 
 @pytest.mark.design("fault.unknown_tool_name")
+def test_the_memory_of_conversations_is_bounded_per_label_and_forgets_the_oldest() -> None:
+    run = state.RunState(plan_naming(None), Sink(), [])
+    limit = state.MAX_REMEMBERED_CONVERSATIONS
+    for n in range(limit + 10):
+        run.remember_offered("l", f"c{n}", [f"tool{n}"])
+    run.remember_offered("other", "c0", ["kept"])
+    assert len([key for key in run.offered_tools if key[0] == "l"]) == limit
+    assert run.dropped_tool("l", "c0", []) is None, "the oldest was forgotten"
+    assert run.dropped_tool("l", "c9", []) is None
+    assert run.dropped_tool("l", "c10", []) == "tool10", "the oldest kept"
+    assert run.dropped_tool("l", f"c{limit + 9}", []) == f"tool{limit + 9}", "the newest"
+    assert run.dropped_tool("other", "c0", []) == "kept", "another label is not evicted"
+    run.remember_offered("l", "c10", ["again"])  # a known conversation evicts nothing
+    assert len([key for key in run.offered_tools if key[0] == "l"]) == limit
+
+
+@pytest.mark.design("fault.unknown_tool_name")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
 def test_a_row_that_names_a_tool_the_request_offers_is_a_mistake_and_nothing_is_sent(
     gated: None, loopback: Loopback, sync: bool

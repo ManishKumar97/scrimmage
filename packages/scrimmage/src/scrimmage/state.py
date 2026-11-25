@@ -48,7 +48,11 @@ BLOB_POLL_S = 0.005
 CLOSED = "a run that has ended"
 PLAN_RETRY_S = 1.0  # a failed plan fetch can take ten seconds, so not one per line
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
-MAX_REMEMBERED_TOOLS = 1000  # tool names kept per label, so a run of ever-new names stays small
+MAX_REMEMBERED_TOOLS = 1000  # tool names kept per conversation, so ever-new names stay small
+# Conversations kept per label. A run has a handful of agents, so 64 leaves room for a team's
+# whole fleet; a long run of ever-new conversations, such as one per customer, forgets the oldest
+# first, and a tool dropped in a forgotten conversation is then named by the _v2 rule instead.
+MAX_REMEMBERED_CONVERSATIONS = 64
 # The process and call_id of the real tool call whose code is running, in a recording run.
 # A context variable follows await, the tasks made inside the tool and asyncio.to_thread,
 # which copy it, but not a thread or a pool the tool starts itself. A forked child inherits
@@ -797,8 +801,13 @@ class RunState:
 
     def remember_offered(self, label: str, conversation: str, names: Sequence[str]) -> None:
         """Keep the tool names a model request of this conversation to this label offers. Bounded:
-        a run whose tool names change on every request keeps the first ones only."""
+        a run whose tool names change on every request keeps the first ones only, and a label
+        keeps its newest MAX_REMEMBERED_CONVERSATIONS conversations."""
         with self._lock:
+            if (label, conversation) not in self.offered_tools:
+                held = [key for key in self.offered_tools if key[0] == label]
+                if len(held) >= MAX_REMEMBERED_CONVERSATIONS:
+                    del self.offered_tools[held[0]]  # the oldest, as a dict keeps its order
             seen = self.offered_tools.setdefault((label, conversation), {})
             for name in names:
                 if len(seen) < MAX_REMEMBERED_TOOLS:
