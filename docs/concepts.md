@@ -18,6 +18,24 @@ Each row runs `runs` times (3 by default).
 A **run** is one start of your agent with the question.
 Every run is a new Python program, so nothing leaks from one run to the next.
 
+## Gate
+
+A gate is the code Scrimmage puts in front of one kind of call, so that it can decide what the call gets.
+There is a gate on a tool function, on a web request, on an MCP call and on a model call.
+The gate decides fault, mock, real or refused, does it, and writes a line to the record.
+[How it works](how-it-works.md) follows one call through its gate.
+
+## Budget and hold
+
+Every test has a budget: the most its model calls may cost together, set by `max_cost_usd`.
+Before a model call is sent, Scrimmage sets aside an estimate of the most that call could cost.
+That estimate is a **hold**.
+When the reply arrives, the real cost replaces the hold, and the hold is given back.
+A call that does not fit in the money left, with the holds of the calls in flight counted, waits or is refused.
+The docs say "hold" for this, and nowhere "reserve" or "reservation".
+The words `reserve_output_tokens` and `not reserved` are the names of a setting and of an outcome, so they keep their spelling.
+See [The budget](budget.md).
+
 ## Labels
 
 A **label** names a call, such as `tool:get_order`.
@@ -57,7 +75,7 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 - the type is read from the tool's return annotation, such as `-> Stock`, or from the mock's `type`;
 - `-> Stock | None` and `-> Optional[Stock]` build a `Stock` from a table, as TOML cannot write `None`, and keep any other value as written, so `-> Path | None` with `"/tmp"` gives the text, and `-> Status | None` builds the member a value names and keeps any other value as written;
 - a pydantic model is built with `model_validate`, an `Enum` from its value, `Status("shipped")`, and any other class with `Type(**returns)`;
-- a mock that does not fit the type is a mistake in the test, and an `Enum` value that is no member names the first 10 members.
+- a mock that does not fit the type is a test mistake, and an `Enum` value that is no member names the first 10 members.
   When the class rejects a table, the mistake names a missing or unknown key, a pydantic model's failing fields and their error types, or the error's class.
   It never quotes the error's message, which can quote a value.
 
@@ -86,7 +104,12 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 | `unknown tool` | a chat model call that offers tools gets a 200 in which the model calls a tool the agent does not have: the one the row names with `tool`, else one an earlier request of the same conversation offered and this one no longer does, else an offered tool's name with `_v2` added; on OpenAI a tool call on Chat Completions or a `function_call` item on Responses, on Anthropic a `tool_use` block with `stop_reason` `tool_use`; nothing is sent |
 | `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident; on an Anthropic call every `text` block of the reply is garbled and `thinking` blocks stay as sent |
 | `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; a reply of tool calls alone becomes the 400 OpenAI sends when the limit lands inside a tool call; on an Anthropic call the first `text` block is cut, the blocks after it go, and `stop_reason` is `max_tokens`, and a reply of tool calls alone keeps its first `tool_use` block with an empty `input`, as a real cut does |
-| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; on an Anthropic call it is a mistake in the test, because in a reply that is not streamed a tool call's input is a JSON object and cannot fail to parse |
+| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; on an Anthropic call it is a test mistake, because in a reply that is not streamed a tool call's input is a JSON object and cannot fail to parse |
+
+!!! warning "`refuse` and `refused` are two faults"
+    `refuse` is a model's refusal: the call gets a 200 whose answer is a refusal.
+    `refused` is a refused connection: a web request raises `ConnectError` and a model call raises `APIConnectionError`.
+    One letter apart, they test different things.
 
 Under `empty` the tool's declared return type gives the value:
 
@@ -99,7 +122,7 @@ Under `empty` the tool's declared return type gives the value:
 | a type that allows `None`, such as `str \| None`; `Any`, `object` or a type variable; or no annotation | `None` |
 
 The container must be exactly `list`, `dict` or `tuple`; `Sequence`, `Mapping` and `set` are mistakes.
-Any other type, such as a pydantic model, has no empty value, so `empty` on it is a mistake in the test.
+Any other type, such as a pydantic model, has no empty value, so `empty` on it is a test mistake.
 The message names the fix: mock it with the fields of an empty result, or fault the web request inside the tool.
 Only the return annotation is read.
 A return annotation that cannot be resolved when the tool runs, such as a name imported only under `TYPE_CHECKING`, is a mistake too.
@@ -108,7 +131,7 @@ A fault fires on every call it names, unless `when` narrows it to the `first N` 
 See [Failing the model](model-faults.md).
 It fires only in the program Scrimmage started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
 If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's rate.
-A row where the fault never fired tested nothing, and is reported as a mistake in the test.
+A row where the fault never fired tested nothing, and is reported as a test mistake.
 
 ## Judging
 

@@ -104,7 +104,7 @@ The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost
 | a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
 | a cached count above the input count, or not a whole number | every input token at `input` |
 
-The reservation before a call still counts every input token at the full price, since Scrimmage cannot know what the provider will serve from its cache.
+The hold before a call still counts every input token at the full price, since Scrimmage cannot know what the provider will serve from its cache.
 
 A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
 
@@ -113,7 +113,7 @@ A call that sends no model name, such as a Responses call on a stored prompt, is
 "" = {input = 2.0, output = 8.0}
 ```
 
-With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
+With a budget on, a model with no price stops the test at its first call, because it cannot be held for.
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
 A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
@@ -136,9 +136,9 @@ On Chat Completions, Scrimmage reads the field the openai library names in the s
 | no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and, on Responses, `cache_write_12h` |
 
 The written counts are not on the record line; `cost_usd` includes them.
-The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
+The hold before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
 On Chat Completions, where writes last 30 minutes, it leaves out `cache_write_12h`.
-On `gpt-5.6-luna`, 100K input tokens and 4096 output tokens reserve $0.0549 on Responses and $0.0299 on Chat Completions.
+On `gpt-5.6-luna`, 100K input tokens and 4096 output tokens hold $0.0549 on Responses and $0.0299 on Chat Completions.
 
 ## Anthropic prices
 

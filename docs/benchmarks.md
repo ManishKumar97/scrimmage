@@ -52,7 +52,7 @@ A mocked call makes no real call, so it has no ungated row to compare with.
 A mocked tool call takes 50.4 µs at the median, and a mocked web request 208.5 µs.
 A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 150 µs, as it looks for the nearest mock and keeps the evidence.
 
-A gated model call with a budget on makes one extra signed request to the runner, to reserve the call's money.
+A gated model call with a budget on makes one extra signed request to the runner, to hold the call's money.
 That is the largest part of the time it adds.
 
 A real provider's response time was not measured here.

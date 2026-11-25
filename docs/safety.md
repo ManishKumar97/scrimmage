@@ -141,7 +141,7 @@ Work outside any request, while a run is open, follows the outside rules on [An 
 
 Every fault but `append`, `replace` and `slow` is built by the gate, and the call it fails is never sent.
 The fault is decided before mocks and `real` are read, so a fault on a call the test would refuse, such as an unlisted web write, still runs nothing.
-A faulted model call reserves nothing and costs nothing.
+A faulted model call holds nothing and costs nothing.
 
 ## The budget
 
@@ -155,7 +155,7 @@ They stop accidents, not a coding agent with a shell; see [Driving Scrimmage fro
 
 The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.
 
-If `tools` names a function, a class, a method or a module that does not exist, or a name that is not a function or a method, the run stops as a mistake in the test.
+If `tools` names a function, a class, a method or a module that does not exist, or a name that is not a function or a method, the run stops as a test mistake.
 Otherwise a typo such as `refund_ordr` would leave the real `refund_order` running with no gate.
 
 ## What the gates assume

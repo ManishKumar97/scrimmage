@@ -32,8 +32,8 @@ The gate sits below the library's retries, so everything above it behaves as it 
 1. A request reaches the gate. If its host and path are a model call, the gate labels it. Anything else is a web request, labelled by the host in its own URL, and goes through [the rules for web requests](web-requests.md).
 2. The gate reads the tools the request offers, and stops the request or the test if one is not allowed.
 3. If a fault fires, the gate builds the reply or error itself and nothing is sent.
-4. Otherwise it reserves the call's cost from the budget, which the runner keeps for the whole test, and sends the request.
-5. The reply passes through unchanged, while the gate reads its token counts as it goes by. When it ends, the real cost replaces the reservation and the call is recorded.
+4. Otherwise it holds the call's cost from the budget, which the runner keeps for the whole test, and sends the request.
+5. The reply passes through unchanged, while the gate reads its token counts as it goes by. When it ends, the real cost replaces the hold and the call is recorded.
 
 Every hop of a redirect goes through the same function, so a hop to another model host is decided and budgeted by itself. A redirect to any other host is refused before it is followed, because past that point the gate could not see the call.
 
@@ -62,7 +62,7 @@ So a fake server listening at the same address cannot hand your agent a plan, an
 ## Failing closed
 
 If the SDK cannot switch on fully, for any reason, the program stops before your agent's code runs.
-A program that never runs the startup file cannot stop itself, so `command` is checked when the file is read: `python -E`, `-I` or `-S` there is a mistake in the test, exit 2, before any run.
+A program that never runs the startup file cannot stop itself, so `command` is checked when the file is read: `python -E`, `-I` or `-S` there is a test mistake, exit 2, before any run.
 A program that reaches no gate some other way, such as `env PYTHONPATH=. python bot.py`, runs for real, and the run reads infrastructure error. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 The one exception is a child program on a different Python, such as a cloud command-line tool your agent starts.

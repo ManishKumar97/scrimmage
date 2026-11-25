@@ -10,7 +10,7 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 - **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a chat model call.
   `append` on a model call comes later.
 
-- **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a mistake in the test, and the tool never runs. Mock an empty result instead. See [Faults](../concepts.md#faults).
+- **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a test mistake, and the tool never runs. Mock an empty result instead. See [Faults](../concepts.md#faults).
 
 - **Connection faults on a tool or an MCP tool.** `refused`, `reset` and `dns` work where Scrimmage sees the connection, on a model call or a web request. On a tool, write `do = "error"` with `raises = "ConnectionRefusedError"`, `"ConnectionResetError"` or `"OSError"`.
 
@@ -22,7 +22,7 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 
 - **A transport's own retries.** An httpx transport built with `retries=N`, such as `httpx.HTTPTransport(retries=2)`, retries a real failed connect below the gate, so it never sees an injected one. Under `when = "always"` the result is the same; under `first 1` a real refused connection can recover inside the transport, while the injected one reaches your code. Scrimmage does not detect the setting.
 
-- **Only text and plain data take `append` and `replace`.** A result that is a model object, a dataclass, a number, `None`, `bytes` or a `str` subclass is not changed: the call is left as it is, the line says why, and a row with no place for the change is a mistake in the test. A dict, list or tuple takes only `replace` with `find`, on string values. See [Changing a result](../changing-results.md#what-each-kind-of-call-can-take).
+- **Only text and plain data take `append` and `replace`.** A result that is a model object, a dataclass, a number, `None`, `bytes` or a `str` subclass is not changed: the call is left as it is, the line says why, and a row with no place for the change is a test mistake. A dict, list or tuple takes only `replace` with `find`, on string values. See [Changing a result](../changing-results.md#what-each-kind-of-call-can-take).
 
 - **An MCP result with several text items.** `append` goes on the last one, and an agent that reads only `content[0].text` never sees it. With structured content, `replace` with `find` must change both the text and the structured content to count.
 
@@ -45,25 +45,25 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 
 - **A change over text the record removes is not made.** A `find` that touches a key, or an `append` that joins a key to the text before it, leaves the call unchanged and the line names the rule.
 
-- **`replace` on a model reply is for text replies.** It changes the text of an OpenAI Chat Completions reply and of each `text` block of an Anthropic Messages reply. A streamed reply and an OpenAI Responses API call are a mistake in the test, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
+- **`replace` on a model reply is for text replies.** It changes the text of an OpenAI Chat Completions reply and of each `text` block of an Anthropic Messages reply. A streamed reply and an OpenAI Responses API call are a test mistake, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
-- **`bad body` on a streamed model request.** It is a mistake in the test: the call fails at once and the fault is not counted as fired. A stream cut midway is a later fault. Fault a request that is not streamed, or use `timeout` or a status on this one.
+- **`bad body` on a streamed model request.** It is a test mistake: the call fails at once and the fault is not counted as fired. A stream cut midway is a later fault. Fault a request that is not streamed, or use `timeout` or a status on this one.
 
 - **`context too long` is a saved real reply, not your model's.**
   On OpenAI's Chat Completions it is OpenAI's 400 with the code `context_length_exceeded`.
   On an Anthropic call it is Anthropic's 400 with the type `invalid_request_error`.
-  On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired.
+  On a Responses call it is a test mistake: the call fails at once and the fault is not counted as fired.
   The message names the numbers of the real reply it was saved from, not your model's context or your prompt's length.
 
-- **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a mistake in the test: the call fails at once and nothing is sent.
+- **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a test mistake: the call fails at once and nothing is sent.
   A changed stream is a later fault.
   `replace` is the one that lets the real stream through, with the mistake on the line, because it is a carried fault, which is decided once the reply is back.
   `bad body` on a streamed request is a mistake too.
   What reaches an agent that streams is `timeout`, `refused`, `reset`, `dns`, `status`, `context too long` and `slow`, as for any call.
 
-- **A Responses agent that chains to a faulted reply is not supported.** A request whose `previous_response_id`, or an `item_reference` in its `input`, names a reply or an item a fault changed or built is a mistake in the test, and it is not sent: OpenAI holds nothing under those made-up ids. Send the conversation in `input`, as the OpenAI Agents SDK does by default.
-  A reply fault on a request that names a `conversation` is a mistake in the test too, and nothing is sent: OpenAI would keep the real reply in that conversation, or none.
+- **A Responses agent that chains to a faulted reply is not supported.** A request whose `previous_response_id`, or an `item_reference` in its `input`, names a reply or an item a fault changed or built is a test mistake, and it is not sent: OpenAI holds nothing under those made-up ids. Send the conversation in `input`, as the OpenAI Agents SDK does by default.
+  A reply fault on a request that names a `conversation` is a test mistake too, and nothing is sent: OpenAI would keep the real reply in that conversation, or none.
 
 - **`truncate` on Responses keeps the real counts.** The reply's `usage.output_tokens` is what the model was billed for, not the request's `max_output_tokens`. With no text, the last `function_call` item is cut, as a real reply cut inside a call is.
 

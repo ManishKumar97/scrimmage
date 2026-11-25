@@ -51,7 +51,7 @@ Any status from 400 to 599 works.
 On OpenAI, `bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
 On Anthropic, a chat call gets the start of a Messages reply and a token count gets the start of a token count reply.
 The library does not retry a 200, so `bad body` meets one attempt.
-On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.
+On a streamed request it is a test mistake, and the call fails at once: a broken stream is a later fault.
 The openai library retries a connection error twice by default, and each attempt meets the fault again, so `when = "first 1"` is absorbed by the first retry.
 
 The table above names the openai library's classes.
@@ -70,7 +70,7 @@ Two more let the call happen, on a chat call only:
 | `replace`, with `text` and a `model` | the real reply, with the text of each choice replaced by `text`, or each `find` in it |
 | `slow 8s` | the real reply, eight seconds late; or the library's own timeout, if the client's is shorter |
 
-Both make the real call, so it is reserved and billed as in the baseline row.
+Both make the real call, so it is held and billed as in the baseline row.
 `replace` needs `model`, or it would rewrite every model's answer, the main model's too.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
@@ -122,7 +122,7 @@ An agent that shortens its prompt when it reads that code can be tested this way
 The body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
 They are not your model's context or your prompt's length.
 It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
-On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
+On a Responses call it is a test mistake, and the call fails at once: the Responses API's reply is not this one.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
 It works on `model` or `model:anthropic`, and not on a call that only counts tokens, such as `model:anthropic/input_tokens`.
@@ -159,10 +159,10 @@ What each costs:
 
 | Fault | The real call | Billed |
 |---|---|---|
-| `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is reserved |
-| `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, reserved first |
+| `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is held |
+| `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, held first |
 
-`garble`, `truncate` and `bad tool args` send the real request, so the call is reserved and costs what the baseline's does.
+`garble`, `truncate` and `bad tool args` send the real request, so the call is held and costs what the baseline's does.
 The reply's `usage` stays the model's own counts, so the line's cost is what was billed.
 The record keeps both replies: `result` is the real one, and `changed.reply` the one your agent got.
 When your agent got another status than the real reply's, as after `truncate` on tool calls alone, `changed.status` holds it.
@@ -210,7 +210,7 @@ A request that carries neither, such as a Responses request that continues by `p
 In the third case a name the request already offers gets `_v2` added again until it is not one, and after nine of them `_v10`, `_v11` and on.
 The name is cut at 64 characters, the limit of OpenAI's function names, so a long tool name loses its end and keeps the suffix.
 A label keeps its newest 64 conversations and forgets the oldest, and a tool dropped in a forgotten one gets the third form.
-A row whose `tool` is a tool the request offers is a mistake in the test, and nothing is sent: a call to an offered tool is not an unknown tool.
+A row whose `tool` is a tool the request offers is a test mistake, and nothing is sent: a call to an offered tool is not an unknown tool.
 The `_v2` name is arbitrary, not a name any model sent.
 Name the tool in the row when your test is about one name, such as `tool = "multi_tool_use.parallel"`, the dotted name OpenAI's models were seen to call in forum reports from November 2023 to July 2024.
 
@@ -234,7 +234,7 @@ The call has no arguments, and its layout is the one of a real tool call:
 | Responses | one `function_call` output item with `name`, `arguments` `"{}"`, a `call_id` and an `fc_` id, `status` `completed` | a real `gpt-4o-mini` reply, `real_response_function_call_truncated.json` |
 | Anthropic Messages | one `tool_use` block with an `id` of the form `toolu_01...`, `name`, an `input` of `{}` and `caller` `direct`, and `stop_reason` `tool_use` | a real `claude-haiku-5-5` reply, `real_tool_use.json` |
 
-Nothing is sent: the line costs 0 and nothing is reserved.
+Nothing is sent: the line costs 0 and nothing is held.
 A request where the model could not pick a tool of its own is left as it is, and the call goes on as in the baseline: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or on OpenAI offers tools in the old `functions` field only.
 The line says why.
 If your agent answers the call, the provider may refuse that request: OpenAI refuses a name that holds a dot, so `multi_tool_use.parallel` gets a 400 on the next request.
@@ -293,7 +293,7 @@ Anthropic signs them, and your agent sends them back as they came, so a changed 
 A real request with a changed text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
 The request and the reply are saved as `real_thinking_resent_request.json` and `real_thinking_resent_reply.json` in the test fixtures.
 
-`refuse` and `unknown tool` are built, not sent: nothing is reserved and the line costs 0.
+`refuse` and `unknown tool` are built, not sent: nothing is held and the line costs 0.
 They are made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
 Its `usage` holds a rough count of your request's tokens and, for the plain form, 10 output tokens.
 
@@ -315,19 +315,19 @@ expect = [["cannot", "declined"]]
 ```
 
 `form` works only with `do = "refuse"`, and is `"plain"` or `"classifier"`.
-It is a mistake in the test on an OpenAI call, whose refusal has one form chosen by the request.
+It is a test mistake on an OpenAI call, whose refusal has one form chosen by the request.
 A row that writes `call = "model:openai"` is stopped by `scrimmage check` and `scrimmage test` with exit code 2 before any run.
 A row that writes `call = "model"` is stopped at the call instead, and nothing is sent.
 A plain `refuse` is also a mistake on a request that forces a tool call, with `tool_choice` of type `any` or `tool`, or that asks for JSON, with `output_config.format`: a real model answers those with the call or the JSON, so write `form = "classifier"` there.
 The row's `form` shows in `scrimmage test --json` under the row's `fault`, and on the line of the call, so two `refuse` rows that differ only by form are told apart.
 
 Reply faults need a reply that is not streamed.
-On a stream, `garble`, `truncate` and `refuse` are a mistake in the test and nothing is sent.
+On a stream, `garble`, `truncate` and `refuse` are a test mistake and nothing is sent.
 `replace` runs the real call, the agent gets its stream whole, and the line records the mistake: `replace on a model call needs a reply that is not streamed`.
 
 ### `bad tool args` on an Anthropic call
 
-It is a mistake in the test, and it is found before any run.
+It is a test mistake, and it is found before any run.
 In an Anthropic reply that is not streamed, a tool call's `input` is a JSON object, not JSON text, so it cannot fail to parse the way an OpenAI call's `arguments` can.
 A streamed reply sends the input as text, but Scrimmage changes no streamed reply.
 `scrimmage check` and `scrimmage test` stop with exit code 2 on a row that writes `call = "model:anthropic"` with `do = "bad tool args"`, and say why, before any run starts.
@@ -383,8 +383,8 @@ A request that sends the conversation in `input` and answers the call with a `fu
 
 A Responses request can ask OpenAI to look up an earlier reply, with `previous_response_id`, or an earlier item, with an `item_reference` in `input`.
 OpenAI then builds the next turn from what it stored, and it stored nothing under a faulted reply's made-up ids.
-So a request in the same run that looks up a reply or an item a fault changed or built is a mistake in the test, and it is not sent.
-A reply fault on a request in a `conversation` OpenAI keeps is a mistake in the test too, and nothing is sent: OpenAI would add the real reply to it, or none.
+So a request in the same run that looks up a reply or an item a fault changed or built is a test mistake, and it is not sent.
+A reply fault on a request in a `conversation` OpenAI keeps is a test mistake too, and nothing is sent: OpenAI would add the real reply to it, or none.
 Send the conversation in `input` instead, as the OpenAI Agents SDK does by default.
 A request that looks up a real reply goes on as in the baseline.
 
@@ -393,7 +393,7 @@ Two real requests showed OpenAI takes an assistant message and a function call u
 
 ### Where they do not work
 
-A streamed request is a mistake in the test, found from the request's `stream`, so the call fails at once and nothing is sent.
+A streamed request is a test mistake, found from the request's `stream`, so the call fails at once and nothing is sent.
 
 ## A rate limit that says how long to wait
 
@@ -463,11 +463,11 @@ How `replace` meets a reply:
 |---|---|
 | a chat completion with text | its text is changed; the line keeps the real reply, and the injected text beside it |
 | tool calls and no text, a refusal with no text, a `find` that is not in it, a status other than 200 | the agent gets it as it is; the call is not counted as fired |
-| a streamed reply | a mistake in the test: turn streaming off for that model, or fault it another way |
-| a Responses API call | a mistake in the test: `replace` works on Chat Completions only |
+| a streamed reply | a test mistake: turn streaming off for that model, or fault it another way |
+| a Responses API call | a test mistake: `replace` works on Chat Completions only |
 
 A call left as it is still uses its number in `first N`: under `first 1`, a first reply with only tool calls means no call of that run is changed.
-`slow` waits before it reserves, so a slowed call holds no budget while it waits.
+`slow` waits before it takes its hold, so a slowed call holds no budget while it waits.
 If the request's read timeout is shorter than the delay, the call ends at that timeout with the library's own error, and nothing is sent or billed.
 The openai library retries a timeout twice by default, so under `when = "always"` a guard behind it waits about three times the client timeout before the agent sees an error.
 See [Testing your guardrails](guardrails.md) for the rows that use these.

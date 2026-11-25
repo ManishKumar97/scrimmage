@@ -218,7 +218,7 @@ A guard that reads only the question never meets an attack in a tool result; tha
 
 Write the attack as a fault, never as a mock.
 A mock answers in the baseline row too, so a guard that misses it makes the baseline call `refund_order`.
-A refusal on the baseline is read as a mistake in the test, and the fault rows learn nothing.
+A refusal on the baseline is read as a test mistake, and the fault rows learn nothing.
 
 ## What counts as caught
 

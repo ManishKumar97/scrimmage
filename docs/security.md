@@ -328,7 +328,7 @@ None of them names a value.
 ## A fault sends nothing
 
 Only `append`, `replace` and `slow` let the call they name happen.
-Every other fault is built by the gate, and nothing is sent: no request reaches a server or a provider, no tool runs, and a model call reserves and costs nothing.
+Every other fault is built by the gate, and nothing is sent: no request reaches a server or a provider, no tool runs, and a model call holds and costs nothing.
 
 *Checked by: `tests/test_security_claims.py::test_no_fault_but_the_carried_ones_sends_a_request`, `tests/test_connection_faults.py::test_a_connection_fault_on_a_model_call_reserves_and_costs_nothing`*
 
@@ -437,7 +437,7 @@ Redaction is a heuristic on known shapes.
 
 Model calls run for real, so a test has a budget, $5 unless you change `max_cost_usd`.
 
-- Each model call reserves an estimate of its cost before it is sent.
+- Each model call holds an estimate of its cost before it is sent.
   A call that does not fit in what is left is not sent.
 
   *Checked by: `tests/test_budget.py::test_a_budget_that_cannot_cover_a_call_stops_the_test`*
@@ -448,9 +448,9 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 
 The cap can still be passed:
 
-- Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits/budget.md#the-budget).
+- Calls that cost more than their hold, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits/budget.md#the-budget).
 - A provider that is neither OpenAI's nor Anthropic's format, listed under `real` as a web host, is not budgeted at all.
-- A run killed with SIGKILL can leave a reservation that never settles.
+- A run killed with SIGKILL can leave a hold that never settles.
   It counts as spent, so the cap errs low, not high.
 
 See [Failing the model, and keeping a budget](model-faults.md).

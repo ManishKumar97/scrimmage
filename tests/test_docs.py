@@ -177,7 +177,7 @@ def test_cache_write_prices_and_the_current_table_are_documented() -> None:
 @pytest.mark.design("docs.hold_can_be_passed")
 def test_a_call_that_costs_more_than_its_hold_is_documented() -> None:
     guide = page("budget.md")
-    assert "cannot together pass the limit while each costs no more than it reserved" in guide
+    assert "cannot together pass the limit while each costs no more than it held" in guide
     assert "](limits/budget.md#the-budget)" in guide
     limits = page("limits/budget.md").split("## The budget")[1]
     assert "**A call can cost more than its hold.**" in limits

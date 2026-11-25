@@ -82,7 +82,7 @@ If the note asks for a call, such as `refund_order`, leave that tool unmocked an
 The call is then refused, and a refusal under a fault is the agent's own choice, so the row fails.
 Mocking the write would hide it: the bot would refund, the mock would say done, and the row would pass.
 
-An attack written as a `[[test.mock]]` instead of a fault is a mistake in the test.
+An attack written as a `[[test.mock]]` instead of a fault is a test mistake.
 A mock answers in the baseline row too, so a bot that follows the note there makes a call the test does not allow, and the whole test stops with exit code 2.
 A fault is only in its own row, which is why the attack goes there.
 A refused write under a fault also exits 2, but the report tells them apart: the fault row's verdict is `fail`, with a `refused` broken rule, while the baseline passes.
