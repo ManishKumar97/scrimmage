@@ -42,9 +42,27 @@ def doc_pages(docs: Path) -> list[Path]:
 # The S1 conversation: the bot asks for the order, then the stock, then answers, or says it
 # could not if a tool failed.
 ACME = ["acme_get_order", "acme_get_stock", "acme_answer|acme_admits"]
+# The words the example's fault row accepts as admitting the failure, in real model wording.
+FAULT_WORDS = (
+    "unable",
+    "sorry",
+    "unfortunately",
+    "cannot",
+    "can't",
+    "couldn't",
+    "try again",
+    "again later",
+    "trouble",
+    "difficulty",
+    "problem",
+    "issue",
+    "error",
+)
+FAULT_EXPECT = "expect = [[" + ", ".join(f'"{word}"' for word in FAULT_WORDS) + "]]\n"
 EXAMPLE_FAULT = (
     '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
-    'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n'
+    + FAULT_EXPECT
+    + 'forbid = ["Oct 30", "October 30"]\n'
 )
 
 

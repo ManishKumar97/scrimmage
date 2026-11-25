@@ -91,7 +91,7 @@ returns = "shipped, Oct 30"
 call   = "tool:get_order"
 do     = "error"
 raises = "ConnectionError"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["Oct 30", "October 30"]
 ```
 

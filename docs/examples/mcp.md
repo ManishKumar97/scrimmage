@@ -104,13 +104,13 @@ returns = {result = "Refunds take five days from the day we get the item back."}
 [[test.fault]]
 call   = "mcp:docs/search"
 do     = "timeout"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["five days"]
 
 [[test.fault]]
 call   = "mcp:docs/search"
 do     = "error"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["five days"]
 ```
 

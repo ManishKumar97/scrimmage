@@ -80,7 +80,7 @@ returns = {sku = "SKU-42", count = 12}
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["Oct 30", "October 30"]
 ```
 
@@ -97,6 +97,8 @@ This file says:
 - the answer must say "shipped" and give the date, in either spelling;
 - then run the same test with `get_order` timing out.
   There the answer must admit the failure and give no date.
+  The list of words is long on purpose.
+  A real model has many ways to say it could not, and a rule that is too narrow fails a run that did the right thing.
 
 ## 4. Run it
 

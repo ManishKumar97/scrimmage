@@ -58,7 +58,7 @@ json   = {status = "shipped", date = "Oct 30"}
 [[test.fault]]
 call   = "http:orders.acme.internal"
 do     = "status 503"
-expect = [["unable", "sorry", "try again"]]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
 forbid = ["Oct 30", "October 30"]
 ```
 
