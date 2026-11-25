@@ -1018,6 +1018,36 @@ def test_a_responses_request_that_continues_by_id_has_no_key_so_the_name_is_the_
     assert item.name == "get_order", "a stateless request keys the same conversation"
 
 
+ERROR_400 = json.dumps(
+    {"error": {"message": "bad", "type": "invalid_request_error", "param": None, "code": None}}
+).encode()
+
+
+@pytest.mark.design("record.after_reply_fault")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_400_to_a_responses_request_that_answers_the_made_up_call_is_marked(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The agent sends the conversation in input, with the made-up call and its output; the 400
+    is the fault's doing. The same 400 to a request that carries no such call is not."""
+    sink, _ = gate_plan(plan_naming(None, "call 1"))
+    made = responses_api(loopback, sync, tools=RESPONSE_SPECS)
+    [item] = made.output
+    loopback.status, loopback.body = 400, ERROR_400
+    answered = [
+        {"type": "function_call", "call_id": item.call_id, "name": item.name, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": item.call_id, "output": "no such tool"},
+    ]
+    other = [{"type": "function_call_output", "call_id": "call_" + "z" * 24, "output": "ok"}]
+    for turn in (answered, other, "Where is order 5678?"):
+        with pytest.raises(openai.BadRequestError):
+            responses_api(loopback, sync, input=turn, tools=RESPONSE_SPECS)
+    fired, marked, stranger, fresh = model_lines(sink)
+    assert fired["action"] == "fault" and "after_reply_fault" not in fired
+    assert marked["status"] == 400 and marked["after_reply_fault"] is True
+    assert "after_reply_fault" not in stranger and "after_reply_fault" not in fresh
+
+
 @pytest.mark.design("fault.unknown_tool_name")
 def test_the_memory_of_offered_tools_is_bounded() -> None:
     run = state.RunState(plan_naming(None), Sink(), [])

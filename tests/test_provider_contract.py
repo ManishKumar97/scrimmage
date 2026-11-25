@@ -89,6 +89,9 @@ class Case:
     request_cap: int | None = None  # the output cap `request` carries, for an API that needs one
     call_text: str | None = None  # what the reply that calls a tool says by default, if it says
     chain: Chain | None = None
+    # The agent's next request on each of other_paths, built from a faulted reply to the call
+    # that offered a tool, by the reply's bytes; None for a provider with one API.
+    other_follow_up: Callable[[bytes], dict[str, object]] | None = None
     # The fault words no reply of this provider can take, whatever the request: a mistake in the
     # test that is known before the run.
     never: tuple[str, ...] = ()
@@ -101,6 +104,17 @@ def openai_tool_request(name: str) -> dict[str, object]:
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [{"type": "function", "function": function}],
     }
+
+
+def responses_follow_up(reply: bytes) -> dict[str, object]:
+    """The next stateless Responses request: the reply's items, then each call's output."""
+    output: list[Any] = json.loads(reply)["output"]
+    results = [
+        {"type": "function_call_output", "call_id": item["call_id"], "output": "ok"}
+        for item in output
+        if item["type"] == "function_call"
+    ]
+    return {"model": "gpt-4o-mini", "input": [*output, *results]}
 
 
 def openai_follow_up(fields: dict[str, object], reply: bytes) -> dict[str, object]:
@@ -252,6 +266,7 @@ CASES = {
             "messages": [{"role": "tool", "content": f"note: {text}"}],
         },
         follow_up=openai_follow_up,
+        other_follow_up=responses_follow_up,
         changeable=OPENAI / "chat_answer.json",
         not_carried=(
             ("unknown tool", "/v1/responses", {"model": "m", "conversation": "c"}),
@@ -536,6 +551,28 @@ def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
         case.chat_path, wrap_fields(case.follow_up(case.request, refused)), [gave]
     )
     assert not provider.carries(case.chat_path, wrap_fields(case.request), [gave])
+
+
+def test_what_an_unknown_tool_reply_gave_on_each_other_api_is_carried_back_too(
+    provider: ModelProvider,
+) -> None:
+    """The same round trip on the provider's other APIs, where the provider keeps the reply and
+    only the made-up call's id can tie the next request to it."""
+    case = case_of(provider)
+    if case.other_follow_up is None:
+        assert not case.other_paths, "a provider with other APIs says how an agent follows up"
+        return
+    fields = wrap_fields({"model": case.model, "input": "hi"})
+    for path in case.other_paths:
+        reply = provider.unknown_tool_reply(path, fields, 25, "get_order_v2")
+        gave = provider.given(path, fields, reply, ids_only=True)
+        assert gave.ids, path
+        built = wrap_fields(case.other_follow_up(reply))
+        assert provider.carries(path, built, [gave]), path
+        assert not provider.carries(path, fields, [gave]), path
+        assert not provider.carries(path, built, []), path
+        other = case.other_follow_up(provider.unknown_tool_reply(path, fields, 25, "x"))
+        assert not provider.carries(path, wrap_fields(other), [gave]), "another call's id"
 
 
 def test_a_provider_that_keeps_its_replies_keeps_the_chain_contract(
