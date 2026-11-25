@@ -891,3 +891,10 @@ def test_the_install_page_states_the_mcp_extras_pin_and_its_one_exception() -> N
     assert all(f"`{spec}`" in text for spec in [f"({pin[0]})".strip("()")])
     assert "installing it never changes" not in text
     assert "The `mcp` extra is the one exception" in text
+
+
+@pytest.mark.design("docs.setup_cost")
+def test_the_setup_requests_cost_is_said_to_be_in_the_total_everywhere() -> None:
+    text = page("json-output.md")
+    assert "no run total and no `result.json`" not in text
+    assert "only its cost is in the test's `cost_usd`" in text

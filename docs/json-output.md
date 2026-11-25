@@ -443,7 +443,7 @@ A test of a service first sends one setup request, a baseline run named `setup-`
 Its record has a summary line of the same shape as any run's, with `row` set to `baseline` and `judged` and `cost_usd` filled in.
 Nothing in the line says it is a setup.
 Only the `setup-` prefix of the file name and the `run` field tells it apart from a baseline run.
-Scrimmage counts it in no row, no run total and no `result.json`, so a reader that groups summary lines by `test` and `row` must skip `run` names that start with `setup-`.
+Scrimmage counts it in no row and no run total, and only its cost is in the test's `cost_usd`, so a reader that groups summary lines by `test` and `row` must skip `run` names that start with `setup-`.
 
 A call line's `call` for a process start is `process:` and the program's base name, such as `process:uname`.
 A program with no plain name is `process:?`.
