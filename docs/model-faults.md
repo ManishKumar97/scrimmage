@@ -148,19 +148,18 @@ On a plain request the refusal is ordinary text, so an agent that only checks `r
 The reply is one call to a tool your request does not offer, with no arguments.
 Every agent has to handle it: the model asks for a tool the agent does not have, and the agent must answer with an error, not run something else or crash.
 
-The real causes are documented, and the fault catalog names each:
+The causes are documented, and the fault catalog names the page that documents each:
 
 - the tools change during a session, as the MCP specification describes with `notifications/tools/list_changed`, so a tool the model was offered is gone by the next call;
-- a deploy renames or removes a tool while the conversation history still names it;
-- the agent and its MCP server are on versions that disagree about which tools exist;
-- a tool result holds text that tells the model to call a tool, such as `delete_account`.
+- the agent and its MCP server are on versions that disagree, which the MCP specification's page on versioning says can fail in ways the server defines;
+- a tool result holds text that tells the model to call a tool, such as `delete_account`, an indirect prompt injection in OWASP's terms.
 
 #### Which tool it calls
 
 | Order | The tool | When |
 |---|---|---|
 | 1 | the one the row names with `tool = "delete_account"` | the row has `tool` |
-| 2 | a tool an earlier model request of the run offered and this one does not | the agent has dropped a tool since, as a deploy or `list_changed` does |
+| 2 | a tool an earlier model request of the run offered and this one does not | the agent has dropped a tool since, as a `list_changed` notification announces |
 | 3 | the name of the first tool this request offers, with `_v2` added | otherwise, so it reads like a rename between two deploys |
 
 The run remembers the tool names of each model request, for each call label such as `model:openai` and each conversation.
