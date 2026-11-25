@@ -615,27 +615,76 @@ def test_scanner_finds_a_canary_in_a_real_image_and_nothing_without_it(tmp_path:
         subprocess.run(["docker", "rmi", "-f", *tags.values()], capture_output=True, timeout=120)
 
 
-def _fake_run(calls: list[list[str]], out: str):
+def _fake_run(calls: list[list[str]], outs: list[str], rmi_code: int = 0):
     def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout=out, stderr="")
+        if command[:2] == ["docker", "rmi"]:
+            return subprocess.CompletedProcess(command, rmi_code, stdout="", stderr="boom")
+        return subprocess.CompletedProcess(command, 0, stdout=outs.pop(0), stderr="")
 
     return fake_run
 
 
 def test_a_run_removes_only_the_images_it_labelled(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, "b2\na1\nb2\n"))
-    assert harness.remove_run_images("abc") == ["a1", "b2"]
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, ["b2\na1\nb2\n", ""]))
+    assert harness.remove_run_images("abc") == (["a1", "b2"], [])
     assert calls[0] == ["docker", "images", "-q", "--filter", "label=scrimmage.test-run=abc"]
     assert calls[1] == ["docker", "rmi", "-f", "a1", "b2"]
 
 
 def test_a_run_with_no_images_removes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, ""))
-    assert harness.remove_run_images("abc") == []
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, [""]))
+    assert harness.remove_run_images("abc") == ([], [])
     assert len(calls) == 1
+
+
+def test_a_failed_removal_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, ["a1\n", "a1\n"], rmi_code=1))
+    ids, problems = harness.remove_run_images("abc")
+    assert ids == ["a1"]
+    assert len(problems) == 2
+    assert "exited 1" in problems[0] and "still present" in problems[1]
+
+
+@pytest.mark.docker
+@pytest.mark.slow
+def test_a_nested_pytest_leaves_the_parents_images(tmp_path: Path) -> None:
+    """A pytest a test starts inherits the parent's run id; it must not remove the parent's
+    images when it ends."""
+    harness.require_docker()
+    parent = harness.run_id()
+    dummy = f"scrimmage-dummy:{uuid.uuid4().hex[:8]}"
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\n")
+    harness.sh(
+        ["docker", "build", "-q", "-t", dummy, "--label", f"{harness.RUN_LABEL}={parent}", "."],
+        timeout=120,
+        cwd=context,
+    )
+    try:
+        tests = Path(__file__).parent
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        (nested / "conftest.py").write_text((tests / "conftest.py").read_text())
+        (nested / "test_x.py").write_text("def test_x():\n    pass\n")
+        (nested / "pytest.ini").write_text(f"[pytest]\npythonpath = {tests}\n")
+        env = {**os.environ, harness.RUN_ENV: parent}
+        done = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-n", "0", "-p", "no:cacheprovider"],
+            cwd=nested,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert harness.image_exists(dummy)
+    finally:
+        subprocess.run(["docker", "rmi", "-f", dummy], capture_output=True, timeout=120)
 
 
 def test_two_runs_tag_the_same_context_apart(monkeypatch: pytest.MonkeyPatch) -> None:

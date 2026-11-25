@@ -206,18 +206,31 @@ def tag_for(repository: str, key: str) -> str:
     return f"{repository}:{key}-{run_id()}"
 
 
-def remove_run_images(run: str) -> list[str]:
-    """Remove the images this run built, found by the label `build` put on them. Nothing else."""
+def _run_image_ids(run: str) -> list[str]:
     found = subprocess.run(
         ["docker", "images", "-q", "--filter", f"label={RUN_LABEL}={run}"],
         capture_output=True,
         text=True,
         timeout=120,
     )
-    ids = sorted(set(found.stdout.split()))
+    return sorted(set(found.stdout.split()))
+
+
+def remove_run_images(run: str) -> tuple[list[str], list[str]]:
+    """Remove the images this run built, found by the label `build` put on them. Nothing else.
+    Returns the ids found and a list of problems: a failed rmi, or ids still there after it."""
+    ids = _run_image_ids(run)
+    problems: list[str] = []
     if ids:
-        subprocess.run(["docker", "rmi", "-f", *ids], capture_output=True, timeout=300)
-    return ids
+        done = subprocess.run(
+            ["docker", "rmi", "-f", *ids], capture_output=True, text=True, timeout=300
+        )
+        if done.returncode != 0:
+            problems.append(f"docker rmi exited {done.returncode}: {done.stderr.strip()[-300:]}")
+        left = _run_image_ids(run)
+        if left:
+            problems.append(f"still present after rmi: {' '.join(left)}")
+    return ids, problems
 
 
 def image_exists(tag: str) -> bool:

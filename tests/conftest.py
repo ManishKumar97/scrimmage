@@ -241,8 +241,14 @@ def pytest_warning_recorded(warning_message: warnings.WarningMessage, nodeid: st
         strays.append(f"{first} during {nodeid}")
 
 
+# What the end-of-run image removal could not do, for the summary.
+image_problems: list[str] = []
+
+
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """A stray does not fail the run, so the run's end lists them where they are seen."""
+    for problem in image_problems:
+        terminalreporter.write_line(f"WARNING: test images left behind: {problem}", yellow=True)
     if strays:
         terminalreporter.write_line(f"{len(strays)} stray process start(s): {'; '.join(strays)}")
 
@@ -392,7 +398,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # meets it, whether the run is parallel or -n0.
     platform.platform()
     if not hasattr(config, "workerinput"):
-        os.environ.setdefault("SCRIMMAGE_TEST_RUN", uuid.uuid4().hex[:12])  # before workers start
+        # A fresh id, never an inherited one: a pytest started by a test must not own its
+        # parent's images. Set before the workers start, so they inherit it and share it.
+        os.environ["SCRIMMAGE_TEST_RUN"] = uuid.uuid4().hex[:12]
+        os.environ["SCRIMMAGE_TEST_RUN_OWNER"] = str(os.getpid())
     if sys.version_info >= (3, 12) or hasattr(config, "workerinput"):
         return
     coverage = sys.modules.get("coverage")
@@ -460,11 +469,12 @@ def pytest_runtest_makereport(
 def remove_run_images(session: pytest.Session) -> None:
     """Remove the Docker images this run built, also after a failure or an interrupt. Workers
     leave it to the controller, which outlives them."""
-    if hasattr(session.config, "workerinput") or shutil.which("docker") is None:
+    owner = os.environ.get("SCRIMMAGE_TEST_RUN_OWNER") == str(os.getpid())
+    if not owner or hasattr(session.config, "workerinput") or shutil.which("docker") is None:
         return
     from compose import harness
 
-    harness.remove_run_images(harness.run_id())
+    image_problems.extend(harness.remove_run_images(harness.run_id())[1])
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
