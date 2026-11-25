@@ -1017,11 +1017,12 @@ def rejected(request: httpx2.Request) -> httpx2.Response:
 
 
 @contextlib.contextmanager
-def model_gate(sink: Sink, *faults: config.Fault) -> Iterator[None]:
-    """A run with these faults, the two hosts as model hosts, and httpx2 gated."""
+def model_gate(sink: Sink, *faults: config.Fault, scrub: tuple[str, ...] = ()) -> Iterator[None]:
+    """A run with these faults, the two hosts as model hosts, and httpx2 gated. scrub: the
+    team's own values to remove from every line."""
     plan = Plan(
         "run-1", "t", "fault 1", (), faults, ("acme.tools:get_order",), (), 60.0,
-        model_hosts=HOSTS, budget_usd=1.0,
+        model_hosts=HOSTS, budget_usd=1.0, scrub=scrub,
     )  # fmt: skip
     run = state.RunState(plan, sink, ALLOWED, blobs=sink)
     state.install(run)
@@ -1388,3 +1389,18 @@ def test_in_a_service_run_only_the_request_that_carries_the_fault_is_marked(sink
     assert fired["action"] == "fault"
     marked = {sink.saved(x["args"])["user"]: "after_reply_fault" in x for x in answered}
     assert marked == {"x": True, "y": False}, marked
+
+
+@pytest.mark.design("record.after_reply_fault")
+@pytest.mark.parametrize(
+    "name", ["sk-" + "a1B2" * 10, "team_value_tool"], ids=["key-shaped", "team value"]
+)
+def test_a_tool_name_that_is_a_secret_is_removed_from_the_fired_fault_of_the_line(
+    sink: Sink, name: str
+) -> None:
+    fault = config.Fault("model", "unknown tool", "call 1", model=MODEL, tool=name)
+    with model_gate(sink, fault, scrub=("team_value_tool",)):
+        ask(model_client(rejected), ASKED)
+    [fired] = model_lines_of(sink)
+    shown = cast("dict[str, object]", fired["fault"])
+    assert shown["tool"] == "[secret removed]" and name not in json.dumps(fired)
