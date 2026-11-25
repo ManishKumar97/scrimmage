@@ -736,7 +736,7 @@ def unknown_tool_name(
     """The tool unknown tool calls: the one the row names; else one an earlier request of this
     conversation to this label offered and this one does not, which needs a conversation key,
     so one agent's tool is never named in another's; else the name of the first tool the model
-    could call with _v2 added, as a rename between two deploys reads. offered: every tool this
+    could call with _v2 added, an arbitrary name close to an offered one. offered: every tool this
     request offers, in any field; calls: the ones a call may name. The made-up name is cut to fit
     MAX_MADE_UP_NAME, and is never one the request offers."""
     if named is not None:

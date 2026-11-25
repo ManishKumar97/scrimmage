@@ -397,10 +397,12 @@ Also read the control-path limits under An agent inside a web service.
 - **The Structured Outputs refusal is the guide's example.** No real refusal was captured: the `refusal` text and form come from OpenAI's Structured Outputs guide, and the plain one from a forum report.
 
 - **`unknown tool` calls with no arguments.** The made-up call has an empty input, `{}` on Anthropic and `"{}"` on OpenAI, whatever the tool; the row cannot set it.
-  The default name, an offered tool's name with `_v2` added, is a guess at a rename between deploys, not a name any model sent; name the tool with `tool` when the name matters.
-  The run remembers the tool names of each model request by call label and conversation, where a conversation is the system prompt or instructions plus the first user message, so a tool dropped on one provider's call is not remembered for another's and one agent's tool is not named in another agent's conversation.
+  The default name, an offered tool's name with `_v2` added, is an arbitrary name close to an offered one that the request does not offer, not a name any model sent; name the tool with `tool` when the name matters.
+  The run remembers the tool names of each model request by call label and conversation, where a conversation is the system prompt or instructions plus the first user message, so a tool dropped on one provider's call is not remembered for another's.
+  Agents are told apart only when their system prompt, instructions, stored prompt or first user message differ; two agents that share all of them are one conversation, and a tool of one can be named in the other's reply.
+  A label keeps its newest 64 conversations.
   A Responses request that continues by `previous_response_id` or a `conversation` carries neither, so it has no dropped tool and gets the `_v2` name.
-  A multi-agent run that wants a specific tool sets `tool`.
+  A multi-agent run whose agents are not told apart that way, or that wants a specific tool, sets `tool`.
   It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then.
   If your agent sends that call back, OpenAI's real 400 on the next request is judged as the run's outcome, and its line is marked `after_reply_fault`; see [The 400 after a reply fault](model-faults.md#the-400-after-a-reply-fault).
 

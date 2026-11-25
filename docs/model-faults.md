@@ -148,10 +148,9 @@ On a plain request the refusal is ordinary text, so an agent that only checks `r
 The reply is one call to a tool your request does not offer, with no arguments.
 Every agent has to handle it: the model asks for a tool the agent does not have, and the agent must answer with an error, not run something else or crash.
 
-The causes are documented, and the fault catalog names the page that documents each:
+Two causes are documented, and the fault catalog names the page that documents each:
 
 - the tools change during a session, as the MCP specification describes with `notifications/tools/list_changed`, so a tool the model was offered is gone by the next call;
-- the agent and its MCP server are on versions that disagree, which the MCP specification's page on versioning says can fail in ways the server defines;
 - a tool result holds text that tells the model to call a tool, such as `delete_account`, an indirect prompt injection in OWASP's terms.
 
 #### Which tool it calls
@@ -160,15 +159,18 @@ The causes are documented, and the fault catalog names the page that documents e
 |---|---|---|
 | 1 | the one the row names with `tool = "delete_account"` | the row has `tool` |
 | 2 | a tool an earlier model request of the run offered and this one does not | the agent has dropped a tool since, as a `list_changed` notification announces |
-| 3 | the name of the first tool this request offers, with `_v2` added | otherwise, so it reads like a rename between two deploys |
+| 3 | the name of the first tool this request offers, with `_v2` added | otherwise: an arbitrary name close to an offered one, which the request does not offer |
 
 The run remembers the tool names of each model request, for each call label such as `model:openai` and each conversation.
-A conversation is told apart by its system prompt or instructions and its first user message, so one agent's tool is never named in another agent's reply.
+A conversation is told apart by its system prompt or instructions, its stored prompt on Responses, and its first user message.
+Two agents are told apart only when one of those differs, so a tool of one is not named in the other's reply only then.
+Two agents with the same system prompt, or none, and the same first message share a conversation, and a run of such agents sets `tool`.
 A request that carries neither, such as a Responses request that continues by `previous_response_id`, has no dropped tool and gets the third form.
-A run of several agents that wants a specific tool sets `tool`.
-In the third case a name the request already offers gets `_v2` added again until it is not one.
+In the third case a name the request already offers gets `_v2` added again until it is not one, and after nine of them `_v10`, `_v11` and on.
+The name is cut at 64 characters, the limit of OpenAI's function names, so a long tool name loses its end and keeps the suffix.
+A label keeps its newest 64 conversations and forgets the oldest, and a tool dropped in a forgotten one gets the third form.
 A row whose `tool` is a tool the request offers is a mistake in the test, and nothing is sent: a call to an offered tool is not an unknown tool.
-The `_v2` name is a guess at a rename, not a name any model sent.
+The `_v2` name is arbitrary, not a name any model sent.
 Name the tool in the row when your test is about one name, such as `tool = "multi_tool_use.parallel"`, the dotted name OpenAI's models were seen to call in forum reports from November 2023 to July 2024.
 
 ```toml
