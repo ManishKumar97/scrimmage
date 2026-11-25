@@ -46,6 +46,16 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `bad body` | `json.JSONDecodeError`, at once: a complete 200 whose JSON does not parse |
 
 Any status from 400 to 599 works.
+
+The table above names the openai library's classes.
+The anthropic library raises the same class names for 400, 401, 429 and 500.
+On a 401 the body is Anthropic's, with the error type `authentication_error`.
+Two statuses are particular to it:
+
+| Fault | What an anthropic-library agent sees |
+|---|---|
+| `status 529` | the library's `OverloadedError`, after its retries |
+| `status 413` | the library's `ContentTooLargeError`, at once: the library does not retry a 413 |
 `bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
 The library does not retry a 200, so `bad body` meets one attempt.
 On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.
@@ -62,6 +72,32 @@ Both make the real call, so it is reserved and billed as in the baseline row.
 `replace` needs `model`, or it would rewrite every model's answer, the main model's too.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
+
+## An agent that uses the anthropic library
+
+An agent written with the `anthropic` library runs under `scrimmage test` the same way.
+Its host, `api.anthropic.com`, is a model host already.
+Behind a gateway, name the gateway under `model_hosts` with `provider = "anthropic"`.
+
+The fault is the same row, with Anthropic's own status:
+
+```toml
+[[test.fault]]
+call = "model"
+do   = "status 529"
+when = "first 3"
+```
+
+Anthropic's 529 means the API is overloaded.
+The library retries it twice by itself, as it retries a 429 or a 500, so `first 3` is the row that gets the error past the library.
+Your agent then sees the library's `OverloadedError` on its first call, after exactly 3 attempts.
+A faulted attempt sends nothing to Anthropic and costs nothing.
+
+With the budget on, a call runs only if its model has a price.
+Scrimmage ships no Anthropic prices yet, so set one under `[agent.prices]`, from Anthropic's pricing page, for each model the agent calls.
+Claude Haiku 5.5 costs more for a prompt over 100,000 tokens, so give it a `long` table with `above = 100000` and the higher rates, as in [Long-context prices](configuration.md#long-context-prices).
+Until you do, a call with the budget on is refused, with the line to paste.
+The test suite runs such an agent against a fake of the Messages API, plain and streamed, and checks that no record, blob or log holds the API key.
 
 ## A bad API key, and a prompt that is too long
 
