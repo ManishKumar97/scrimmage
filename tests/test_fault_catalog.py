@@ -8,7 +8,7 @@ import pytest
 from scrimmage.config import FAULTS
 
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
-ORIGINS = {"public incident", "trace", "provider docs"}
+ORIGINS = {"public incident", "trace", "provider docs", "documented mechanism"}
 
 
 def problems(catalog: dict[str, object]) -> list[str]:
@@ -44,6 +44,7 @@ def test_the_catalog_is_valid() -> None:
     ("entry", "problem"),
     [
         ('origin = "guess"\nsource = "x"', "origin must be one of"),
+        ('origin = "imagined"\nsource = "x"', "origin must be one of"),
         ('origin = "trace"\nsource = " "', "source is empty"),
         ('origin = "trace"', "needs exactly name, origin and source"),
     ],
@@ -51,6 +52,21 @@ def test_the_catalog_is_valid() -> None:
 def test_a_fault_without_a_real_origin_is_rejected(entry: str, problem: str) -> None:
     catalog = tomllib.loads(f'[[fault]]\nname = "timeout"\n{entry}\n')
     assert any(problem in p for p in problems(catalog))
+
+
+@pytest.mark.design("catalog.origin")
+@pytest.mark.parametrize("origin", sorted(ORIGINS))
+def test_each_origin_of_the_vocabulary_is_accepted(origin: str) -> None:
+    catalog = tomllib.loads(f'[[fault]]\nname = "timeout"\norigin = "{origin}"\nsource = "x"\n')
+    assert problems(catalog) == []
+
+
+@pytest.mark.design("catalog.origin")
+def test_the_catalogs_header_lists_the_whole_vocabulary() -> None:
+    header = "".join(
+        line for line in CATALOG.read_text().splitlines(keepends=True) if line[0] == "#"
+    )
+    assert all(f'"{origin}"' in header for origin in ORIGINS), sorted(ORIGINS)
 
 
 def test_a_misspelled_table_and_a_duplicate_are_rejected() -> None:

@@ -3,9 +3,14 @@
 #
 # [[fault]]
 # name = "timeout"                 # the fault word a team writes in scrimmage.toml
-# origin = "public incident"       # "public incident", "trace" or "provider docs"
+# origin = "public incident"       # "public incident", "trace", "provider docs" or
+#                                  # "documented mechanism"
 # source = "https://..."           # the incident's public URL, or a description of
-#                                  # the trace with nothing private in it
+#                                  # the trace with nothing private in it, or the
+#                                  # documented mechanism and where it is documented
+#
+# "documented mechanism" is a failure that a documented feature of a provider, a protocol or
+# a deployment produces, whether or not one public report of it exists.
 
 [[fault]]
 name = "timeout"
@@ -79,8 +84,8 @@ source = "A real reply from OpenAI's Chat Completions API, 18 November 2026: a g
 
 [[fault]]
 name = "unknown tool"
-origin = "public incident"
-source = "https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653 (OpenAI developer forum, 9 November 2023: the model called multi_tool_use.parallel, a tool the agent never offered) and https://community.openai.com/t/gpt-4-0125-preview-hallucinating-tool-calls/609610 (1 February 2024, gpt-4-0125-preview: the same call, and OpenAI then refused the next request because the name does not match its tool name pattern)"
+origin = "documented mechanism"
+source = "A model asks for a tool the agent does not have, which every agent must handle as a dispatch failure. Four documented causes make it happen. (1) Tools change during a session: the MCP specification, https://modelcontextprotocol.io/specification/2026-07-28/server/tools (section List Changed Notification), has a server that declared the listChanged capability send notifications/tools/list_changed when its list of tools changes, so a tool the model was offered can be gone by the next call. (2) A deploy renames or removes a tool while the conversation history still names it, so the model calls the old name from its history. (3) Version skew between an agent and its MCP server, so the two disagree about which tools exist. (4) Prompt injection in a tool result that names a tool, so the model calls a tool no one offered. The same MCP page, section Error Handling, lists Unknown tool as a protocol error with the message \"Unknown tool: invalid_tool_name\", so a server that receives such a call is documented to refuse it."
 
 [[fault]]
 name = "bad tool args"
