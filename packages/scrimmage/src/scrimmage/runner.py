@@ -70,6 +70,7 @@ from scrimmage.state import COMMAND_CAP, now_iso
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+PROBE_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")  # a client builds only with a key set
 KILL_GRACE_S = 5.0
 GROUP_POLL_S = 0.01
 KILLED_S = 1.0  # how long a group SIGKILLed may take to be gone
@@ -410,8 +411,11 @@ class Runner:
         )
         if agent.children:
             env["SCRIMMAGE_CHILDREN"] = "1"
-        if self.probe:  # nothing reaches a model, so a key is needed only to build the client
-            env.setdefault("OPENAI_API_KEY", "scrimmage-probe-sends-no-request")
+        # Nothing reaches a model, so a key is needed only to build the client. A key the agent
+        # already has picks its client, so a placeholder is set only when it has none.
+        if self.probe and not any(env.get(name) for name in PROBE_KEYS):
+            for name in PROBE_KEYS:
+                env[name] = "scrimmage-probe-sends-no-request"
         return env
 
     def program(self, question: str) -> list[str]:

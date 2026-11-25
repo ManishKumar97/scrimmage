@@ -40,13 +40,20 @@ FILE_LIMIT = 5000  # .py files read; a larger tree is cut here, in a fixed order
 SHOWN_ENTRIES = 5  # other entry points the draft names in comments
 WIDTH = len("model_hosts")  # the settings' values start in one column
 QUESTION_NAMES = ("question", "query", "prompt", "message", "text", "input", "user_input")
-LIBRARIES = ("openai", "langchain", "langgraph", "mcp", "httpx")  # what an agent imports
+LIBRARIES = ("openai", "anthropic", "langchain", "langgraph", "mcp", "httpx")  # what it imports
+MODEL_LIBRARIES = ("openai", "anthropic")  # those whose client speaks to a model provider
 FRAMEWORKS = ("langchain", "langgraph")  # their tools reach a gate with no tools list
 WEB_SERVICES = ("fastapi", "flask", "starlette")
 TOOL_DECORATORS = ("tool", "is_tool", "function_tool")
-CLIENTS = ("OpenAI", "AsyncOpenAI", "AzureOpenAI")
-CLIENT_PROVIDER = "openai"  # the provider whose API those client classes speak
-MODEL_CLIENTS = (*CLIENTS, "ChatOpenAI", "AzureChatOpenAI")  # what building an agent's client calls
+# Each client class, and the provider whose API it speaks.
+CLIENTS = {
+    "OpenAI": "openai",
+    "AsyncOpenAI": "openai",
+    "AzureOpenAI": "openai",
+    "Anthropic": "anthropic",
+    "AsyncAnthropic": "anthropic",
+}
+MODEL_CLIENTS = (*CLIENTS, "ChatOpenAI", "AzureChatOpenAI", "ChatAnthropic")  # what building calls
 NAME_ARGUMENT_DECORATORS = ("tool",)  # LangChain's @tool("name"); elsewhere text is a description
 READ_PREFIXES = ("get_", "list_", "search_", "find_", "lookup_", "read_", "check_", "fetch_")
 FOUND_BY = ("probe", "static")  # how a tool or a model host was found
@@ -113,7 +120,7 @@ class Reading:
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
     candidates: list[Candidate] = field(default_factory=list[Candidate])
-    hosts: set[str] = field(default_factory=set[str])
+    hosts: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # host, provider
     web_service: bool = False
 
 
@@ -506,9 +513,11 @@ def text_of(node: ast.expr | None) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
-def client_host(node: ast.Call) -> str | None:
-    """The host in OpenAI(base_url="...") when the code writes it as text."""
-    if decorator_target(node) not in CLIENTS:
+def client_host(node: ast.Call) -> tuple[str, str] | None:
+    """The host and its provider in OpenAI(base_url="...") when the code writes the host as
+    text. A provider's own host is none: it needs no line."""
+    provider = CLIENTS.get(decorator_target(node))
+    if provider is None:
         return None
     url = next((text_of(k.value) for k in node.keywords if k.arg == "base_url"), None)
     if url is None:
@@ -520,7 +529,8 @@ def client_host(node: ast.Call) -> str | None:
         return None
     if parts.scheme not in ("http", "https") or not host or ":" in host:
         return None
-    return None if built_in().is_built_in_host(host.lower()) else host.lower()
+    host = host.lower()
+    return None if host in built_in().get(provider).hosts else (host, provider)
 
 
 def is_script(tree: ast.Module, imports: set[str]) -> bool:
@@ -580,7 +590,9 @@ def function_candidate(
         return None
     if any(default is None for default in arguments.kw_defaults):
         return None  # a required keyword: the starter passes the question alone
-    library = next((name for name in LIBRARIES if has_library(imports, name)), None)
+    found = [name for name in LIBRARIES if has_library(imports, name)]
+    models = [name for name in found if name in MODEL_LIBRARIES]
+    library = " and ".join(models if len(models) > 1 else found[:1])  # both clients are named
     named = f"one argument, named {required[0].arg}"
     why = f"{named}, in a module that imports {library}" if library else named
     client = builds_client
@@ -593,7 +605,7 @@ def function_candidate(
         module,
         node.name,
     )
-    return Candidate("function", f"{module}:{node.name}", why, 1 if library else 3, order)
+    return Candidate("function", f"{module}:{node.name}", why, 1 if found else 3, order)
 
 
 def entry_points(reading: Reading) -> list[Candidate]:
@@ -665,13 +677,13 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
     """The hosts to name in the draft. A provider's own host needs no line. A host the code
     names for a client class has that client's provider; one the probe stopped at has the
     provider whose path the request was."""
-    hosts = {host: (CLIENT_PROVIDER, "static") for host in reading.hosts}
+    hosts = {pair: "static" for pair in reading.hosts}
     request = cast("dict[str, str] | None", (result.notice or {}).get("model_request"))
-    if request is not None and not built_in().is_built_in_host(request["host"]):
-        hosts[request["host"]] = (request["provider"], "probe")
+    if request is not None and request["host"] not in built_in().get(request["provider"]).hosts:
+        hosts[(request["host"], request["provider"])] = "probe"
     return [
         {"host": h, "provider": provider, "found_by": found_by}
-        for h, (provider, found_by) in sorted(hosts.items())
+        for (h, provider), found_by in sorted(hosts.items())
     ]
 
 
