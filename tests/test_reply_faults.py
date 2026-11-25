@@ -1004,6 +1004,49 @@ def test_a_tool_dropped_in_another_conversation_is_never_named_but_one_dropped_i
 
 
 @pytest.mark.design("fault.unknown_tool_name")
+def test_two_responses_agents_on_stored_prompts_with_one_input_are_two_conversations(
+    gated: None, loopback: Loopback
+) -> None:
+    """A stored prompt is the agent's instructions, kept at OpenAI: two prompt ids with the same
+    input are two agents, and one's tool is not the other's unknown tool."""
+    gate_plan(plan_naming(None))
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    refund = {"id": "pmpt_refund", "version": "2"}
+    triage = {"id": "pmpt_triage", "version": "1"}
+    responses_api(loopback, True, tools=RESPONSE_SPECS, prompt=refund)
+    [other] = responses_api(loopback, True, tools=RESPONSE_SPECS[1:], prompt=triage).output
+    assert other.name == "get_stock_v2", "get_order is the refund prompt's tool"
+    [same] = responses_api(loopback, True, tools=RESPONSE_SPECS[1:], prompt=refund).output
+    assert same.name == "get_order"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_the_conversation_key_is_the_same_however_a_turn_writes_its_first_message() -> None:
+    from scrimmage.providers.impl.wire import wrap_fields
+
+    def key(path: str, **fields: Any) -> str | None:
+        return openai_table.conversation_key(path, wrap_fields(fields))
+
+    chat = "/v1/chat/completions"
+    as_text = [{"role": "user", "content": "hi"}]
+    as_parts = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert key(chat, messages=as_text) == key(chat, messages=as_parts) is not None
+    with_system = [{"role": "system", "content": "be brief"}, *as_text]
+    spelled = [{"role": "system", "content": [{"type": "text", "text": "be brief"}]}, *as_parts]
+    assert key(chat, messages=with_system) == key(chat, messages=spelled)
+    assert key(chat, messages=with_system) != key(chat, messages=as_text)
+    responses = "/v1/responses"
+    typed = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+    easy = [{"role": "user", "content": "hi"}]
+    assert key(responses, input="hi") == key(responses, input=typed) == key(responses, input=easy)
+    assert key(responses, input="hi") == key(chat, messages=as_text), "one agent on two APIs"
+    assert key(responses, input="hi", prompt={"id": "a"}) != key(responses, input="hi")
+    assert key(responses, input="hi", prompt={"id": "a"}) != key(
+        responses, input="hi", prompt={"id": "b"}
+    )
+
+
+@pytest.mark.design("fault.unknown_tool_name")
 def test_a_responses_request_that_continues_by_id_has_no_key_so_the_name_is_the_v2_one(
     gated: None, loopback: Loopback
 ) -> None:

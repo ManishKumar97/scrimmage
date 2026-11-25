@@ -48,3 +48,26 @@ def normalised(value: object) -> object:
     if isinstance(value, list):
         return [normalised(item) for item in cast("list[object]", value)]
     return value
+
+
+TEXT_PARTS = ("text", "input_text")
+
+
+def keyed(value: object) -> object:
+    """A message as it is compared to tell one conversation from another, when its turns are
+    written in different forms: no cache_control, which moves between turns; a string content
+    and the one text part that says the same alike; an input_text part and a text part alike; and
+    a type of message left out. Then as normalised."""
+    if isinstance(value, dict):
+        held = {str(k): v for k, v in cast("dict[object, object]", value).items()}
+        held.pop("cache_control", None)
+        if held.get("type") == "message":
+            held.pop("type")
+        if held.get("type") in TEXT_PARTS:
+            held["type"] = "text"
+        if isinstance(held.get("content"), str):
+            held["content"] = [{"type": "text", "text": held["content"]}]
+        return normalised({k: keyed(v) for k, v in held.items()})
+    if isinstance(value, list):
+        return normalised([keyed(item) for item in cast("list[object]", value)])
+    return value

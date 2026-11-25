@@ -345,6 +345,27 @@ def test_an_unknown_tool_reply_names_no_tool_dropped_in_another_conversation() -
     assert name("You refund.", [STOCK]) == "get_order", "the refund agent's own dropped tool"
 
 
+def test_the_conversation_key_ignores_where_cache_control_sits_and_how_text_is_written() -> None:
+    from scrimmage.providers.impl.wire import wrap_fields
+
+    def key(**fields: Any) -> str | None:
+        return provider_anthropic.conversation_key("/v1/messages", wrap_fields(fields))
+
+    plain = [{"role": "user", "content": "hi"}]
+    cached = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
+    parts = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert key(messages=plain) == key(messages=cached) == key(messages=parts) is not None
+    marked = [{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}]
+    assert key(system="be brief", messages=plain) == key(system=marked, messages=cached)
+    assert key(system="be brief", messages=plain) != key(messages=plain)
+    assert key(messages=plain) != key(messages=[{"role": "user", "content": "other"}])
+
+
 def test_an_unknown_tool_reply_never_calls_a_name_the_request_offers() -> None:
     twice = {**ORDER, "name": "get_order_v2"}
     assert unknown_reply(ORDER, twice)[3].content[0].name == "get_order_v2_v2"

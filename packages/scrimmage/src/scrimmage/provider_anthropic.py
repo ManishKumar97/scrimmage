@@ -24,7 +24,7 @@ from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
-from scrimmage.providers.impl.marks import among, digest, normalised, running
+from scrimmage.providers.impl.marks import among, digest, keyed, normalised, running
 from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.anthropic.com",)
@@ -328,7 +328,7 @@ def conversation_key(path: str, wire: Fields) -> str | None:
     first = next((m for m in _list(fields.get("messages")) if _obj(m).get("role") == "user"), None)
     if first is None:
         return None
-    return digest([normalised(system), normalised(_whole(first))])[1].hex()
+    return digest([keyed(system), keyed(first)])[1].hex()
 
 
 def tool_call_tools(path: str, wire: Fields) -> list[str]:

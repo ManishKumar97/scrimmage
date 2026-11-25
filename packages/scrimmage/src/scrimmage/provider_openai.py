@@ -24,7 +24,7 @@ from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
-from scrimmage.providers.impl.marks import among, digest, normalised, running
+from scrimmage.providers.impl.marks import among, digest, keyed, normalised, running
 from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.openai.com",)
@@ -547,9 +547,10 @@ def references(fields: dict[str, object]) -> list[str]:
 
 
 def conversation_key(path: str, wire: Fields) -> str | None:
-    """The system and developer messages, or a Responses request's instructions, and the first
-    user message: what every turn of one conversation sends again. None when there is no user
-    message, or a Responses request continues by id, with previous_response_id or a
+    """The system and developer messages, or a Responses request's instructions and stored
+    prompt, and the first user message: what every turn of one conversation sends again. They
+    are compared in one form, whether a content is a string or a text part. None when there is
+    no user message, or a Responses request continues by id, with previous_response_id or a
     conversation, so it carries neither."""
     fields = fields_dict(wire)
     if is_responses(path):
@@ -557,7 +558,9 @@ def conversation_key(path: str, wire: Fields) -> str | None:
             return None
         items = fields.get("input")
         messages = [{"role": "user", "content": items}] if isinstance(items, str) else _list(items)
-        lead: list[object] = [] if fields.get("instructions") is None else [fields["instructions"]]
+        lead: list[object] = [fields["instructions"]] if fields.get("instructions") else []
+        if fields.get("prompt") is not None:
+            lead.append({"prompt": fields["prompt"]})
     else:
         messages = _list(fields.get("messages"))
         lead = []
@@ -565,7 +568,7 @@ def conversation_key(path: str, wire: Fields) -> str | None:
     first = next((m for m in messages if _obj(m).get("role") == "user"), None)
     if first is None:
         return None
-    return digest([normalised(lead), normalised(first)])[1].hex()
+    return digest([keyed(lead), keyed(first)])[1].hex()
 
 
 def tool_call_tools(path: str, wire: Fields) -> list[str]:
