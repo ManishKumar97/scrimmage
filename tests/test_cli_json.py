@@ -721,6 +721,7 @@ def test_the_json_rows_and_lists_say_what_the_table_says(
         "find": None,
         "retry_after": None,
         "form": None,
+        "tool": None,
     }
 
 
@@ -805,6 +806,7 @@ def test_a_fault_row_names_its_method_path_and_raises() -> None:
         "find": None,
         "retry_after": None,
         "form": None,
+        "tool": None,
     }
 
 

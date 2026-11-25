@@ -335,7 +335,8 @@
                 "text",
                 "find",
                 "retry_after",
-                "form"
+                "form",
+                "tool"
               ],
               "properties": {
                 "call": {
@@ -426,6 +427,13 @@
                     "null"
                   ],
                   "description": "How a refuse fault declines, \"plain\" or \"classifier\", or null when the row names no form."
+                },
+                "tool": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The tool name an unknown tool fault calls, or null when the row names none and Scrimmage picks one."
                 }
               }
             }

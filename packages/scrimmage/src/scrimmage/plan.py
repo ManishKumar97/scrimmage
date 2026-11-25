@@ -17,6 +17,7 @@ from scrimmage.config import (
     Test,
     form_problem,
     retry_after_problem,
+    tool_problem,
     word_problem,
 )
 from scrimmage.judge import Rules
@@ -39,6 +40,7 @@ PLAN_FAULT_KEYS = frozenset(
         "find",
         "retry_after",
         "form",
+        "tool",
     }
 )
 
@@ -361,6 +363,7 @@ def fault_json(fault: Fault) -> dict[str, object]:
         ("find", fault.find),
         ("retry_after", fault.retry_after),
         ("form", fault.form),
+        ("tool", fault.tool),
     ):
         if value is not None:
             doc[key] = value
@@ -383,6 +386,9 @@ def fault_from(doc: dict[str, object]) -> Fault:
     form = doc.get("form")
     if form is not None and (problem := form_problem(do, form)):
         raise ValueError(f"plan fault form: {problem}")
+    tool = doc.get("tool")
+    if tool is not None and (problem := tool_problem(do, tool)):
+        raise ValueError(f"plan fault tool: {problem}")
     return Fault(
         string(doc, "call"),
         do,
@@ -395,6 +401,7 @@ def fault_from(doc: dict[str, object]) -> Fault:
         find=optional(doc, "find"),
         retry_after=cast(int | None, retry),
         form=cast(str | None, form),
+        tool=cast(str | None, tool),
     )
 
 

@@ -80,7 +80,7 @@ WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", 
 # text and find belong to append and replace. On a model call only replace takes them.
 CHANGE_KEYS = {"text", "find"}
 FAULT_KEYS = {"call", "do", "when", "raises", *CHANGE_KEYS, *RULE_KEYS}
-MODEL_FAULT_KEYS = {*FAULT_KEYS, "model", "retry_after", "form"}
+MODEL_FAULT_KEYS = {*FAULT_KEYS, "model", "retry_after", "form", "tool"}
 MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
 MCP_FAULT_KEYS = {"call", "do", "when", *CHANGE_KEYS, *RULE_KEYS}
 WEB_FAULT_KEYS = {
@@ -118,6 +118,10 @@ MAX_SLOW_S = 600.0
 RETRY_AFTER = ("status 429", "status 503")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
+# The name unknown tool calls, when a row names it: the MCP specification's rule for a tool
+# name, which SHOULD be 1 to 128 of letters, digits, underscore, hyphen and dot.
+MAX_TOOL_NAME = 128
+TOOL_NAME_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
 MODEL_KEYS = {"host", "provider"}
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
@@ -394,6 +398,7 @@ class Fault:
     find: str | None = None  # replace: the text it puts text in place of
     retry_after: int | None = None  # status 429 and 503: the reply's Retry-After, in seconds
     form: str | None = None  # refuse: "plain", the default, or "classifier"
+    tool: str | None = None  # unknown tool: the name the made-up call asks for
 
     @property
     def target(self) -> str:
@@ -1603,9 +1608,12 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     form = table.get("form")
     if "form" in table and (problem := form_problem(do, form)):
         raise ConfigError(f"{where} form: {problem}; see {DOCS}")
+    tool = table.get("tool")
+    if "tool" in table and (problem := tool_problem(do, tool)):
+        raise ConfigError(f"{where} tool: {problem}; see {DOCS}")
     return Fault(
         call, do, when, raises, method, path, expect, forbid, rate, model, injected, find, wait,
-        cast(str | None, form),
+        cast(str | None, form), cast(str | None, tool),
     )  # fmt: skip
 
 
@@ -1641,6 +1649,24 @@ def form_problem(do: str, value: object) -> str | None:
         return f"expected {named}, got {redact(repr(value))}"
     if do != "refuse":
         return f'works only with do = "refuse", not with {do!r}'
+    return None
+
+
+def tool_problem(do: str, value: object) -> str | None:
+    """Why a tool is not a name unknown tool can call; None when it is.
+
+    The file's reader and the SDK's plan reader both ask this, so the two cannot drift."""
+    if (
+        not isinstance(value, str)
+        or not 0 < len(value) <= MAX_TOOL_NAME
+        or TOOL_NAME_CHARS.fullmatch(value) is None
+    ):
+        return (
+            f"expected a tool name of 1 to {MAX_TOOL_NAME} letters, digits, underscores, "
+            f"dashes or dots, as MCP allows, got {redact(repr(value))}"
+        )
+    if do != "unknown tool":
+        return f'works only with do = "unknown tool", not with {do!r}'
     return None
 
 
