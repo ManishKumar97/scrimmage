@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import warnings
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -390,6 +391,8 @@ def pytest_configure(config: pytest.Config) -> None:
     # platform starts `uname -p` on its first use. Once here, no test's no-process teardown
     # meets it, whether the run is parallel or -n0.
     platform.platform()
+    if not hasattr(config, "workerinput"):
+        os.environ.setdefault("SCRIMMAGE_TEST_RUN", uuid.uuid4().hex[:12])  # before workers start
     if sys.version_info >= (3, 12) or hasattr(config, "workerinput"):
         return
     coverage = sys.modules.get("coverage")
@@ -454,6 +457,16 @@ def pytest_runtest_makereport(
     return report
 
 
+def remove_run_images(session: pytest.Session) -> None:
+    """Remove the Docker images this run built, also after a failure or an interrupt. Workers
+    leave it to the controller, which outlives them."""
+    if hasattr(session.config, "workerinput") or shutil.which("docker") is None:
+        return
+    from compose import harness
+
+    harness.remove_run_images(harness.run_id())
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """In CI an unexpected skip fails the run: a safety check that did not run proves nothing.
 
@@ -461,6 +474,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     what skip_is_expected names. Under xdist only the controller has a terminal reporter,
     and it gets every worker's skips, so the check runs there and a worker does nothing.
     """
+    remove_run_images(session)
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
     # A collection report, from a skip at module level, has no user_properties.

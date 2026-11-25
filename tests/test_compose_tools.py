@@ -16,7 +16,7 @@ from typing import cast
 
 import pytest
 
-from compose import check_junit
+from compose import check_junit, harness
 from compose.harness import egress_problems
 from compose.image_scan import PEM_PRIVATE_KEY, UnreadableLayer, scan_image
 
@@ -613,3 +613,34 @@ def test_scanner_finds_a_canary_in_a_real_image_and_nothing_without_it(tmp_path:
         assert scan_image(tmp_path / "without.tar", [canary]) == []
     finally:
         subprocess.run(["docker", "rmi", "-f", *tags.values()], capture_output=True, timeout=120)
+
+
+def _fake_run(calls: list[list[str]], out: str):
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=out, stderr="")
+
+    return fake_run
+
+
+def test_a_run_removes_only_the_images_it_labelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, "b2\na1\nb2\n"))
+    assert harness.remove_run_images("abc") == ["a1", "b2"]
+    assert calls[0] == ["docker", "images", "-q", "--filter", "label=scrimmage.test-run=abc"]
+    assert calls[1] == ["docker", "rmi", "-f", "a1", "b2"]
+
+
+def test_a_run_with_no_images_removes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run(calls, ""))
+    assert harness.remove_run_images("abc") == []
+    assert len(calls) == 1
+
+
+def test_two_runs_tag_the_same_context_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(harness.RUN_ENV, "one")
+    first = harness.tag_for("scrimmage-runner", "k")
+    monkeypatch.setenv(harness.RUN_ENV, "two")
+    assert first == "scrimmage-runner:k-one"
+    assert harness.tag_for("scrimmage-runner", "k") == "scrimmage-runner:k-two"

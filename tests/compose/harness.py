@@ -190,14 +190,45 @@ def context_hash(context: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+RUN_ENV = "SCRIMMAGE_TEST_RUN"
+RUN_LABEL = "scrimmage.test-run"
+
+
+def run_id() -> str:
+    """Names this test run. The controller sets it before any worker starts, so every worker
+    of one run shares it and two runs on one machine never do. Outside pytest it is made once."""
+    return os.environ.setdefault(RUN_ENV, uuid.uuid4().hex[:12])
+
+
+def tag_for(repository: str, key: str) -> str:
+    """The run's own tag for an image. A run never reuses another run's image, so one run's
+    cleanup cannot take an image from under a run still using it."""
+    return f"{repository}:{key}-{run_id()}"
+
+
+def remove_run_images(run: str) -> list[str]:
+    """Remove the images this run built, found by the label `build` put on them. Nothing else."""
+    found = subprocess.run(
+        ["docker", "images", "-q", "--filter", f"label={RUN_LABEL}={run}"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    ids = sorted(set(found.stdout.split()))
+    if ids:
+        subprocess.run(["docker", "rmi", "-f", *ids], capture_output=True, timeout=300)
+    return ids
+
+
 def image_exists(tag: str) -> bool:
     return subprocess.run(["docker", "image", "inspect", tag], capture_output=True).returncode == 0
 
 
 def build(context: Path, tag: str, *args: str) -> None:
     """docker build with no network: everything it installs was staged first."""
-    command = ["docker", "build", "-q", "--network", "none", "-t", tag, *args, str(context)]
-    sh(command, timeout=BUILD_TIMEOUT_S)
+    label = f"{RUN_LABEL}={run_id()}"
+    command = ["docker", "build", "-q", "--network", "none", "-t", tag, "--label", label]
+    sh([*command, *args, str(context)], timeout=BUILD_TIMEOUT_S)
 
 
 @dataclass(frozen=True)
@@ -215,8 +246,8 @@ def ensure_images() -> Images:
         for path in (HERE / "egress.Dockerfile", *sorted(HOOK.glob("*.p*"))):
             hook.update(path.read_bytes())  # the .pth and the .py, not a stale __pycache__
         images = Images(
-            f"scrimmage-compose-service:{key}",
-            f"scrimmage-compose-egress:{hook.hexdigest()[:16]}",
+            tag_for("scrimmage-compose-service", key),
+            tag_for("scrimmage-compose-egress", hook.hexdigest()[:16]),
             key,
         )
         written: list[Path] = []
