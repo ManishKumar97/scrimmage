@@ -10,6 +10,7 @@ import dataclasses
 import errno
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -1377,7 +1378,45 @@ def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ())
     # The provider's answer to a request the agent built from a faulted reply: its result.
     if status == 400 and line.get("after_reply_fault") is True and reply_fault_before(line, model):
         return None
-    return f"{line.get('call')} returned {status}" if status >= 400 else None
+    if status < 400:
+        return None
+    said = provider_message(line)
+    return f"{line.get('call')} returned {status}" + (f" ({said})" if said else "")
+
+
+ERROR_MESSAGE = re.compile(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)')
+ERROR_SHOWN = 200  # characters of a provider's error message the report line keeps
+
+
+def provider_message(line: dict[str, object]) -> str:
+    """The provider's own words for a failed call, from the line's reply preview, which was
+    redacted when it was kept. The JSON error's message when there is one, else the text."""
+    result = line.get("result")
+    preview = cast(dict[str, object], result).get("preview") if isinstance(result, dict) else None
+    if not isinstance(preview, str):
+        return ""
+    text = preview
+    doc: object = None
+    try:
+        doc = json.loads(preview)
+    except ValueError:  # the preview is cut, so look for the message inside the cut JSON
+        cut = ERROR_MESSAGE.search(preview)
+        if cut is not None:
+            text = cut.group(1)
+            with contextlib.suppress(ValueError):
+                text = str(json.loads(f'"{text}"'))
+    found: object = None
+    if isinstance(doc, dict):
+        body = cast(dict[str, object], doc)
+        found = body.get("error", body)
+    if isinstance(found, dict):
+        message = cast(dict[str, object], found).get("message")
+        if isinstance(message, str):
+            text = message
+    elif isinstance(found, str):
+        text = found
+    text = " ".join(text.split())
+    return text if len(text) <= ERROR_SHOWN else text[: ERROR_SHOWN - 3] + "..."
 
 
 def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object]]) -> bool:

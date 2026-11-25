@@ -728,7 +728,8 @@ def test_a_400_with_no_reply_fault_before_it_is_still_infrastructure(
     said = result.out + result.err
     assert result.code == 3, said
     assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}
-    assert "model:openai returned 400, not injected" in said, said
+    assert "model:openai returned 400 (Invalid 'messages[1].tool_calls[0].function.name'" in said
+    assert "), not injected" in said, said
     model = model_lines(result, "baseline")
     assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
     assert not any("after_reply_fault" in x for x in model), model
@@ -750,7 +751,8 @@ def test_a_500_after_a_reply_fault_is_still_infrastructure(
     result = project.test(fake_openai([], by_model={"gpt-4o-mini": rule}))
     said = result.out + result.err
     assert result.code == 3, said
-    assert "model:openai returned 500, not injected" in said, said
+    assert "model:openai returned 500 (The server had an error while" in said, said
+    assert "Sorry about that!), not injected" in said, said
     model = model_lines(result, "fault 1")
     assert [(x["action"], x.get("status")) for x in model] == [("fault", 200), ("real", 500)]
     assert "after_reply_fault" not in model[1], model[1]
@@ -790,3 +792,26 @@ def test_a_marked_400_with_no_reply_fault_line_before_it_is_still_infrastructure
     assert runner_module.real_error(marked, lines) == "model:openai returned 400", why
     fired = [line_at(1, "fault", 200, "unknown tool"), marked]
     assert runner_module.real_error(marked, fired) is None
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    ("preview", "said"),
+    [
+        ('{"error": {"message": "No such model", "type": "x"}}', " (No such model)"),
+        ('{"error": {"message": "cut mid wor', " (cut mid wor)"),
+        ("plain\ntext  body", " (plain text body)"),
+        ('{"error": {"message": "' + "a" * 300 + '"}}', f" ({'a' * 197}...)"),
+        ("", ""),
+    ],
+)
+def test_a_failed_calls_line_carries_the_providers_message_cut_to_200_characters(
+    preview: str, said: str
+) -> None:
+    line: dict[str, object] = {
+        "action": "real",
+        "call": "model:openai",
+        "status": 404,
+        "result": {"preview": preview},
+    }
+    assert runner_module.real_error(line) == "model:openai returned 404" + said
