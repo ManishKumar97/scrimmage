@@ -1,9 +1,10 @@
+import copy
 import dataclasses
 import json
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -1125,7 +1126,32 @@ def test_the_forms_of_refuse_are_the_providers_and_both_schemas_list_the_same() 
         tuple(plan_schema["properties"]["faults"]["items"]["properties"]["form"]["enum"]) == forms
     )
     cli = json.loads((SCHEMAS / "cli.v1.json").read_text())
-    assert "form" in json.dumps(cli), "the --json fault object has the key"
+    assert any(
+        "form" in found["properties"] and "find" in found["properties"]
+        for found in schema_objects(cli)
+    ), "the --json fault object has the key"
+    record = json.loads((SCHEMAS / "record.v1.json").read_text())
+    (held,) = [
+        found["properties"]["form"]
+        for found in schema_objects(record)
+        if "form" in found["properties"] and "retry_after" in found["properties"]
+    ]
+    assert tuple(held["enum"]) == forms
+
+
+def schema_objects(node: object) -> list[dict[str, Any]]:
+    """Every schema object in a JSON schema that lists properties."""
+    found: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        held = cast("dict[str, Any]", node)
+        if isinstance(held.get("properties"), dict):
+            found.append(held)
+        for value in held.values():
+            found += schema_objects(value)
+    elif isinstance(node, list):
+        for value in cast("list[object]", node):
+            found += schema_objects(value)
+    return found
 
 
 @pytest.mark.design("config.refuse_form")
@@ -1137,15 +1163,17 @@ def test_a_plan_that_carries_a_form_is_valid_against_the_plan_schema_and_only_th
     assert doc["faults"][0]["form"] == "classifier"
     check.validate(doc)
     # The schema must know the key: with it removed the same plan is refused.
-    props = schema["properties"]["faults"]["items"]["properties"]
-    del props["form"]
-    assert list(jsonschema.Draft202012Validator(schema).iter_errors(doc)), "form is in the schema"
-    # And it must hold the vocabulary and the word: another form, or another fault, is refused.
-    for fault_doc in (
-        {**doc["faults"][0], "form": "loud"},
-        {**doc["faults"][0], "do": "garble"},
+    stripped = copy.deepcopy(schema)  # the check above keeps the whole schema
+    del stripped["properties"]["faults"]["items"]["properties"]["form"]
+    assert list(jsonschema.Draft202012Validator(stripped).iter_errors(doc)), "form is in it"
+    # And it must hold the vocabulary and the word: another form, or another fault, is refused,
+    # by the schema with form in it, for the reason each breaks.
+    for fault_doc, why in (
+        ({**doc["faults"][0], "form": "loud"}, "'loud' is not one of"),
+        ({**doc["faults"][0], "do": "garble"}, "'refuse' was expected"),
     ):
-        assert list(check.iter_errors({**doc, "faults": [fault_doc]})), fault_doc
+        said = [error.message for error in check.iter_errors({**doc, "faults": [fault_doc]})]
+        assert any(why in message for message in said), (fault_doc, said)
 
 
 @pytest.mark.design("config.reply_fault_billed_warning")
