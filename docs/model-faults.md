@@ -93,8 +93,9 @@ The library retries it twice by itself, as it retries a 429 or a 500, so `first 
 Your agent then sees the library's `OverloadedError` on its first call, after exactly 3 attempts.
 A faulted attempt sends nothing to Anthropic and costs nothing.
 
-A call is budgeted only if its model has a price.
+With the budget on, a call runs only if its model has a price.
 Scrimmage ships no Anthropic prices yet, so set one under `[agent.prices]`, from Anthropic's pricing page, for each model the agent calls.
+Claude Haiku 5.5 costs more for a prompt over 100,000 tokens, so give it a `long` table with `above = 100000` and the higher rates, as in [Long-context prices](configuration.md#long-context-prices).
 Until you do, a call with the budget on is refused, with the line to paste.
 The test suite runs such an agent against a fake of the Messages API, plain and streamed, and checks that no record, blob or log holds the API key.
 
