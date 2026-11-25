@@ -73,7 +73,7 @@ class Anthropic:
     display_name = "Anthropic"
     hosts = table.HOSTS
     fees = (table.SEARCH,)
-    # Scrimmage ships no Anthropic prices yet, so the line names where they are and no number.
+    # A model with no shipped row gets this line: it names the page the rates are on and no number.
     price_example = (
         "{input = ..., output = ...} (dollars per million tokens, from "
         "https://platform.claude.com/docs/en/about-claude/pricing)"

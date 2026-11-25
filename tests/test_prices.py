@@ -578,10 +578,12 @@ def test_check_names_each_prices_source_and_age(
         "price gpt-4.1: [agent.prices]",
         "prices: scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-20 (2 models)",
         "prices: the shipped prices.toml, OpenAI prices as of 2026-11-22 (36 models)",
+        "prices: the shipped prices.toml, Anthropic prices as of 2026-11-25 (18 models)",
     ]
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "a budget of $5, OpenAI prices as of 2026-11-20\n" + "\n".join(lines) in out
+    budget = "a budget of $5, OpenAI prices as of 2026-11-20, Anthropic prices as of 2026-11-25\n"
+    assert budget + "\n".join(lines) in out
 
 
 def _written(tmp_path: Path) -> Path:
