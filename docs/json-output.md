@@ -40,7 +40,7 @@ Every command's document starts with the same fields:
 | `mistakes` | One item per line the text prints after `test mistake:`, or per problem in the file. |
 | `notes` | One item per line the text prints after `note:`. |
 | `warnings` | One item per line the text prints after `warning:`. With `real = ["tool:*"]` the first one says that every tool that is not mocked runs for real; the text prints it above the table. |
-| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Scrimmage itself stopped, such as `stopped by SIGTERM`. When a run failed by itself, it points at the runs whose `outcome` is `infrastructure error`, in `run_details`. |
+| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Scrimmage itself stopped, such as `stopped by SIGTERM`. A model call the provider failed by itself, such as a 400 or a 404, has an item here that names the run and carries the provider's own message, cut to 200 characters. So has a test whose fault rows did not run because every baseline run was such an error. When a run failed by itself, it points at the runs whose `outcome` is `infrastructure error`, in `run_details`. |
 
 Each item is an object with one field, `message`, the line's text: `{"message": "..."}`.
 It is an object so a later version can add a field to it, such as a code, without changing its type.

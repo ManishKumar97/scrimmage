@@ -911,3 +911,19 @@ def test_a_providers_control_characters_are_shown_as_escapes(message: str) -> No
     line["result"] = state.blob(body.encode(), None)
     said = runner_module.real_error(line) or ""
     assert said.isprintable() and "\u202e" not in said, repr(said)
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.slow
+def test_a_providers_400_and_the_skipped_fault_rows_are_filed_as_infrastructure_errors(
+    project: Project, fake_openai: Fake
+) -> None:
+    """Exit 3 is not the test's mistake, so neither line is under `test mistake:`."""
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
+    result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
+    lines = (result.out + result.err).splitlines()
+    assert result.code == 3
+    for needle in ("returned 400 (", "its fault rows did not run"):
+        [line] = [x for x in lines if needle in x]
+        assert line.startswith("infrastructure error: "), line

@@ -1967,6 +1967,7 @@ def build_report(
     reports = row_reports(config, results, cut)
     table = [HEAD, *(row_cells(row_json(entry, config.agent)) for entry in reports)]
     mistakes: list[str] = []
+    infra_lines: list[str] = []  # what failed by itself, as exit 3 says: not the test's mistakes
     notes: list[str] = []
     failures: list[str] = []
     code = OK
@@ -2066,10 +2067,16 @@ def build_report(
             )
     skipped = runner.skipped if runner is not None else []
     for name in skipped:
-        mistakes.append(
+        # A baseline that only the provider's failures stopped is not a mistake in the test.
+        mine = [r for r in results if r.row.test.name == name and r.row.fault is None]
+        said = (
             f"{name}: baseline failed: every baseline run crashed, timed out, was refused, "
             "reached the budget or hit an infrastructure error, so its fault rows did not run"
         )
+        if mine and all(r.outcome == INFRA_ERROR for r in mine):
+            infra_lines.append(said)
+        else:
+            mistakes.append(said)
     if stopped_by in BUDGET_REASONS:
         numbers = stop_numbers(results, stopped_by)
         line = (
@@ -2111,7 +2118,7 @@ def build_report(
                 mistakes.append(f"{line.get('library')}: {line.get('message')}")
         for error in r.real_errors:
             code = INFRA
-            mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
+            infra_lines.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
     grouped = miss_groups(results)
     web_misses = sorted(
@@ -2180,6 +2187,7 @@ def build_report(
         *((MISTAKES, text) for text in dict.fromkeys(mistakes)),
     ]
     if code == INFRA:
+        messages += [(INFRA_ERRORS, text) for text in dict.fromkeys(infra_lines)]
         messages.append((INFRA_ERRORS, INFRA_LINE))
     elif mistakes:
         code = MISTAKE
