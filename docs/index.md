@@ -17,7 +17,7 @@ For each call your agent makes through a gate, a test decides what it gets:
 
 Scrimmage does not detect writes.
 It decides by the kind of call.
-A tool, an MCP tool call or a web request that is not a `GET` or `HEAD`, such as a refund tool or an httpx POST, never runs for real unless the test lists it.
+A gated call that can write, such as a refund tool listed under `tools`, an MCP tool call, or an httpx request that is not a `GET` or `HEAD`, never runs for real unless the test mocks it or lists it under `real`.
 A web `GET` or `HEAD` runs for real, even when the service changes data on it, so mock a `GET` that writes.
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
@@ -62,7 +62,7 @@ To test an agent, you write two things:
 - a `scrimmage.toml` file, which names that function, its tools, and the tests.
 
 The agent calls a real model, so you need an OpenAI or an Anthropic API key.
-For an agent on Anthropic's library, see [Failing the model](model-faults.md#an-agent-that-uses-the-anthropic-library).
+For an agent on Anthropic's library, see [An agent that uses the anthropic library](model-faults.md#an-agent-that-uses-the-anthropic-library).
 Scrimmage is not on PyPI yet, so you install it from a clone of the repository; see [Install](install.md).
 
 The bot has two tools, one that reads and one that writes:
