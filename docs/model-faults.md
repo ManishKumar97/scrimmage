@@ -63,6 +63,31 @@ Both make the real call, so it is reserved and billed as in the baseline row.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
 
+## An agent that uses the anthropic library
+
+An agent written with the `anthropic` library runs under `scrimmage test` the same way.
+Its host, `api.anthropic.com`, is a model host already.
+Behind a gateway, name the gateway under `model_hosts` with `provider = "anthropic"`.
+
+The fault is the same row, with Anthropic's own status:
+
+```toml
+[[test.fault]]
+call = "model"
+do   = "status 529"
+when = "first 3"
+```
+
+Anthropic's 529 means the API is overloaded.
+The library retries it twice by itself, as it retries a 429 or a 500, so `first 3` is the row that gets the error past the library.
+Your agent then sees the library's `OverloadedError` on its first call, after exactly 3 attempts.
+A faulted attempt sends nothing to Anthropic and costs nothing.
+
+A call is budgeted only if its model has a price.
+Scrimmage ships no Anthropic prices yet, so set one under `[agent.prices]`, from Anthropic's pricing page, for each model the agent calls.
+Until you do, a call with the budget on is refused, with the line to paste.
+The test suite runs such an agent against a fake of the Messages API, plain and streamed, and checks that no record, blob or log holds the API key.
+
 ## A bad API key, and a prompt that is too long
 
 `status 401` is the auth error.
