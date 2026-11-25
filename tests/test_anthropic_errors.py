@@ -1,5 +1,5 @@
 """The faults that need no real reply, on an Anthropic call: a status and a body that does not
-parse, and the faults that are not done yet or never can be, which refuse and name Anthropic.
+parse, and the fault that never can be built, which refuses and names Anthropic.
 
 The anthropic library reads each as it would a real one: the class of the error follows the
 status, the body's type is Anthropic's own, and the request id header is there."""
@@ -15,7 +15,6 @@ import pytest
 from model_gate import Gate, Provider, anthropic_client
 from scrimmage import provider_anthropic, state
 from scrimmage.config import Fault
-from scrimmage.errors import ScrimmageMockError
 from scrimmage.prices import Rates
 
 FIXTURES = Path(__file__).parent / "fixtures" / "anthropic"
@@ -135,17 +134,6 @@ def test_a_prompt_over_the_context_window_is_a_400_invalid_request() -> None:
     real = json.loads((FIXTURES / "real_context_too_long.json").read_text())
     assert body["error"]["message"] == real["body"]["error"]["message"]
     assert run.line["status"] == 400
-
-
-def test_unknown_tool_is_not_done_yet_so_it_refuses_says_so_and_sends_nothing() -> None:
-    run, provider, client = call("unknown tool")
-    with pytest.raises(anthropic.APIConnectionError) as caught:
-        ask(client)
-    # The library wraps what the gate raised, as it would a connection that failed.
-    assert isinstance(caught.value.__cause__, ScrimmageMockError)
-    assert "not yet for Anthropic" in str(caught.value.__cause__)
-    assert provider.sent == [], "nothing was sent"
-    assert run.line["reason"] == "mistake"
 
 
 def test_bad_tool_args_is_a_mistake_at_the_call_and_says_why_it_can_never_be_built() -> None:

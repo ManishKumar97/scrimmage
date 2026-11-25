@@ -12,7 +12,7 @@ import math
 import re
 import string
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -198,9 +198,6 @@ BUILT_OUTPUT_TOKENS = 10  # a built reply's output count: about its own length
 # gpt-4o-mini in a forum report of 26 August 2024.
 STRUCTURED_REFUSAL = "I'm sorry, I cannot assist with that request."
 PLAIN_REFUSAL = "I'm sorry, I can't assist with that."
-# The tool OpenAI's models have called though no agent offers it, reported from November
-# 2023 to July 2024. Its arguments name the offered tool it meant, prefixed with functions.
-PARALLEL_TOOL = "multi_tool_use.parallel"
 ID_LETTERS = string.ascii_letters + string.digits
 CHAT_ID_LENGTH = 29  # after chatcmpl-, as in real ids
 CALL_ID_LENGTH = 24  # after call_
@@ -353,6 +350,24 @@ def response_refusal_reply(wire: Fields, tokens_in: int) -> bytes:
         part: dict[str, object] = {"type": "refusal", "refusal": STRUCTURED_REFUSAL}
     else:
         part = {"type": "output_text", "annotations": [], "logprobs": [], "text": PLAIN_REFUSAL}
+
+    def message() -> dict[str, object]:
+        return {
+            "id": made_up_hex_id("msg_"),
+            "type": "message",
+            "status": "completed",
+            "content": [part],
+            "role": "assistant",
+        }
+
+    return response_reply(fields, tokens_in, message)
+
+
+def response_reply(
+    fields: dict[str, object], tokens_in: int, make_item: Callable[[], dict[str, object]]
+) -> bytes:
+    """A whole completed Responses reply whose output is the one item make_item makes. The reply's
+    id is made before the item's."""
     now = int(time.time())
     reply = dict(RESPONSE_REPLY)
     reply.update({key: fields[key] for key in RESPONSE_ECHOED if fields.get(key) is not None})
@@ -364,15 +379,7 @@ def response_refusal_reply(wire: Fields, tokens_in: int) -> bytes:
         created_at=now,
         completed_at=now,
         model=name_in(fields) or "",
-        output=[
-            {
-                "id": made_up_hex_id("msg_"),
-                "type": "message",
-                "status": "completed",
-                "content": [part],
-                "role": "assistant",
-            }
-        ],
+        output=[make_item()],
         usage={
             "input_tokens": tokens_in,
             "input_tokens_details": {
@@ -430,11 +437,6 @@ def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
         return (
             "is a Responses call, and context too long sends Chat Completions' error; "
             "fault a chat call, or use a status on this one"
-        )
-    if word == "unknown tool":
-        return (
-            "is a Responses call, and a call to a tool no one offered is seen on Chat "
-            "Completions only; fault a chat call"
         )
     if fields.get("conversation") is not None:
         return (
@@ -570,15 +572,28 @@ def no_free_tool_call(path: str, wire: Fields) -> str | None:
     return None
 
 
-def unknown_tool_reply(wire: Fields, tokens_in: int, tool: str) -> bytes:
-    """unknown tool: one call to multi_tool_use.parallel, naming the tool the model meant."""
+def unknown_tool_reply(path: str, wire: Fields, tokens_in: int, tool: str) -> bytes:
+    """unknown tool: one call to this tool, which the request does not offer, with no arguments:
+    a tool call on Chat Completions (tests/fixtures/openai/real_chat_tool_call.json), a
+    function_call item on Responses (real_response_function_call_truncated.json)."""
     fields = fields_dict(wire)
-    use: dict[str, object] = {"recipient_name": f"functions.{tool}", "parameters": {}}
-    uses = {"tool_uses": [use]}
+    if is_responses(path):
+
+        def function_call() -> dict[str, object]:
+            return {
+                "id": made_up_hex_id("fc_"),
+                "type": "function_call",
+                "status": "completed",
+                "arguments": "{}",
+                "call_id": made_up_id("call_", CALL_ID_LENGTH),
+                "name": tool,
+            }
+
+        return response_reply(fields, tokens_in, function_call)
     call = {
         "id": made_up_id("call_", CALL_ID_LENGTH),
         "type": "function",
-        "function": {"name": PARALLEL_TOOL, "arguments": json.dumps(uses, separators=(",", ":"))},
+        "function": {"name": tool, "arguments": "{}"},
     }
     message: dict[str, object] = {"content": None, "tool_calls": [call], "refusal": None}
     return chat_reply(fields, tokens_in, message, "tool_calls")
@@ -603,6 +618,28 @@ def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
     asked = [normalised(item) for item in _list(fields.get("messages"))]
     prefixes = frozenset(digest([*asked, normalised(message)]) for message in messages if message)
     return Given(ids, prefixes)
+
+
+def response_calls(reply: bytes) -> Given:
+    """The call ids of the function_call items a Responses reply holds: all that reply gave a
+    later request to carry back, as OpenAI keeps the reply itself and names it by id."""
+    output = _list(_obj(fields_dict(request_fields(reply))).get("output"))
+    found = (
+        _obj(item).get("call_id") for item in output if _obj(item).get("type") == "function_call"
+    )
+    return Given(frozenset(i for i in found if isinstance(i, str) and i))
+
+
+def carries_response_call(wire: Fields, kept: Sequence[Given]) -> bool:
+    """Whether a Responses request's input carries a function_call, or the output of one, with a
+    call id a faulted reply gave. An id that is not a string matches nothing."""
+    ids = frozenset[str]().union(*(gave.ids for gave in kept))
+    items = (_obj(item) for item in _list(fields_dict(wire).get("input")))
+    return any(
+        item.get("type") in ("function_call", "function_call_output")
+        and among(item.get("call_id"), ids)
+        for item in items
+    )
 
 
 def carries(wire: Fields, kept: Sequence[Given]) -> bool:

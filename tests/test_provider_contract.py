@@ -89,9 +89,6 @@ class Case:
     request_cap: int | None = None  # the output cap `request` carries, for an API that needs one
     call_text: str | None = None  # what the reply that calls a tool says by default, if it says
     chain: Chain | None = None
-    # The fault words whose replies this provider does not build or change yet: each is a
-    # mistake in the test that says so, and the provider's built replies refuse.
-    pending: tuple[str, ...] = ()
     # The fault words no reply of this provider can take, whatever the request: a mistake in the
     # test that is known before the run.
     never: tuple[str, ...] = ()
@@ -218,7 +215,6 @@ CASES = {
             "cache_creation_input_tokens",
             "mcp_servers",
         ),
-        pending=("unknown tool",),
         never=("bad tool args",),
     ),
     "openai": Case(
@@ -258,7 +254,7 @@ CASES = {
         follow_up=openai_follow_up,
         changeable=OPENAI / "chat_answer.json",
         not_carried=(
-            ("unknown tool", "/v1/responses", {"model": "m", "input": "hi"}),
+            ("unknown tool", "/v1/responses", {"model": "m", "conversation": "c"}),
             ("garble", "/v1/responses", {"model": "m", "conversation": "c"}),
             ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
         ),
@@ -457,15 +453,14 @@ def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
     fields = case.tool_request("get_order")
     assert provider.tool_call_tools(case.chat_path, wrap_fields(fields)) == ["get_order"]
     assert provider.no_free_tool_call(case.chat_path, wrap_fields(fields)) is None
-    if "unknown tool" in case.pending:
-        with pytest.raises(NotImplementedError, match="not yet for"):
-            provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
-        return
-    built = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
-    assert isinstance(json.loads(built), dict)
-    assert "get_order" in built.decode()
-    used = provider.usage(built)
-    assert (used.known, used.input) == (True, 25)
+    for path in (case.chat_path, *case.other_paths):
+        built = provider.unknown_tool_reply(path, wrap_fields(fields), 25, "get_order_v2")
+        assert isinstance(json.loads(built), dict), path
+        assert "get_order_v2" in built.decode(), path
+        used = provider.usage(built)
+        assert (used.known, used.input) == (True, 25), path
+    built = provider.unknown_tool_reply(case.chat_path, wrap_fields(fields), 25, "get_order_v2")
+    assert provider.called_tool(provider.parse_reply(built)) == "get_order_v2"
 
 
 def test_a_request_with_no_tool_to_call_says_why(provider: ModelProvider) -> None:
@@ -481,10 +476,8 @@ def test_a_fault_that_cannot_be_carried_out_says_why_and_the_rest_do_not(
     case = case_of(provider)
     for word in EVERY_WORD:
         said = provider.not_carried_out(word, case.chat_path, wrap_fields(case.request))
-        if word in case.pending:
-            assert isinstance(said, str) and "not yet for" in said, word
-        elif word in case.never:
-            assert isinstance(said, str) and "not yet for" not in said and said, word
+        if word in case.never:
+            assert isinstance(said, str) and said, word
         else:
             assert said is None, word
     for word, path, fields in case.not_carried:
@@ -511,15 +504,14 @@ def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
     did not build."""
     case = case_of(provider)
     fields = case.tool_request("get_order")
-    if "unknown tool" not in case.pending:
-        reply = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
-        for ids_only in (True, False):
-            gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
-            assert gave.ids, "a reply that calls a tool gave its call id"
-            built = case.follow_up(fields, reply)
-            assert provider.carries(case.chat_path, wrap_fields(built), [gave]), ids_only
-            assert not provider.carries(case.chat_path, wrap_fields(fields), [gave]), ids_only
-            assert not provider.carries(case.chat_path, wrap_fields(built), []), ids_only
+    reply = provider.unknown_tool_reply(case.chat_path, wrap_fields(fields), 25, "get_order_v2")
+    for ids_only in (True, False):
+        gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
+        assert gave.ids, "a reply that calls a tool gave its call id"
+        built = case.follow_up(fields, reply)
+        assert provider.carries(case.chat_path, wrap_fields(built), [gave]), ids_only
+        assert not provider.carries(case.chat_path, wrap_fields(fields), [gave]), ids_only
+        assert not provider.carries(case.chat_path, wrap_fields(built), []), ids_only
     refused = provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25)
     gave = provider.given(case.chat_path, wrap_fields(case.request), refused, ids_only=False)
     assert gave.prefixes, "a reply with a message gave its message"
@@ -569,13 +561,6 @@ def test_a_real_reply_is_changed_and_keeps_what_it_billed(
     real = case.changeable.read_bytes()
     fault = Fault("model", word, "always", text="NEW" if word == "replace" else None)
     change = provider.change(word, "chat", case.chat_path)
-    if word in case.pending:
-        # A change that is not done yet refuses, whatever the reply, naming the provider.
-        said = change.blocked(200, JSON)
-        assert isinstance(said, changes.Unchangeable) and said.mistake
-        assert "not yet for" in said.why
-        assert change(200, JSON, real, fault, decoded=False) == said
-        return
     assert change.blocked(200, JSON) is None
     done = change(200, JSON, real, fault, decoded=False)
     assert isinstance(done, changes.WebChanged), done

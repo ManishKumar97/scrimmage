@@ -528,7 +528,7 @@ def test_a_structured_refuse_reaches_parse_and_langchain_as_a_refusal(
 
 @pytest.mark.design("fault.unknown_tool")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
-def test_unknown_tool_calls_multi_tool_use_parallel_naming_the_first_offered_tool(
+def test_unknown_tool_calls_the_first_offered_tool_renamed_with_v2(
     gated: None, loopback: Loopback, sync: bool
 ) -> None:
     sink, _ = gate_on("unknown tool")
@@ -537,10 +537,8 @@ def test_unknown_tool_calls_multi_tool_use_parallel_naming_the_first_offered_too
     [choice] = reply.choices
     assert choice.finish_reason == "tool_calls" and choice.message.content is None
     [call] = choice.message.tool_calls
-    assert call.type == "function" and call.function.name == "multi_tool_use.parallel"
-    assert json.loads(call.function.arguments) == {
-        "tool_uses": [{"recipient_name": "functions.get_order", "parameters": {}}]
-    }
+    assert call.type == "function" and call.function.name == "get_order_v2"
+    assert call.function.arguments == "{}"
     # New ids in OpenAI's forms, and the request's own model.
     assert re.fullmatch(r"call_[A-Za-z0-9]{24}", call.id), call.id
     assert re.fullmatch(r"chatcmpl-[A-Za-z0-9]{29}", reply.id), reply.id
@@ -619,7 +617,7 @@ def test_unknown_tool_fires_where_the_model_picks_its_own_tool(
     sink, _ = gate_on("unknown tool")
     reply, _ = completion(loopback, True, tools=SPECS, **asked)
     assert loopback.seen == []
-    assert reply.choices[0].message.tool_calls[0].function.name == "multi_tool_use.parallel"
+    assert reply.choices[0].message.tool_calls[0].function.name == "get_order_v2"
     assert line_of(sink, "model")["action"] == "fault"
 
 
@@ -824,16 +822,142 @@ def test_a_built_responses_refusal_repeats_the_requests_own_fields(
 
 @pytest.mark.design("fault.unknown_tool_responses")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
-def test_unknown_tool_on_responses_is_a_mistake_and_nothing_is_sent(
+def test_unknown_tool_on_responses_builds_a_function_call_item_and_sends_nothing(
     gated: None, loopback: Loopback, sync: bool
 ) -> None:
     sink, budget = gate_on("unknown tool")
-    with pytest.raises(ScrimmageMockError, match="is a Responses call, and a call to a tool"):
-        responses_api(loopback, sync, tools=RESPONSE_SPECS)
+    reply = responses_api(loopback, sync, tools=RESPONSE_SPECS)
+    assert loopback.seen == [] and budget.asked == 0
+    [item] = reply.output
+    assert (item.type, item.name, item.arguments, item.status) == (
+        "function_call",
+        "get_order_v2",
+        "{}",
+        "completed",
+    )
+    assert re.fullmatch(r"call_[A-Za-z0-9]{24}", item.call_id), item.call_id
+    assert re.fullmatch(r"fc_[0-9a-f]{50}", item.id), item.id
+    assert re.fullmatch(r"resp_[0-9a-f]{50}", reply.id), reply.id
+    assert (reply.status, reply.model) == ("completed", MODEL)
+    assert line_of(sink, "model")["action"] == "fault"
+
+
+@pytest.mark.design("fault.unknown_tool_responses")
+@pytest.mark.parametrize(
+    ("asked", "said"),
+    [
+        ({}, "the request offers no tools"),
+        ({"tools": RESPONSE_SPECS, "tool_choice": "none"}, 'tool_choice "none"'),
+        (
+            {"tools": RESPONSE_SPECS, "tool_choice": {"type": "function", "name": "get_order"}},
+            "names the tool to call",
+        ),
+    ],
+    ids=["no tools", "none", "named"],
+)
+def test_unknown_tool_on_responses_where_the_model_cannot_pick_a_tool_is_not_fired(
+    gated: None, loopback: Loopback, asked: dict[str, Any], said: str
+) -> None:
+    sink, _ = gate_on("unknown tool")
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    responses_api(loopback, True, **asked)
+    assert loopback.seen == ["/v1/responses"]
+    line = line_of(sink, "model")
+    assert line["action"] == "real" and said in str(line["unchanged"])
+
+
+@pytest.mark.design("fault.unknown_tool_responses")
+def test_unknown_tool_on_a_responses_conversation_openai_keeps_is_a_mistake(
+    gated: None, loopback: Loopback
+) -> None:
+    sink, budget = gate_on("unknown tool")
+    with pytest.raises(ScrimmageMockError, match="conversation OpenAI keeps"):
+        responses_api(loopback, True, tools=RESPONSE_SPECS, conversation="conv_1")
     assert loopback.seen == [] and budget.asked == 0
     line = line_of(sink, "model")
     assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
-    assert "fault" not in line
+
+
+def plan_naming(tool: str | None, when: str = "always") -> Plan:
+    """A run whose model fault is unknown tool, naming this tool or none."""
+    plan = plan_with("unknown tool")
+    fault = dataclasses.replace(plan.faults[0], tool=tool, when=when)
+    return dataclasses.replace(plan, faults=(fault,))
+
+
+def called(reply: Any) -> str:
+    return reply.choices[0].message.tool_calls[0].function.name
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_unknown_tool_calls_the_tool_the_row_names_on_both_apis(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    sink, _ = gate_plan(plan_naming("delete_account"))
+    chat, _ = completion(loopback, sync, tools=SPECS)
+    assert called(chat) == "delete_account"
+    [item] = responses_api(loopback, sync, tools=RESPONSE_SPECS).output
+    assert item.name == "delete_account"
+    assert loopback.seen == [] and [x["action"] for x in model_lines(sink)] == ["fault", "fault"]
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_unknown_tool_calls_a_tool_an_earlier_request_offered_and_this_one_does_not(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    gate_plan(plan_naming(None))
+    first, _ = completion(loopback, sync, tools=SPECS)
+    assert called(first) == "get_order_v2", "nothing was dropped yet, so the plausible name"
+    only_stock, _ = completion(loopback, sync, tools=SPECS[1:])
+    assert called(only_stock) == "get_order", "get_order was offered, and is offered no more"
+    both_again, _ = completion(loopback, sync, tools=SPECS)
+    assert called(both_again) == "get_order_v2", "nothing is dropped now"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_a_tool_offered_on_chat_is_remembered_for_a_responses_call_of_the_same_label(
+    gated: None, loopback: Loopback
+) -> None:
+    """Chat and Responses are two APIs of one label, model:openai: they share one memory."""
+    gate_plan(plan_naming(None))
+    completion(loopback, True, tools=SPECS)
+    [item] = responses_api(loopback, True, tools=RESPONSE_SPECS[1:]).output
+    assert item.name == "get_order"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_the_made_up_name_is_never_a_name_the_request_offers() -> None:
+    run = state.RunState(plan_naming(None), Sink(), [])
+    name = http_gate.unknown_tool_name
+    assert name(run, "model:openai", None, ["get_order"]) == "get_order_v2"
+    assert name(run, "model:openai", None, ["get_order", "get_order_v2"]) == "get_order_v2_v2"
+    assert name(run, "model:openai", "get_order_v2", ["get_order"]) == "get_order_v2"
+    run.remember_offered("model:openai", ["a", "b"])
+    assert name(run, "model:openai", None, ["b"]) == "a"
+    assert name(run, "model:other", None, ["b"]) == "b_v2"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_the_memory_of_offered_tools_is_bounded() -> None:
+    run = state.RunState(plan_naming(None), Sink(), [])
+    run.remember_offered("l", [f"t{n}" for n in range(state.MAX_REMEMBERED_TOOLS + 50)])
+    assert len(run.offered_tools["l"]) == state.MAX_REMEMBERED_TOOLS
+    assert run.dropped_tool("l", []) == "t0"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_row_that_names_a_tool_the_request_offers_is_a_mistake_and_nothing_is_sent(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    sink, budget = gate_plan(plan_naming("get_stock"))
+    with pytest.raises(ScrimmageMockError, match="names 'get_stock', which this request offers"):
+        completion(loopback, sync, tools=SPECS)
+    assert loopback.seen == [] and budget.asked == 0
+    line = line_of(sink, "model")
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
 
 
 def plan_on_call_1(word: str) -> Plan:
@@ -1264,6 +1388,6 @@ def test_a_run_under_refuse_and_unknown_tool_sends_only_the_real_calls(
     assert all(not x.get("cost_usd") for x in unknown + refused if x["action"] == "fault")
     # The bot ran the tool the model named, failed, and told the model so.
     told = [m for r in fake.requests for m in r["messages"] if m.get("role") == "tool"]
-    assert any("multi_tool_use.parallel" in str(m["content"]) for m in told), told
+    assert any("get_order_v2" in str(m["content"]) for m in told), told
     summary = rows["fault 2"][-1]["summary"]
     assert isinstance(summary, dict) and summary["answer"] == openai_table.PLAIN_REFUSAL

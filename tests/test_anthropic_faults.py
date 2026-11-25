@@ -6,6 +6,7 @@ all. The replies are the real captures in tests/fixtures/anthropic, laid out aga
 blocks where a test needs them: a block keeps the bytes it was captured with."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -269,6 +270,141 @@ def test_a_refuse_reply_of_the_plain_form_written_out_is_the_default() -> None:
     plain = json.loads(faulted("refuse", b"{}", form="plain")[2])
     default = json.loads(faulted("refuse", b"{}")[2])
     assert {**plain, "id": ""} == {**default, "id": ""}
+
+
+ORDER: Any = {"name": "get_order", "input_schema": {"type": "object", "properties": {}}}
+STOCK: Any = {"name": "get_stock", "input_schema": {"type": "object", "properties": {}}}
+REAL_ANSWER_BYTES = fixture("real_answer.json")
+
+
+def seen_gate(word: str, **kw: Any) -> Gate:
+    """A gate for a run whose agent tools the gates see, as the requests below offer them."""
+    gate = new_gate(word, **kw)
+    gate.run.listed.update(("get_order", "get_stock", "get_order_v2"))
+    return gate
+
+
+def unknown_reply(*offered: dict[str, Any], **kw: Any) -> tuple[Gate, Provider, bytes, Any]:
+    """One call that offers these tools, under unknown tool: the gate, the provider, the bytes the
+    agent got, and what the library made of them."""
+    run = seen_gate("unknown tool", **kw)
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=b"{}"))
+    raw = asked(anthropic_client(provider), tools=list(offered))
+    return run, provider, raw.http_response.content, raw.parse()
+
+
+def test_an_unknown_tool_reply_is_one_tool_use_block_in_the_documented_shape_at_cost_zero() -> None:
+    run, provider, got, message = unknown_reply(ORDER)
+    assert provider.sent == [], "nothing was sent"
+    assert message.stop_reason == "tool_use"
+    [block] = message.content
+    assert block.type == "tool_use" and block.name == "get_order_v2" and block.input == {}
+    made = json.loads(got)
+    assert list(made) == list(REAL_TOOL), "a real reply's fields, in its order"
+    assert list(made["content"][0]) == list(CALL), "a real tool_use block's keys, in its order"
+    assert list(made["usage"]) == list(REAL_TOOL["usage"])
+    assert re.fullmatch(r"toolu_01[A-Za-z0-9]{22}", made["content"][0]["id"])
+    assert len(made["content"][0]["id"]) == len(CALL["id"])
+    assert made["stop_details"] is None and made["model"] == MODEL
+    assert made["id"].startswith("msg_") and len(made["id"]) == len(REAL_TOOL["id"])
+    assert made["usage"]["input_tokens"] > 0
+    assert run.line["status"] == 200 and run.line["action"] == "fault"
+    assert "cost_usd" not in run.line, "a built reply costs nothing"
+    assert run.budget.reserved == [] and run.sink.settles == [], "nothing was held or settled"
+
+
+def test_an_unknown_tool_reply_calls_the_tool_the_row_names() -> None:
+    run, _, _, message = unknown_reply(ORDER, tool="delete_account")
+    assert message.content[0].name == "delete_account"
+    assert run.line["fault"]["tool"] == "delete_account"
+
+
+def test_an_unknown_tool_reply_calls_a_tool_an_earlier_request_offered_and_this_one_does_not() -> (
+    None
+):
+    run = seen_gate("unknown tool")
+    client = anthropic_client(Provider(run.events, lambda r: httpx2.Response(200, content=b"{}")))
+    names = [
+        asked(client, tools=offered).parse().content[0].name
+        for offered in ([ORDER, STOCK], [STOCK], [ORDER, STOCK])
+    ]
+    assert names == ["get_order_v2", "get_order", "get_order_v2"]
+
+
+def test_an_unknown_tool_reply_never_calls_a_name_the_request_offers() -> None:
+    twice = {**ORDER, "name": "get_order_v2"}
+    assert unknown_reply(ORDER, twice)[3].content[0].name == "get_order_v2_v2"
+
+
+def test_an_unknown_tool_row_that_names_an_offered_tool_is_a_mistake_and_sends_nothing() -> None:
+    run = seen_gate("unknown tool", tool="get_stock")
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=b"{}"))
+    with pytest.raises(anthropic.APIConnectionError) as caught:
+        asked(anthropic_client(provider), tools=[ORDER, STOCK])
+    assert "names 'get_stock', which this request offers" in str(caught.value.__cause__)
+    assert provider.sent == []
+    assert run.line["reason"] == "mistake"
+
+
+@pytest.mark.parametrize(
+    ("asking", "why"),
+    [
+        ({}, "the request offers no tools the agent runs"),
+        ({"tools": [ORDER], "tool_choice": {"type": "none"}}, 'tool_choice "none"'),
+        (
+            {"tools": [ORDER], "tool_choice": {"type": "tool", "name": "get_order"}},
+            "names the tool to call",
+        ),
+    ],
+    ids=["no tools", "none", "named"],
+)
+def test_an_unknown_tool_reply_is_left_to_the_real_one_where_no_model_could_pick_a_tool(
+    asking: dict[str, Any], why: str
+) -> None:
+    run = seen_gate("unknown tool")
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=REAL_ANSWER_BYTES))
+    raw = asked(anthropic_client(provider), **asking)
+    assert raw.http_response.content == REAL_ANSWER_BYTES and len(provider.sent) == 1
+    assert run.line["action"] == "real" and why in run.line["unchanged"]["why"]
+
+
+def test_an_unknown_tool_reply_is_a_mistake_on_a_streamed_request() -> None:
+    run = seen_gate("unknown tool")
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=b"{}"))
+    client = anthropic_client(provider)
+    stream = client.messages.stream(
+        model=MODEL, max_tokens=64, tools=[ORDER], messages=[{"role": "user", "content": "hi"}]
+    )
+    with pytest.raises(anthropic.APIConnectionError) as caught, stream as events:
+        list(events)
+    assert "is a streamed request" in str(caught.value.__cause__)
+    assert provider.sent == []
+    assert run.line["reason"] == "mistake"
+
+
+def test_a_400_to_the_result_of_an_unknown_tool_call_is_marked_after_a_reply_fault() -> None:
+    """The agent answers the made-up call with a tool_result of its id; the provider's 400 to that
+    request is the fault's doing, as for any faulted reply. A result of another id is not."""
+    gate = Gate(
+        Fault("model", "unknown tool", "first 1"), hosts=(), prices=((MODEL, Rates(3.0, 15.0)),)
+    )
+    gate.run.listed.add("get_order")
+    provider = Provider(
+        gate.events, lambda r: httpx2.Response(400, content=ERROR_400, headers=JSON)
+    )
+    client = anthropic_client(provider)
+    made = asked(client, tools=[ORDER]).parse()
+    turns: list[tuple[Any, bool]] = [
+        (result_of("toolu_01" + "x" * 22), False),
+        (result_of(made.content[0].id), True),
+    ]
+    for turn, marked in turns:
+        with pytest.raises(anthropic.BadRequestError):
+            client.messages.create(model=MODEL, max_tokens=64, messages=turn, tools=[ORDER])
+        line = model_lines(gate)[-1]
+        assert line["status"] == 400 and line.get("after_reply_fault", False) is marked, turn
+    first = model_lines(gate)[0]
+    assert first["action"] == "fault" and "after_reply_fault" not in first
 
 
 def test_a_refuse_reply_form_on_an_openai_call_is_a_mistake_at_the_call() -> None:

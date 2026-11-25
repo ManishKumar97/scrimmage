@@ -79,7 +79,9 @@ PINNED = [
     "anthropic fault replace real_decline",
     "anthropic fault truncate",
     "anthropic marker truncate",
-    "anthropic fault unknown tool not yet",
+    "anthropic fault unknown tool",
+    "anthropic marker unknown tool",
+    "marker unknown tool responses",
     "anthropic host listed for both",
     "anthropic messages count tokens",
 ]

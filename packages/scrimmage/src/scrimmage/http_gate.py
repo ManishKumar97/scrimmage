@@ -587,6 +587,7 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
 def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = provider_for(run, step).offered(path, fields)
+    run.remember_offered(step.call.label, tools.agent)
     if tools.hosted_reads:
         step.extra["hosted_reads"] = tools.hosted_reads
     if tools.unknown:
@@ -658,9 +659,17 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
         )
     if why := provider.not_carried_out(word, path, fields):
         not_carried_out(run, step, why)
-    if word == "unknown tool" and (why := provider.no_free_tool_call(path, fields)):
-        run.unchanged(step, why)
-        step.decision = Decision("real")
+    if word == "unknown tool":
+        if why := provider.no_free_tool_call(path, fields):
+            run.unchanged(step, why)
+            step.decision = Decision("real")
+        elif planned.tool in provider.tool_call_tools(path, fields):
+            not_carried_out(
+                run,
+                step,
+                f"names {planned.tool!r}, which this request offers, so a call to it is not a "
+                "call to an unknown tool; name a tool the agent does not offer",
+            )
 
 
 def chain_check(
@@ -700,11 +709,28 @@ def built_reply(
         form = ctx.run.plan.faults[step.decision.fault or 0].form
         built = provider.refusal_reply(path, fields, tokens, form)
     else:  # reply_checks let it through only on chat, with a tool offered
-        tool = provider.tool_call_tools(path, fields)[0]
-        built = provider.unknown_tool_reply(fields, tokens, tool)
+        offered = provider.tool_call_tools(path, fields)
+        named = ctx.run.plan.faults[step.decision.fault or 0].tool
+        tool = unknown_tool_name(ctx.run, step.call.label, named, offered)
+        built = provider.unknown_tool_reply(path, fields, tokens, tool)
     headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
+
+
+def unknown_tool_name(run: RunState, label: str, named: str | None, offered: list[str]) -> str:
+    """The tool unknown tool calls: the one the row names; else one an earlier request to this
+    label offered and this one does not; else an offered tool's name with _v2 added, as a
+    rename between two deploys reads. A name that is offered is no unknown tool, so _v2 is
+    added until it is not."""
+    if named is not None:
+        return named
+    if (dropped := run.dropped_tool(label, offered)) is not None:
+        return dropped
+    name = f"{offered[0]}_v2"
+    while name in offered:
+        name += "_v2"
+    return name
 
 
 def faulted(

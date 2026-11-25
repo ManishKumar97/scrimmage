@@ -670,10 +670,12 @@ def test_real_writes_under_a_fault_are_counted_and_noted(
     assert summary["calls"]["under_real"] == 1  # type: ignore[index]
 
 
-# The order bot under unknown tool: it runs the tool the model named, fails, and sends the
-# call back in its next request, which OpenAI answers with a 400 for the dot in the name.
+# The order bot under unknown tool, naming the dotted tool OpenAI's models have been seen to
+# call: it runs the tool the model named, fails, and sends the call back in its next request,
+# which OpenAI answers with a 400 for the dot in the name.
 UNKNOWN_TOOL_FIRST = (
-    '[[test.fault]]\ncall = "model"\nmodel = "gpt-4o-mini"\ndo = "unknown tool"\nwhen = "call 1"\n'
+    '[[test.fault]]\ncall = "model"\nmodel = "gpt-4o-mini"\ndo = "unknown tool"\n'
+    'tool = "multi_tool_use.parallel"\nwhen = "call 1"\n'
 )
 
 

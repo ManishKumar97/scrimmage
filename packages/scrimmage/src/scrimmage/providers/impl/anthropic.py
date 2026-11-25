@@ -3,8 +3,8 @@
 A class that holds Anthropic's functions from provider_anthropic, bound once at import, and
 adapts the few whose signature the interface changes. Anthropic has one model API, the Messages
 API, so no function here decides by path which API a call is. The faults that change or build a
-reply are built or changed in anthropic_changes, except unknown tool, which is not done yet: it
-refuses, naming Anthropic, and nothing is guessed.
+reply are built or changed in anthropic_changes, or built in provider_anthropic. A word that
+changes no Anthropic reply, such as bad tool args, refuses, naming Anthropic.
 """
 
 from collections.abc import Mapping, Sequence
@@ -17,8 +17,8 @@ from scrimmage.providers.base import Fields, ReplyChange, Usage
 from scrimmage.providers.impl import anthropic_changes
 
 
-class NotYet:
-    """A change to an Anthropic reply: not done yet, so the row is a mistake in the test."""
+class NeverChange:
+    """A change no Anthropic reply can take, so the row is a mistake in the test."""
 
     def __init__(self, word: str) -> None:
         self.word = word
@@ -26,8 +26,8 @@ class NotYet:
     def blocked(self, status: int, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
         del status, headers
         why = table.never_carried_out(self.word) or (
-            f"is an Anthropic call, and {self.word} is {table.NOT_YET}; use a status, bad body, "
-            "context too long or timeout on this one"
+            f"is an Anthropic call, and {self.word} changes no reply of it; use a status, bad "
+            "body, context too long or timeout on this one"
         )
         return Unchangeable(why, "unsupported")
 
@@ -183,4 +183,4 @@ class Anthropic:
         del path
         if word in anthropic_changes.MESSAGES_CHANGES:
             return AnthropicChange(word, op)
-        return NotYet(word)
+        return NeverChange(word)
