@@ -1261,3 +1261,15 @@ def test_a_reply_fault_not_built_yet_gets_no_billed_warning(tmp_path: Path) -> N
         cfg = example(tmp_path, FAULT, block)
         cfg = dataclasses.replace(cfg, agent=dataclasses.replace(cfg.agent, max_cost_usd=None))
         assert len(config.carried_model_warnings(cfg)) == warned, word
+
+
+@pytest.mark.design("config.unknown_tool_name")
+def test_a_tool_name_that_looks_like_a_key_is_redacted_in_json() -> None:
+    from scrimmage import runner
+
+    name = "sk-" + "a1B2" * 10
+    fault = config.Fault("model", "unknown tool", "first 1", model="m", tool=name)
+    shown = runner.fault_json(fault)
+    assert shown is not None and shown["tool"] == "[secret removed]"
+    plain = runner.fault_json(dataclasses.replace(fault, tool="delete_account"))
+    assert plain is not None and plain["tool"] == "delete_account"

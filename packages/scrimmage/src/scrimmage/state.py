@@ -950,7 +950,7 @@ class RunState:
             if fault.form is not None:
                 fired["form"] = fault.form
             if fault.tool is not None:
-                fired["tool"] = fault.tool
+                fired["tool"] = redact(fault.tool)
             line["fault"] = fired
         if decision.mock is not None:
             line["mock"] = decision.mock
