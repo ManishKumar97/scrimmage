@@ -166,6 +166,13 @@
               "type": "integer",
               "minimum": 0,
               "description": "The Retry-After header a status 429 or 503 fault sent, in seconds."
+            },
+            "form": {
+              "enum": [
+                "plain",
+                "classifier"
+              ],
+              "description": "The form a refuse fault was asked for; absent when the row names none."
             }
           }
         },

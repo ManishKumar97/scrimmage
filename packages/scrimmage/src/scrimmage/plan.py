@@ -15,6 +15,7 @@ from scrimmage.config import (
     Mock,
     ModelHost,
     Test,
+    form_problem,
     retry_after_problem,
     word_problem,
 )
@@ -26,7 +27,19 @@ PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
 # know, and running the fault without it would run a fault nobody asked for.
 PLAN_FAULT_KEYS = frozenset(
-    {"call", "do", "when", "raises", "method", "path", "model", "text", "find", "retry_after"}
+    {
+        "call",
+        "do",
+        "when",
+        "raises",
+        "method",
+        "path",
+        "model",
+        "text",
+        "find",
+        "retry_after",
+        "form",
+    }
 )
 
 
@@ -347,6 +360,7 @@ def fault_json(fault: Fault) -> dict[str, object]:
         ("text", fault.text),
         ("find", fault.find),
         ("retry_after", fault.retry_after),
+        ("form", fault.form),
     ):
         if value is not None:
             doc[key] = value
@@ -366,6 +380,9 @@ def fault_from(doc: dict[str, object]) -> Fault:
     retry = doc.get("retry_after")  # null is none, as for the optional keys
     if retry is not None and (problem := retry_after_problem(do, retry)):
         raise ValueError(f"plan fault retry_after: {problem}")
+    form = doc.get("form")
+    if form is not None and (problem := form_problem(do, form)):
+        raise ValueError(f"plan fault form: {problem}")
     return Fault(
         string(doc, "call"),
         do,
@@ -377,6 +394,7 @@ def fault_from(doc: dict[str, object]) -> Fault:
         text=optional(doc, "text"),
         find=optional(doc, "find"),
         retry_after=cast(int | None, retry),
+        form=cast(str | None, form),
     )
 
 

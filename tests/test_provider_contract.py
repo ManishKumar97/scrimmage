@@ -218,7 +218,7 @@ CASES = {
             "cache_creation_input_tokens",
             "mcp_servers",
         ),
-        pending=("replace", "garble", "truncate", "unknown tool", "refuse"),
+        pending=("unknown tool",),
         never=("bad tool args",),
     ),
     "openai": Case(
@@ -441,10 +441,6 @@ def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
 
 def test_a_built_refusal_is_a_whole_reply_the_provider_would_read(provider: ModelProvider) -> None:
     case = case_of(provider)
-    if "refuse" in case.pending:
-        with pytest.raises(NotImplementedError, match="not yet for"):
-            provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25)
-        return
     for path in (case.chat_path, *case.other_paths):
         built = provider.refusal_reply(path, wrap_fields(case.request), 25)
         assert isinstance(json.loads(built), dict), path
@@ -515,25 +511,15 @@ def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
     did not build."""
     case = case_of(provider)
     fields = case.tool_request("get_order")
-    if "unknown tool" in case.pending:
-        # Nothing is built, so a reply the agent got from the real model gave it nothing marked.
-        assert case.call_reply is not None
-        real = case.call_reply.read_bytes()
+    if "unknown tool" not in case.pending:
+        reply = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
         for ids_only in (True, False):
-            gave = provider.given(case.chat_path, wrap_fields(fields), real, ids_only=ids_only)
-            assert not (gave.ids or gave.prefixes)
-            assert not provider.carries(
-                case.chat_path, wrap_fields(case.follow_up(fields, real)), [gave]
-            )
-        return
-    reply = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
-    for ids_only in (True, False):
-        gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
-        assert gave.ids, "a reply that calls a tool gave its call id"
-        built = case.follow_up(fields, reply)
-        assert provider.carries(case.chat_path, wrap_fields(built), [gave]), ids_only
-        assert not provider.carries(case.chat_path, wrap_fields(fields), [gave]), ids_only
-        assert not provider.carries(case.chat_path, wrap_fields(built), []), ids_only
+            gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
+            assert gave.ids, "a reply that calls a tool gave its call id"
+            built = case.follow_up(fields, reply)
+            assert provider.carries(case.chat_path, wrap_fields(built), [gave]), ids_only
+            assert not provider.carries(case.chat_path, wrap_fields(fields), [gave]), ids_only
+            assert not provider.carries(case.chat_path, wrap_fields(built), []), ids_only
     refused = provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25)
     gave = provider.given(case.chat_path, wrap_fields(case.request), refused, ids_only=False)
     assert gave.prefixes, "a reply with a message gave its message"
@@ -792,3 +778,17 @@ def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider)
         rates = Rates(1.0, 1.0, tiers=(("t", tier),))
         assert provider.dearest(rates, reading(100, 0, 0, {field: 100})) == tier
         assert provider.dearest(rates, reading(100, 0)) == rates
+
+
+def test_the_forms_a_provider_names_are_the_ones_it_accepts_and_no_other(
+    provider: ModelProvider,
+) -> None:
+    for form in provider.refusal_forms:
+        assert provider.refusal_form_problem(form) is None, form
+    said = provider.refusal_form_problem("not a form")
+    assert isinstance(said, str) and said
+    # A provider with no forms refuses any, and one with forms builds each for any request.
+    case = case_of(provider)
+    for form in (None, *provider.refusal_forms):
+        built = provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25, form)
+        assert isinstance(json.loads(built), dict)

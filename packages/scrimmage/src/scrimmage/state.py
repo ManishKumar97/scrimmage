@@ -927,6 +927,8 @@ class RunState:
             fired: dict[str, object] = {"do": fault.do, "when": fault.when, "n": decision.n}
             if fault.retry_after is not None:
                 fired["retry_after"] = fault.retry_after
+            if fault.form is not None:
+                fired["form"] = fault.form
             line["fault"] = fired
         if decision.mock is not None:
             line["mock"] = decision.mock

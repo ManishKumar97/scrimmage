@@ -2,14 +2,15 @@
 
 Pure functions of a request's host, path and body, or of a reply's body: the same jobs as
 provider_openai, over the Messages API. Anthropic's replies are never put in OpenAI's form.
-The faults that change or build a reply are not done yet: each says so, and the gate refuses
-the row.
+The faults that change a reply live in providers/impl/anthropic_changes. unknown tool is not
+done yet: it says so, and the gate refuses the row.
 """
 
 import dataclasses
 import json
 import math
 import re
+import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -19,9 +20,11 @@ from scrimmage.judge import normal
 from scrimmage.prices import Rates as Rates
 from scrimmage.providers.base import NO_FIELDS
 from scrimmage.providers.base import Fields as Fields
+from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
+from scrimmage.providers.impl.marks import among, digest, normalised, running
 from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.anthropic.com",)
@@ -34,7 +37,7 @@ WRITE_1H = "cache_write_1h"
 REQUEST_ID = "req_scrimmage_injected"
 NOT_YET = "not yet for Anthropic"
 # The words whose reply an Anthropic call cannot be given yet.
-PENDING = ("replace", "garble", "truncate", "unknown tool", "refuse")
+PENDING = ("unknown tool",)
 # The words no Anthropic reply can take, whatever the request: a mistake in the test, known
 # before the run. In a reply that is not streamed, a tool call's input is a JSON object, not
 # JSON text; a streamed reply sends it as text, but Scrimmage changes no streamed reply.
@@ -179,8 +182,8 @@ def context_too_long_body() -> bytes:
 
 
 def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
-    """Why a fault cannot be carried out on this request: the mistake in the test. The faults
-    that change or build a reply are not done yet for Anthropic, so each says so."""
+    """Why a fault cannot be carried out on this request: the mistake in the test. A fault not
+    done yet for Anthropic says so."""
     del path, wire
     if word in NEVER:
         return NEVER[word]
@@ -197,9 +200,94 @@ def never_carried_out(word: str) -> str | None:
     return NEVER.get(word)
 
 
-def refusal_reply(path: str, wire: Fields, tokens_in: int) -> bytes:
-    del path, wire, tokens_in
-    raise NotImplementedError(f"refuse is {NOT_YET}")
+# refuse. The plain form is how Claude declines in its own words, with stop_reason end_turn: its
+# text is the first sentence of a real decline (tests/fixtures/anthropic/real_decline_address.json,
+# saved on 24 November 2026), which names no subject, so it fits any request. The classifier form
+# is the refusal of Anthropic's safety classifier: no content, stop_reason refusal and
+# stop_details (tests/fixtures/anthropic/doc_refusal.json shows the shape). Its category and
+# explanation are null, which the library's RefusalStopDetails allows "when the refusal doesn't map
+# to a named category": no named category is claimed, so no harm is named.
+FORMS = ("plain", "classifier")
+PLAIN_REFUSAL = "I can't provide that."
+CLASSIFIER_DETAILS: dict[str, object] = {
+    "type": "refusal",
+    "category": None,
+    "explanation": None,
+}
+# A built plain reply's output count. It is an estimate, as the input count is: Anthropic reports
+# no count for a sentence alone, and the 4 words of the text come to about this with the reply's
+# framing. Nothing is sent or billed, so it only has to look like a reply's.
+BUILT_OUTPUT_TOKENS = 10
+ID_LETTERS = string.ascii_letters + string.digits
+ID_LENGTH = 24  # after msg_, as in a real reply's id
+
+
+def made_up_id(prefix: str, length: int) -> str:
+    """An id in Anthropic's form. secrets, so the agent's own random sequence is left alone."""
+    import secrets  # not at import: only a made-up reply needs it, and it pulls in random
+
+    return prefix + "".join(secrets.choice(ID_LETTERS) for _ in range(length))
+
+
+def refusal_form_problem(form: str) -> str | None:
+    """None for each form this provider builds, else why not."""
+    if form in FORMS:
+        return None
+    return f'is an Anthropic call, and refuse has the forms "plain" and "classifier", not {form!r}'
+
+
+def refusal_request_problem(form: str | None, path: str, wire: Fields) -> str | None:
+    """A plain decline is text. A request that forces a tool call with tool_choice "any" or
+    "tool", or asks for structured output with output_config.format, is answered by a model with
+    that call or that JSON, not with words, so a text decline is not a real reply to it. The
+    classifier's refusal has no content and fits any request."""
+    del path
+    if form == "classifier":
+        return None
+    fields = fields_dict(wire)
+    choice = _obj(fields.get("tool_choice")).get("type")
+    if choice in ("any", "tool"):
+        why = f'sets tool_choice "{choice}", which makes the model call a tool'
+    elif _obj(_obj(fields.get("output_config")).get("format")).get("type") == "json_schema":
+        why = "sets output_config.format, which makes the model answer in JSON"
+    else:
+        return None
+    return (
+        f"is an Anthropic call whose request {why}, so a plain decline in words is not a reply "
+        'a real model gives it; write form = "classifier" on this row'
+    )
+
+
+def refusal_reply(path: str, wire: Fields, tokens_in: int, form: str | None = None) -> bytes:
+    """refuse: a whole Messages reply that declines, laid out as a real one is, with its keys in
+    the real order. Plain by default; form "classifier" builds the classifier's refusal, which
+    stopped before any output."""
+    del path
+    classifier = form == "classifier"
+    reply: dict[str, object] = {
+        "model": model_name(wire) or "",
+        "id": made_up_id("msg_", ID_LENGTH),
+        "type": "message",
+        "role": "assistant",
+        "content": [] if classifier else [{"type": "text", "text": PLAIN_REFUSAL}],
+        "container": None,
+        "stop_reason": "refusal" if classifier else "end_turn",
+        "stop_sequence": None,
+        "stop_details": CLASSIFIER_DETAILS if classifier else None,
+        "usage": {
+            "input_tokens": tokens_in,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 0 if classifier else BUILT_OUTPUT_TOKENS,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    }
+    return json.dumps(reply, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def unknown_tool_reply(wire: Fields, tokens_in: int, tool: str) -> bytes:
@@ -222,6 +310,67 @@ def no_free_tool_call(path: str, wire: Fields) -> str | None:
     if choice == "tool":
         return "the request's tool_choice names the tool to call, so a model would call that one"
     return None
+
+
+def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
+    """What this reply to this request gave the agent. ids_only: the tool call ids alone, for a
+    reply whose message any model may send, such as a call to a tool no one offered."""
+    message = _assistant(request_fields(reply))
+    ids = frozenset(
+        found
+        for block in _list(message.get("content"))
+        if _obj(block).get("type") == "tool_use"
+        and isinstance(found := _obj(block).get("id"), str)
+        and found
+    )
+    if ids_only:
+        return Given(ids)
+    asked = [normalised(_whole(item)) for item in _list(fields_dict(wire).get("messages"))]
+    prefixes = frozenset[tuple[int, bytes]]()
+    if message:
+        prefixes = frozenset([digest([*asked, normalised(message)])])
+    return Given(ids, prefixes)
+
+
+def carries(wire: Fields, kept: Sequence[Given]) -> bool:
+    """Whether a Messages request carries what any of these faulted replies gave the agent: an
+    assistant tool_use or a user tool_result with one of its toolu_ ids, or messages that start
+    with a faulted request's messages and its reply's message. The request is hashed once,
+    message by message, so the check grows with the request, not with the faults. An id that is
+    not a string is the agent's own mistake: it matches nothing, and the request goes on to the
+    provider, which answers it."""
+    if not kept:
+        return False
+    ids = frozenset[str]().union(*(gave.ids for gave in kept))
+    messages = [_obj(item) for item in _list(fields_dict(wire).get("messages"))]
+    for message in messages:
+        for block in _list(message.get("content")):
+            held = _obj(block)
+            kind = held.get("type")
+            found = held.get("id") if kind == "tool_use" else held.get("tool_use_id")
+            if kind in ("tool_use", "tool_result") and among(found, ids):
+                return True
+    wanted = frozenset[tuple[int, bytes]]().union(*(gave.prefixes for gave in kept))
+    counts = {count for count, _ in wanted}
+    if not counts:
+        return False
+    sent = (normalised(_whole(message)) for message in messages[: max(counts)])
+    return any(found in wanted for found in running(sent, counts))
+
+
+def _assistant(reply: Fields | None) -> dict[str, object]:
+    """The assistant message a Messages reply is: its role and its content, which the agent
+    sends back as the next turn. Empty for a reply that is not one."""
+    content = fields_dict(reply).get("content")
+    return {"role": "assistant", "content": content} if isinstance(content, list) else {}
+
+
+def _whole(message: object) -> object:
+    """A message with its content as blocks: text sent as a string is one text block."""
+    held = _obj(message)
+    if isinstance(held.get("content"), str):
+        return {**held, "content": [{"type": "text", "text": held["content"]}]}
+    return message
 
 
 def parse_reply(data: bytes) -> Reply:

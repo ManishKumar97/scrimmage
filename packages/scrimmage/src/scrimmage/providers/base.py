@@ -241,7 +241,28 @@ class FaultMaker(Protocol):
         a mistake in the test known before the run, or None when it can."""
         ...
 
-    def refusal_reply(self, path: str, wire: Fields, tokens_in: int) -> bytes: ...
+    def refusal_reply(
+        self, path: str, wire: Fields, tokens_in: int, form: str | None = None
+    ) -> bytes:
+        """A whole reply that declines. form: the way a row asked it to decline, or None for the
+        provider's usual one."""
+        ...
+
+    @property
+    def refusal_forms(self) -> tuple[str, ...]:
+        """The forms a refuse of this provider can take, the first being its usual one; none for
+        a provider whose refusal has one form. The vocabulary of a row's form is these."""
+        ...
+
+    def refusal_request_problem(self, form: str | None, path: str, wire: Fields) -> str | None:
+        """Why a refuse of this form is not what a real reply to this request looks like, which
+        is then a mistake in the test, or None when it is."""
+        ...
+
+    def refusal_form_problem(self, form: str) -> str | None:
+        """Why this provider's refuse cannot take this form, which is then a mistake in the
+        test known before the run, or None when it can."""
+        ...
 
     def tool_call_tools(self, path: str, wire: Fields) -> list[str]: ...
 

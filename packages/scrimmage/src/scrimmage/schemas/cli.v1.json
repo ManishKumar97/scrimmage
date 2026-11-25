@@ -334,7 +334,8 @@
                 "raises",
                 "text",
                 "find",
-                "retry_after"
+                "retry_after",
+                "form"
               ],
               "properties": {
                 "call": {
@@ -418,6 +419,13 @@
                     "null"
                   ],
                   "minimum": 0
+                },
+                "form": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "How a refuse fault declines, \"plain\" or \"classifier\", or null when the row names no form."
                 }
               }
             }

@@ -1,8 +1,10 @@
+import copy
 import dataclasses
 import json
 import re
 import tomllib
 from pathlib import Path
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -1078,6 +1080,100 @@ def test_a_reply_fault_takes_no_text_find_or_retry_after(word: str) -> None:
     with pytest.raises(ConfigError, match="Give the fault its own expect or forbid"):
         config.read_fault(reply_fault(word, when="always"), "x")
     assert config.read_fault(reply_fault(word, when="always", forbid=["x"]), "x").forbid == ("x",)
+
+
+@pytest.mark.design("config.refuse_form")
+def test_a_refuse_form_is_plain_or_classifier_and_works_only_with_refuse() -> None:
+    assert config.read_fault(reply_fault("refuse"), "x").form is None
+    for form in ("plain", "classifier"):
+        assert config.read_fault(reply_fault("refuse", form=form), "x").form == form
+    for bad in ("loud", "", 2, True, ["plain"]):
+        with pytest.raises(ConfigError, match='form: expected "plain" or "classifier"'):
+            config.read_fault(reply_fault("refuse", form=bad), "x")
+    for word in ("garble", "truncate", "unknown tool", "bad tool args", "status 500", "timeout"):
+        with pytest.raises(ConfigError, match='form: works only with do = "refuse"'):
+            config.read_fault(reply_fault(word, form="plain"), "x")
+    with pytest.raises(ConfigError, match="form: unknown setting"):
+        config.read_fault({"call": "tool:t", "do": "timeout", "form": "plain"}, "x")
+
+
+@pytest.mark.design("config.refuse_form")
+def test_the_plan_carries_a_refuse_form_and_refuses_one_that_is_not_a_form() -> None:
+    fault = config.Fault("model", "refuse", "first 1", model="m", form="classifier")
+    doc = plan.fault_json(fault)
+    assert doc["form"] == "classifier"
+    assert plan.fault_from(doc) == fault
+    assert "form" not in plan.fault_json(dataclasses.replace(fault, form=None))
+    with pytest.raises(ValueError, match="plan fault form: expected"):
+        plan.fault_from({**doc, "form": "loud"})
+    with pytest.raises(ValueError, match='plan fault form: works only with do = "refuse"'):
+        plan.fault_from({**doc, "do": "garble"})
+
+
+SCHEMAS = Path(config.__file__).parent / "schemas"
+
+
+@pytest.mark.design("config.refuse_form")
+def test_the_forms_of_refuse_are_the_providers_and_both_schemas_list_the_same() -> None:
+    """The vocabulary lives in the providers: the config reads it from them, and the two
+    schemas, which cannot, are held to it here."""
+    forms = config.refusal_forms()
+    assert forms == ("plain", "classifier")
+    toml = json.loads((SCHEMAS / "scrimmage-toml.v1.json").read_text())
+    assert tuple(toml["$defs"]["refuse_form"]["enum"]) == forms
+    plan_schema = json.loads((SCHEMAS / "plan.v1.json").read_text())
+    assert (
+        tuple(plan_schema["properties"]["faults"]["items"]["properties"]["form"]["enum"]) == forms
+    )
+    cli = json.loads((SCHEMAS / "cli.v1.json").read_text())
+    assert any(
+        "form" in found["properties"] and "find" in found["properties"]
+        for found in schema_objects(cli)
+    ), "the --json fault object has the key"
+    record = json.loads((SCHEMAS / "record.v1.json").read_text())
+    (held,) = [
+        found["properties"]["form"]
+        for found in schema_objects(record)
+        if "form" in found["properties"] and "retry_after" in found["properties"]
+    ]
+    assert tuple(held["enum"]) == forms
+
+
+def schema_objects(node: object) -> list[dict[str, Any]]:
+    """Every schema object in a JSON schema that lists properties."""
+    found: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        held = cast("dict[str, Any]", node)
+        if isinstance(held.get("properties"), dict):
+            found.append(held)
+        for value in held.values():
+            found += schema_objects(value)
+    elif isinstance(node, list):
+        for value in cast("list[object]", node):
+            found += schema_objects(value)
+    return found
+
+
+@pytest.mark.design("config.refuse_form")
+def test_a_plan_that_carries_a_form_is_valid_against_the_plan_schema_and_only_then() -> None:
+    schema = json.loads((SCHEMAS / "plan.v1.json").read_text())
+    check = jsonschema.Draft202012Validator(schema)
+    fault = config.Fault("model", "refuse", "first 1", model="m", form="classifier")
+    doc: Any = plan.Plan("run-1", "t", "row", (), (fault,), (), (), 60.0).to_json()
+    assert doc["faults"][0]["form"] == "classifier"
+    check.validate(doc)
+    # The schema must know the key: with it removed the same plan is refused.
+    stripped = copy.deepcopy(schema)  # the check above keeps the whole schema
+    del stripped["properties"]["faults"]["items"]["properties"]["form"]
+    assert list(jsonschema.Draft202012Validator(stripped).iter_errors(doc)), "form is in it"
+    # And it must hold the vocabulary and the word: another form, or another fault, is refused,
+    # by the schema with form in it, for the reason each breaks.
+    for fault_doc, why in (
+        ({**doc["faults"][0], "form": "loud"}, "'loud' is not one of"),
+        ({**doc["faults"][0], "do": "garble"}, "'refuse' was expected"),
+    ):
+        said = [error.message for error in check.iter_errors({**doc, "faults": [fault_doc]})]
+        assert any(why in message for message in said), (fault_doc, said)
 
 
 @pytest.mark.design("config.reply_fault_billed_warning")

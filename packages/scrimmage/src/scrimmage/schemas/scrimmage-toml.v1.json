@@ -862,6 +862,16 @@
               ]
             }
           }
+        },
+        "form": {
+          "required": [
+            "do"
+          ],
+          "properties": {
+            "do": {
+              "const": "refuse"
+            }
+          }
         }
       },
       "properties": {
@@ -887,6 +897,9 @@
         },
         "retry_after": {
           "$ref": "#/$defs/retry_after"
+        },
+        "form": {
+          "$ref": "#/$defs/refuse_form"
         },
         "expect": {
           "$ref": "#/$defs/fault_expect"
@@ -1084,6 +1097,13 @@
       "type": "integer",
       "minimum": 0,
       "description": "Whole seconds for the reply's Retry-After header, under run_timeout. Only with do = \"status 429\" or \"status 503\"."
+    },
+    "refuse_form": {
+      "enum": [
+        "plain",
+        "classifier"
+      ],
+      "description": "How refuse declines: \"plain\" is the model's own words with stop reason end_turn, and is the default; \"classifier\" is a safety classifier's refusal with stop reason refusal. Only with do = \"refuse\" on a call to a provider that has both."
     },
     "slow": {
       "type": "string",

@@ -9,7 +9,7 @@ Every other limit is listed below, grouped by how your agent runs.
 - **OpenAI and Anthropic only.** Model calls are understood for OpenAI's API, for Anthropic's Messages API, and for gateways that speak either format; a call to another provider stops the test until you list it.
   Either name a gateway that speaks OpenAI's or Anthropic's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
   Anthropic's Messages API is recognized and its calls are counted, but this version ships no Anthropic prices, so a call with a budget on is refused until you add a price under `[agent.prices]`.
-  The faults that change or build an Anthropic reply are not done yet, and `bad tool args` never will be: see [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
+  `replace`, `garble`, `truncate` and `refuse` work on an Anthropic reply, but `unknown tool` is not done yet, and `bad tool args` never will be: see [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call) and [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
@@ -357,7 +357,7 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A change over text the record removes is not made.** A `find` that touches a key, or an `append` that joins a key to the text before it, leaves the call unchanged and the line names the rule.
 
-- **`replace` on a model reply is for Chat Completions text.** A streamed reply and a Responses API call are a mistake in the test, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
+- **`replace` on a model reply is for text replies.** It changes the text of an OpenAI Chat Completions reply and of each `text` block of an Anthropic Messages reply. A streamed reply and an OpenAI Responses API call are a mistake in the test, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`bad body` on a streamed model request.** It is a mistake in the test: the call fails at once and the fault is not counted as fired. A stream cut midway is a later fault. Fault a request that is not streamed, or use `timeout` or a status on this one.
@@ -365,7 +365,11 @@ Also read the control-path limits under An agent inside a web service.
 - **`context too long` is OpenAI's Chat Completions reply.** On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired. Other providers' replies come with those providers.
   The message names the numbers of the real reply it was saved from, 128000 and 140008 tokens, not your model's context or your prompt's length.
 
-- **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a mistake in the test: the call fails at once and nothing is sent. A changed stream is a later fault.
+- **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a mistake in the test: the call fails at once and nothing is sent.
+  A changed stream is a later fault.
+  `replace` is the one that lets the real stream through, with the mistake on the line, because it is a carried fault, which is decided once the reply is back.
+  `bad body` on a streamed request is a mistake too.
+  What reaches an agent that streams is `timeout`, `refused`, `reset`, `dns`, `status`, `context too long` and `slow`, as for any call.
 
 - **`unknown tool` is for Chat Completions.** On a Responses API call it is a mistake in the test, and nothing is sent: no source shows a model call a tool no one offered there.
 
@@ -450,6 +454,16 @@ When two entries name the same model, or none names the model that ran, the fall
 An attempt of another kind, such as an advisor, is settled at the reply's tier for the requested model and at the normal rates for any other.
 A request Scrimmage cannot read, such as a compressed one, is settled the same way.
 The hold covers only the models the request names, so a reply in which a model no entry names served can settle above its hold.
+
+- **`refuse` with `form = "classifier"` names no category.**
+  Its `stop_details` has `category` and `explanation` set to `null`, which the anthropic library reads as a refusal that maps to no named category.
+  An agent that branches on a category, such as `cyber` or `bio`, is not reached by this fault.
+  No real classifier refusal could be captured with a harmless request, so none is copied.
+
+- **A plain `refuse` on a forced tool call or JSON is a mistake in the test.**
+  A request with `tool_choice` of type `any` or `tool`, or with `output_config.format` of type `json_schema`, is answered by a real model with the tool call or the JSON, not with words.
+  The plain form stops at the call, nothing is sent, and the message says to write `form = "classifier"` on the row, which builds for any request.
+  OpenAI's `refuse` has the same gap on a forced `tool_choice` and builds a text refusal anyway.
 
 - **Anthropic's server tools.** A web search is settled at $0.01 each, from the searches the reply counts, unless `[anthropic.fees]` in a price file or `web_search_request` in a model's `[agent.prices]` row says otherwise. The hold adds `max_uses` searches, or 10 when there is none. A server tool loop adds input at Anthropic's side that the hold cannot see, and writes the cache by itself, so a hold can be low for such a call; the hold uses at least the 5 minute write rate. Code execution is billed by container time, which a reply never reports, so a budget cannot count it: a request that offers it is refused, with the reason `unmetered_tool`, unless it also offers `web_search_20260209` or `web_fetch_20260209` or later, with which it is free. The refusal does not depend on whether a budget is set.
   The searches are counted from the reply's own `usage.server_tool_use`, which no real reply Scrimmage has seen spreads over `usage.iterations`; a search an attempt of a fallback or an advisor ran, if the API counts it in that attempt's entry only, is not counted.

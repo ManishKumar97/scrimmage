@@ -72,17 +72,17 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 | `empty` | a tool returns the empty value of its declared return type, and never runs; an MCP tool returns a result with no content; a web request gets a 200 with no body and no `Content-Type` |
 | `bad body` | a model call or a web request gets a complete 200 that says it is JSON, whose JSON does not parse |
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
-| `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
+| `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is; on an Anthropic call the text of every `text` block of the reply is, and `thinking` blocks and every other field stay as sent |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status; on a model call, `status 401` is OpenAI's own reply to a bad API key, so the library raises `AuthenticationError` |
 | `context too long` | a chat model call gets OpenAI's reply to a prompt over the model's context, and the openai library raises `BadRequestError` with the code `context_length_exceeded` |
 | `refused` | a model call or a web request raises the library's `ConnectError`, as if nothing listened on the server's port |
 | `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
 | `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
-| `refuse` | a chat model call gets a 200 whose answer is a refusal, in the form a real one takes for that request; nothing is sent |
+| `refuse` | a chat model call gets a 200 whose answer is a refusal, in the form a real one takes for that request; nothing is sent; on an Anthropic call it is a plain decline with `stop_reason` `end_turn`, or with `form = "classifier"` a reply with `stop_reason` `refusal` and `stop_details` |
 | `unknown tool` | a chat model call that offers tools gets a 200 that calls `multi_tool_use.parallel`, a tool no agent offers, as OpenAI's models have done; nothing is sent |
-| `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident |
-| `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; a reply of tool calls alone becomes the 400 OpenAI sends when the limit lands inside a tool call |
+| `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident; on an Anthropic call every `text` block of the reply is garbled and `thinking` blocks stay as sent |
+| `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; a reply of tool calls alone becomes the 400 OpenAI sends when the limit lands inside a tool call; on an Anthropic call the first `text` block is cut, the blocks after it go, and `stop_reason` is `max_tokens`, and a reply of tool calls alone keeps its first `tool_use` block with an empty `input`, as a real cut does |
 | `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; on an Anthropic call it is a mistake in the test, because in a reply that is not streamed a tool call's input is a JSON object and cannot fail to parse |
 
 Under `empty` the tool's declared return type gives the value:

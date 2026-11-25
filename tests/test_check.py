@@ -93,6 +93,31 @@ def test_bad_tool_args_on_an_anthropic_row_is_refused_before_any_run_naming_why(
     assert cli.main(["check", str(project.toml)]) == outcomes.OK
 
 
+@pytest.mark.design("check.same_as_test")
+def test_a_refuse_form_on_an_openai_row_is_refused_before_any_run_naming_why(
+    project: Project, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reached(self: runner.Runner, cfg: config.Config, **kwargs: object) -> None:
+        raise Reached
+
+    monkeypatch.setattr(runner.Runner, "__init__", reached)
+    text = next(bad for bad in BAD if bad.name == "openai_refuse_form").text
+    project.toml.write_text(text)
+    assert cli.main(["check", str(project.toml)]) == outcomes.MISTAKE
+    checked = capsys.readouterr()
+    assert "model:openai is an OpenAI call, and refuse has one form" in checked.err
+    assert cli.main(["test", str(project.toml)]) == outcomes.MISTAKE
+    tested = capsys.readouterr()
+    assert "Reached" not in tested.err, "scrimmage test stopped before its runner started"
+    assert "refuse has one form" in tested.err
+    # The same row on Anthropic, which has the form, and the same row with no form on OpenAI,
+    # get past the file.
+    project.toml.write_text(text.replace("model:openai", "model:anthropic"))
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK
+    project.toml.write_text(text.replace('form = "classifier"\n', ""))
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK
+
+
 @pytest.mark.design("check.runs_nothing")
 def test_check_starts_no_process_server_or_records_folder(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

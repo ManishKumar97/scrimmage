@@ -188,6 +188,12 @@
           "retry_after": {
             "type": "integer",
             "minimum": 0
+          },
+          "form": {
+            "enum": [
+              "plain",
+              "classifier"
+            ]
           }
         },
         "dependentSchemas": {
@@ -198,6 +204,13 @@
                   "status 429",
                   "status 503"
                 ]
+              }
+            }
+          },
+          "form": {
+            "properties": {
+              "do": {
+                "const": "refuse"
               }
             }
           }

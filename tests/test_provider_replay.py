@@ -74,7 +74,12 @@ PINNED = [
     "anthropic fault status 529",
     "anthropic anthropic: retry fault",
     "anthropic stream cut",
-    "anthropic fault refuse not yet",
+    "anthropic fault refuse",
+    "anthropic fault refuse form classifier",
+    "anthropic fault replace real_decline",
+    "anthropic fault truncate",
+    "anthropic marker truncate",
+    "anthropic fault unknown tool not yet",
     "anthropic host listed for both",
     "anthropic messages count tokens",
 ]
