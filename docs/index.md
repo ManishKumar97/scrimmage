@@ -161,7 +161,7 @@ and it judges each answer with rules you write, over repeated runs.
 
 - [Install](install.md), then the [Quickstart](quickstart.md): a failing row, then a fix.
 - [Judging an answer](judging.md), [Failing the model](model-faults.md) and [Testing your guardrails](guardrails.md): the main use cases.
-- [Examples](examples/index.md): scripts, LangGraph, MCP, web requests, judging and one model.
+- [Examples](examples/index.md): a function, a script, a web service, LangGraph, MCP, web requests, an unknown tool, judging and one model.
 - [Safety](safety.md) and [Security](security.md): what a test can and cannot do to your systems and data.
 - [Configuration](configuration.md), [Commands](cli.md) and [JSON output](json-output.md): the reference.
 - [Source on GitHub](https://github.com/ManishKumar97/scrimmage), the [License](license.md) (Apache-2.0) and [Security](security.md).

@@ -29,7 +29,6 @@ def answer(question: str) -> dict:
 [agent]
 function = "package.graph:answer"
 answer   = "messages[-1].text"
-real     = ["tool:check_inventory"]
 
 [[test]]
 name     = "order-status"
