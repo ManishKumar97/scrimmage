@@ -381,9 +381,9 @@ class RunState:
         # of their items: they are made up, so the provider holds nothing under them, and a
         # later request may not ask it to look one up.
         self.faulted_reply_ids: set[str] = set()
-        # The tool names each earlier model request to a label offered, first offered first, so
-        # unknown tool can call one the agent has since stopped offering.
-        self.offered_tools: dict[str, dict[str, None]] = {}
+        # The tool names each earlier model request of one conversation to a label offered, first
+        # offered first, so unknown tool can call one the agent has since stopped offering.
+        self.offered_tools: dict[tuple[str, str], dict[str, None]] = {}
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
         # requests, each noted once: both belong to this run, never to the process.
@@ -795,20 +795,21 @@ class RunState:
             with self._lock:
                 self.reply_fault_markers.setdefault(label, []).append(gave)
 
-    def remember_offered(self, label: str, names: Sequence[str]) -> None:
-        """Keep the tool names a model request to this label offers. Bounded: a run whose tool
-        names change on every request keeps the first ones only."""
+    def remember_offered(self, label: str, conversation: str, names: Sequence[str]) -> None:
+        """Keep the tool names a model request of this conversation to this label offers. Bounded:
+        a run whose tool names change on every request keeps the first ones only."""
         with self._lock:
-            seen = self.offered_tools.setdefault(label, {})
+            seen = self.offered_tools.setdefault((label, conversation), {})
             for name in names:
                 if len(seen) < MAX_REMEMBERED_TOOLS:
                     seen.setdefault(name)
 
-    def dropped_tool(self, label: str, offered: Sequence[str]) -> str | None:
-        """The first tool an earlier request to this label offered that this one does not, or
-        None."""
+    def dropped_tool(self, label: str, conversation: str, offered: Sequence[str]) -> str | None:
+        """The first tool an earlier request of this conversation to this label offered that this
+        one does not, or None."""
         with self._lock:
-            return next((n for n in self.offered_tools.get(label, ()) if n not in offered), None)
+            seen = self.offered_tools.get((label, conversation), ())
+            return next((n for n in seen if n not in offered), None)
 
     def add_faulted_reply(self, ids: list[str]) -> None:
         """Keep the ids of a kept reply a fired fault changed or built, and its items'."""

@@ -588,7 +588,8 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
 def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = provider_for(run, step).offered(path, fields)
-    run.remember_offered(step.call.label, tools.agent)
+    if (conversation := provider_for(run, step).conversation_key(path, fields)) is not None:
+        run.remember_offered(step.call.label, conversation, tools.agent)
     if tools.hosted_reads:
         step.extra["hosted_reads"] = tools.hosted_reads
     if tools.unknown:
@@ -713,7 +714,8 @@ def built_reply(
         calls = provider.tool_call_tools(path, fields)
         offered = provider.offered(path, fields).agent
         named = ctx.run.plan.faults[step.decision.fault or 0].tool
-        tool = unknown_tool_name(ctx.run, step.call.label, named, offered, calls)
+        conversation = provider.conversation_key(path, fields)
+        tool = unknown_tool_name(ctx.run, step.call.label, conversation, named, offered, calls)
         built = provider.unknown_tool_reply(path, fields, tokens, tool)
     headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
@@ -724,16 +726,22 @@ MAX_MADE_UP_NAME = 64  # the longest function name OpenAI takes, the smaller lim
 
 
 def unknown_tool_name(
-    run: RunState, label: str, named: str | None, offered: list[str], calls: list[str]
+    run: RunState,
+    label: str,
+    conversation: str | None,
+    named: str | None,
+    offered: list[str],
+    calls: list[str],
 ) -> str:
-    """The tool unknown tool calls: the one the row names; else one an earlier request to this
-    label offered and this one does not; else the name of the first tool the model could call
-    with _v2 added, as a rename between two deploys reads. offered: every tool this request
-    offers, in any field; calls: the ones a call may name. The made-up name is cut to fit
+    """The tool unknown tool calls: the one the row names; else one an earlier request of this
+    conversation to this label offered and this one does not, which needs a conversation key,
+    so one agent's tool is never named in another's; else the name of the first tool the model
+    could call with _v2 added, as a rename between two deploys reads. offered: every tool this
+    request offers, in any field; calls: the ones a call may name. The made-up name is cut to fit
     MAX_MADE_UP_NAME, and is never one the request offers."""
     if named is not None:
         return named
-    if (dropped := run.dropped_tool(label, offered)) is not None:
+    if conversation is not None and (dropped := run.dropped_tool(label, conversation, offered)):
         return dropped
     for n in itertools.count(1):
         suffix = "_v2" * n if n < 10 else f"_v{n}"

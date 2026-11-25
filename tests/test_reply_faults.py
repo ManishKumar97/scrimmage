@@ -934,27 +934,30 @@ def test_the_made_up_name_is_never_a_name_the_request_offers() -> None:
     name = http_gate.unknown_tool_name
 
     def made(named: str | None, offered: list[str], calls: list[str] | None = None) -> str:
-        return name(run, "model:openai", named, offered, offered if calls is None else calls)
+        both = offered if calls is None else calls
+        return name(run, "model:openai", "c1", named, offered, both)
 
     assert made(None, ["get_order"]) == "get_order_v2"
     assert made(None, ["get_order", "get_order_v2"]) == "get_order_v2_v2"
     assert made("get_order_v2", ["get_order"]) == "get_order_v2"
-    run.remember_offered("model:openai", ["a", "b"])
+    run.remember_offered("model:openai", "c1", ["a", "b"])
     assert made(None, ["b"]) == "a"
     assert made(None, ["a", "b"]) == "a_v2", "a tool still offered is not dropped"
-    assert name(run, "model:other", None, ["b"], ["b"]) == "b_v2"
+    assert name(run, "model:other", "c1", None, ["b"], ["b"]) == "b_v2"
+    assert name(run, "model:openai", "c2", None, ["b"], ["b"]) == "b_v2", "another conversation"
+    assert name(run, "model:openai", None, None, ["b"], ["b"]) == "b_v2", "no conversation key"
 
 
 @pytest.mark.design("fault.unknown_tool_name")
 def test_the_made_up_name_fits_the_smaller_name_limit_and_is_not_offered() -> None:
     run = state.RunState(plan_naming(None), Sink(), [])
     long = "t" * 64
-    made = http_gate.unknown_tool_name(run, "l", None, [long], [long])
+    made = http_gate.unknown_tool_name(run, "l", "c", None, [long], [long])
     assert len(made) == 64 and made.endswith("_v2") and made != long
-    again = http_gate.unknown_tool_name(run, "l", None, [long, made], [long])
+    again = http_gate.unknown_tool_name(run, "l", "c", None, [long, made], [long])
     assert len(again) == 64 and again not in (long, made)
     crowd = ["t" * (64 - len("_v2") * n) + "_v2" * n for n in range(1, 10)]
-    final = http_gate.unknown_tool_name(run, "l", None, ["t" * 64, *crowd], ["t" * 64])
+    final = http_gate.unknown_tool_name(run, "l", "c", None, ["t" * 64, *crowd], ["t" * 64])
     assert len(final) <= 64 and final not in crowd
 
 
@@ -975,12 +978,52 @@ def test_a_tool_still_offered_in_the_old_functions_field_is_not_dropped_and_not_
     assert line_of(sink, "model")["reason"] == MISTAKE_REFUSAL
 
 
+def asked_by(system: str, *more: dict[str, str]) -> list[dict[str, str]]:
+    """One agent's conversation: its system prompt, its first question, and later turns."""
+    return [{"role": "system", "content": system}, {"role": "user", "content": "help"}, *more]
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_tool_dropped_in_another_conversation_is_never_named_but_one_dropped_in_this_is(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """A triage agent and a refund agent share one label: the first's unknown tool must not call
+    a tool only the second offers, which it would run for real."""
+    gate_plan(plan_naming(None))
+    triage = asked_by("You triage.")
+    refund = asked_by("You refund.")
+    completion(loopback, sync, messages=refund, tools=SPECS)  # get_order and get_stock, offered
+    other, _ = completion(loopback, sync, messages=triage, tools=SPECS[1:])
+    assert called(other) == "get_stock_v2", "get_order is the refund agent's tool, not dropped"
+    same, _ = completion(loopback, sync, messages=refund, tools=SPECS[1:])
+    assert called(same) == "get_order", "the refund agent's own dropped tool"
+    later = [*refund, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "more"}]
+    again, _ = completion(loopback, sync, messages=later, tools=SPECS[1:])
+    assert called(again) == "get_order", "a later turn of the same conversation"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_a_responses_request_that_continues_by_id_has_no_key_so_the_name_is_the_v2_one(
+    gated: None, loopback: Loopback
+) -> None:
+    gate_plan(plan_naming(None))
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    responses_api(loopback, True, tools=RESPONSE_SPECS)
+    [item] = responses_api(
+        loopback, True, tools=RESPONSE_SPECS[1:], previous_response_id="resp_" + "1" * 50
+    ).output
+    assert item.name == "get_stock_v2", "no conversation key: no dropped tool"
+    [item] = responses_api(loopback, True, tools=RESPONSE_SPECS[1:]).output
+    assert item.name == "get_order", "a stateless request keys the same conversation"
+
+
 @pytest.mark.design("fault.unknown_tool_name")
 def test_the_memory_of_offered_tools_is_bounded() -> None:
     run = state.RunState(plan_naming(None), Sink(), [])
-    run.remember_offered("l", [f"t{n}" for n in range(state.MAX_REMEMBERED_TOOLS + 50)])
-    assert len(run.offered_tools["l"]) == state.MAX_REMEMBERED_TOOLS
-    assert run.dropped_tool("l", []) == "t0"
+    run.remember_offered("l", "c", [f"t{n}" for n in range(state.MAX_REMEMBERED_TOOLS + 50)])
+    assert len(run.offered_tools["l", "c"]) == state.MAX_REMEMBERED_TOOLS
+    assert run.dropped_tool("l", "c", []) == "t0"
 
 
 @pytest.mark.design("fault.unknown_tool_name")

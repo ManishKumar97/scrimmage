@@ -546,6 +546,28 @@ def references(fields: dict[str, object]) -> list[str]:
     return [i for i in found if isinstance(i, str)]
 
 
+def conversation_key(path: str, wire: Fields) -> str | None:
+    """The system and developer messages, or a Responses request's instructions, and the first
+    user message: what every turn of one conversation sends again. None when there is no user
+    message, or a Responses request continues by id, with previous_response_id or a
+    conversation, so it carries neither."""
+    fields = fields_dict(wire)
+    if is_responses(path):
+        if fields.get("previous_response_id") is not None or fields.get("conversation") is not None:
+            return None
+        items = fields.get("input")
+        messages = [{"role": "user", "content": items}] if isinstance(items, str) else _list(items)
+        lead: list[object] = [] if fields.get("instructions") is None else [fields["instructions"]]
+    else:
+        messages = _list(fields.get("messages"))
+        lead = []
+    lead += [m for m in messages if _obj(m).get("role") in ("system", "developer")]
+    first = next((m for m in messages if _obj(m).get("role") == "user"), None)
+    if first is None:
+        return None
+    return digest([normalised(lead), normalised(first)])[1].hex()
+
+
 def tool_call_tools(path: str, wire: Fields) -> list[str]:
     """The tools a chat request offers in tools, the field tool_calls answer. The old
     functions field gets a function_call reply instead, never a tool call."""

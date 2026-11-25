@@ -463,6 +463,23 @@ def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
     assert provider.called_tool(provider.parse_reply(built)) == "get_order_v2"
 
 
+def test_a_conversation_key_is_the_same_on_every_turn_and_differs_between_conversations(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    first = case.tool_request("get_order")
+    messages: Any = first["messages"]
+    turn = [*messages, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "more"}]
+    other = [{"role": "user", "content": "something else"}]
+
+    def key(**more: object) -> str | None:
+        return provider.conversation_key(case.chat_path, wrap_fields({**first, **more}))
+
+    assert key() is not None and key() == key(messages=turn)
+    assert key() != key(messages=other)
+    assert key(messages=[]) is None
+
+
 def test_a_request_with_no_tool_to_call_says_why(provider: ModelProvider) -> None:
     case = case_of(provider)
     assert provider.tool_call_tools(case.chat_path, wrap_fields(case.request)) == []

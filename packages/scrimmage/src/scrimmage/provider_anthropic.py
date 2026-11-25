@@ -317,6 +317,20 @@ def unknown_tool_reply(path: str, wire: Fields, tokens_in: int, tool: str) -> by
     return json.dumps(built, separators=(",", ":"), ensure_ascii=False).encode()
 
 
+def conversation_key(path: str, wire: Fields) -> str | None:
+    """The system prompt and the first user message, which every turn of one conversation sends
+    again. None when there is no user message."""
+    del path
+    fields = fields_dict(wire)
+    system = fields.get("system")
+    if isinstance(system, str):
+        system = [{"type": "text", "text": system}]
+    first = next((m for m in _list(fields.get("messages")) if _obj(m).get("role") == "user"), None)
+    if first is None:
+        return None
+    return digest([normalised(system), normalised(_whole(first))])[1].hex()
+
+
 def tool_call_tools(path: str, wire: Fields) -> list[str]:
     """The tools a request offers that the agent runs, which a tool_use reply may name."""
     return offered(path, wire).agent

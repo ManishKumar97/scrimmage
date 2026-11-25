@@ -163,7 +163,10 @@ The real causes are documented, and the fault catalog names each:
 | 2 | a tool an earlier model request of the run offered and this one does not | the agent has dropped a tool since, as a deploy or `list_changed` does |
 | 3 | the name of the first tool this request offers, with `_v2` added | otherwise, so it reads like a rename between two deploys |
 
-The run remembers the tool names of each model request, for each call label such as `model:openai`.
+The run remembers the tool names of each model request, for each call label such as `model:openai` and each conversation.
+A conversation is told apart by its system prompt or instructions and its first user message, so one agent's tool is never named in another agent's reply.
+A request that carries neither, such as a Responses request that continues by `previous_response_id`, has no dropped tool and gets the third form.
+A run of several agents that wants a specific tool sets `tool`.
 In the third case a name the request already offers gets `_v2` added again until it is not one.
 A row whose `tool` is a tool the request offers is a mistake in the test, and nothing is sent: a call to an offered tool is not an unknown tool.
 The `_v2` name is a guess at a rename, not a name any model sent.

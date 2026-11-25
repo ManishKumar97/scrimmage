@@ -331,6 +331,20 @@ def test_an_unknown_tool_reply_calls_a_tool_an_earlier_request_offered_and_this_
     assert names == ["get_order_v2", "get_order", "get_order_v2"]
 
 
+def test_an_unknown_tool_reply_names_no_tool_dropped_in_another_conversation() -> None:
+    """Two agents of one run, told apart by their system prompts: one's tool is not the other's
+    unknown tool, but a tool the same conversation dropped still is."""
+    run = seen_gate("unknown tool")
+    client = anthropic_client(Provider(run.events, lambda r: httpx2.Response(200, content=b"{}")))
+
+    def name(system: str, offered: list[Any]) -> str:
+        return asked(client, system=system, tools=offered).parse().content[0].name
+
+    assert name("You refund.", [ORDER, STOCK]) == "get_order_v2"
+    assert name("You triage.", [STOCK]) == "get_stock_v2", "get_order is not this agent's"
+    assert name("You refund.", [STOCK]) == "get_order", "the refund agent's own dropped tool"
+
+
 def test_an_unknown_tool_reply_never_calls_a_name_the_request_offers() -> None:
     twice = {**ORDER, "name": "get_order_v2"}
     assert unknown_reply(ORDER, twice)[3].content[0].name == "get_order_v2_v2"

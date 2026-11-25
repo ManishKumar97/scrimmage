@@ -398,7 +398,9 @@ Also read the control-path limits under An agent inside a web service.
 
 - **`unknown tool` calls with no arguments.** The made-up call has an empty input, `{}` on Anthropic and `"{}"` on OpenAI, whatever the tool; the row cannot set it.
   The default name, an offered tool's name with `_v2` added, is a guess at a rename between deploys, not a name any model sent; name the tool with `tool` when the name matters.
-  The run remembers the tool names of each model request by call label, so a tool dropped on one provider's call is not remembered for another's.
+  The run remembers the tool names of each model request by call label and conversation, where a conversation is the system prompt or instructions plus the first user message, so a tool dropped on one provider's call is not remembered for another's and one agent's tool is not named in another agent's conversation.
+  A Responses request that continues by `previous_response_id` or a `conversation` carries neither, so it has no dropped tool and gets the `_v2` name.
+  A multi-agent run that wants a specific tool sets `tool`.
   It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then.
   If your agent sends that call back, OpenAI's real 400 on the next request is judged as the run's outcome, and its line is marked `after_reply_fault`; see [The 400 after a reply fault](model-faults.md#the-400-after-a-reply-fault).
 

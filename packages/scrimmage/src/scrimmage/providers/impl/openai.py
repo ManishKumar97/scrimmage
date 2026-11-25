@@ -122,6 +122,7 @@ class OpenAI:
     context_too_long_body = staticmethod(table.context_too_long_body)
     not_carried_out = staticmethod(table.not_carried_out)
     never_carried_out = staticmethod(table.never_carried_out)
+    conversation_key = staticmethod(table.conversation_key)
     tool_call_tools = staticmethod(table.tool_call_tools)
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
