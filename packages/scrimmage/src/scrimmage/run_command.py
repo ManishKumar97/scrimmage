@@ -48,7 +48,9 @@ def stop_with_parent(still_mine: Callable[[int], bool]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if args[:1] in (["--help"], ["-h"]):  # only first: later ones belong to the command
+    if args[:1] == ["--"]:  # the usual end of options: the command follows, even if it is -h
+        args = args[1:]
+    elif args[:1] in (["--help"], ["-h"]):  # only first: later ones belong to the command
         print(USAGE)
         return 0
     if not args:

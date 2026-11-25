@@ -1724,3 +1724,15 @@ def test_scrimmage_run_help_prints_usage_and_exits_zero(flag: str) -> None:
         capture_output=True, text=True, timeout=60, check=False,
     )  # fmt: skip
     assert later.stdout == "hi\n"
+
+
+@pytest.mark.design("cli.run_help")
+def test_scrimmage_run_drops_one_leading_double_dash() -> None:
+    run = [sys.executable, "-m", "scrimmage.run_command"]
+    ran = subprocess.run(
+        [*run, "--", sys.executable, "-c", "print('hi')"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert (ran.returncode, ran.stdout) == (0, "hi\n")
+    alone = subprocess.run([*run, "--"], capture_output=True, text=True, timeout=60, check=False)
+    assert alone.returncode == 2 and alone.stderr.startswith("usage: scrimmage-run")

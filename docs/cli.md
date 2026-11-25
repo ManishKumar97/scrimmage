@@ -295,6 +295,7 @@ See [An agent inside a web service](services.md).
 
 `scrimmage-run --help` or `-h`, as its first argument, prints the usage line and exits 0.
 After the command's name, `--help` belongs to the command.
+A first argument of `--` ends the options and is dropped, so `scrimmage-run -- --help` runs a command named `--help`; with nothing after it, the usage line and exit 2.
 
 If the command cannot start, `scrimmage-run` says why on standard error and exits with:
 
