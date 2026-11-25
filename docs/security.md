@@ -32,6 +32,7 @@ A [service in a container](docker.md#a-service-in-a-container) or in a [Kubernet
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
 Apart from its two optional extras, `scrimmage[mcp]` and `scrimmage[cert]`, the `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
+The `mcp` extra brings in the mcp library and its HTTP client, httpx2.
 
 *Checked by: `tests/test_stdlib_only.py::test_imports_only_the_standard_library`*
 
