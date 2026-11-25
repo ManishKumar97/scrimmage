@@ -19,6 +19,7 @@ Fake = Callable[..., FakeAnthropic]
 KEY = "-".join(["sk", "ant", "api03", "FAKE", "scrimmage", "e1", "key", "0123456789abcdef"])
 MODEL = "claude-haiku-5-5"
 INPUT, OUTPUT = 1.0, 5.0  # dollars per million tokens: a team's own price, not Anthropic's
+TOLERANCE = 1e-8  # as tests/test_anthropic_billing.py
 
 AGENT = '''"""A one-tool agent over the anthropic library, with its default retries."""
 
@@ -165,7 +166,7 @@ def test_an_anthropic_agent_runs_a_baseline_and_a_529_row_it_sees_after_three_at
         ] * 2
         # Each line's cost is its usage times the team's price, worked out by hand.
         assert [x["cost_usd"] for x in calls] == [
-            pytest.approx(dollars(name), abs=1e-6) for name in replies
+            pytest.approx(dollars(name), abs=TOLERANCE) for name in replies
         ]
         assert "Hello" in lines[-1]["summary"]["answer"]
     for lines in faulted:
@@ -201,13 +202,13 @@ def test_the_budget_settles_the_sum_of_the_lines_costs(
     for lines in result.records():
         by_line = sum(x.get("cost_usd", 0.0) for x in model_lines(lines))
         summary: dict[str, Any] = lines[-1]["summary"]  # type: ignore[assignment]
-        assert summary["cost_usd"] == pytest.approx(by_line, abs=1e-9)
+        assert summary["cost_usd"] == pytest.approx(by_line, abs=TOLERANCE)
         lines_total += by_line
     # What the budget was charged, call by call, is what the lines say the calls cost, and
     # that is the usage of the four replies the server sent, at the team's price.
     assert lines_total > 0
-    assert sum(settled) == pytest.approx(lines_total, abs=1e-5)
-    assert lines_total == pytest.approx(2 * sum(dollars(n) for n in MODES[mode]), abs=1e-5)
+    assert sum(settled) == pytest.approx(lines_total, abs=TOLERANCE)
+    assert lines_total == pytest.approx(2 * sum(dollars(n) for n in MODES[mode]), abs=TOLERANCE)
 
 
 @pytest.mark.slow
