@@ -9,6 +9,7 @@ from config_cases import BAD
 from conftest import Project
 from scrimmage import cli, outcomes, prices, provider_anthropic
 from scrimmage.prices import Rates
+from scrimmage.providers.registry import builtin_providers
 
 
 def row(
@@ -170,3 +171,11 @@ def test_haiku_5_5_cache_reads_count_toward_the_100000_token_threshold() -> None
     assert provider_anthropic.cost(base.input, base.output, rates, base.cached) == pytest.approx(
         (10 * 0.10 + 99_990 * 0.01 + 1000 * 0.50) / 1e6, abs=1e-8
     )
+
+
+def test_the_shipped_file_prices_every_provider_scrimmage_speaks() -> None:
+    """A provider with no section in the shipped file refuses every call with the budget on,
+    which is the default, so a release that ships one without its prices is caught here."""
+    spoken = {provider.name for provider in builtin_providers()}
+    shipped = {name for name, section in prices.shipped().sections if section.models}
+    assert spoken == shipped
