@@ -3,7 +3,7 @@
 Many agents answer inside a web service, one request per question, beside every other request the service serves.
 Scrimmage can test such an agent where it runs: each run of a test is one `POST` to the service.
 This version covers ASGI services under uvicorn, such as FastAPI and Starlette apps.
-A worked example is [An agent inside a web service](examples/service-agent.md).
+A worked example is [the function agent behind FastAPI](examples/service-agent.md).
 
 ## Let Scrimmage start the service
 

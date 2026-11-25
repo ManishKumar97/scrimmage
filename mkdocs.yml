@@ -77,6 +77,7 @@ nav:
       - Install: install.md
       - Quickstart: quickstart.md
       - Drafting a test file: init.md
+      - Concepts: concepts.md
   - Examples:
       - examples/index.md
       - "Example: a function agent": examples/function-agent.md
@@ -86,41 +87,43 @@ nav:
       - "Example: a web request inside a tool": examples/web-request.md
       - "Example: judging an answer": examples/judging.md
       - "Example: a fault on one model": examples/one-model.md
-      - "Example: an agent inside a web service": examples/service-agent.md
+      - "Example: the function agent behind FastAPI": examples/service-agent.md
       - "Example: a tool the agent does not have": examples/unknown-tool.md
-  - Concepts:
-      - Concepts: concepts.md
-      - How it works: how-it-works.md
-  - Guides:
-      - Failing the model: model-faults.md
-      - The budget: budget.md
-      - Prices: prices.md
-      - Agents on a framework: frameworks.md
+  - Your agent's shape:
       - An agent run as a script: scripts.md
+      - Agents on a framework: frameworks.md
       - An agent inside a web service: services.md
       - A service in Docker Compose: docker.md
       - A service in Kubernetes: kubernetes.md
+  - Failing calls:
+      - Failing the model: model-faults.md
       - Web requests: web-requests.md
       - MCP tools: mcp.md
-      - Driving Scrimmage from a coding agent: mcp-server.md
-      - Judging an answer: judging.md
       - Changing a result: changing-results.md
       - Testing your guardrails: guardrails.md
-      - Recording replies: recording.md
+  - Spending:
+      - The budget: budget.md
+      - Prices: prices.md
+  - Results:
+      - Judging an answer: judging.md
       - Reading a finished test: show.md
+      - Recording replies: recording.md
+  - Running it:
       - Running Scrimmage in CI: ci.md
+      - Driving Scrimmage from a coding agent: mcp-server.md
   - Reference:
       - Commands: cli.md
-      - JSON output: json-output.md
       - Configuration: configuration.md
+      - JSON output: json-output.md
       - Schemas: schemas.md
-      - Limits:
-          - Will Scrimmage work for your agent: limits.md
-          - How your agent runs: limits/agents.md
-          - Tools, MCP and web requests: limits/calls.md
-          - Faults and model calls: limits/model.md
-          - The budget and prices: limits/budget.md
-          - Judging and records: limits/judging.md
+      - How it works: how-it-works.md
+  - Limits:
+      - Will Scrimmage work for your agent: limits.md
+      - How your agent runs: limits/agents.md
+      - Tools, MCP and web requests: limits/calls.md
+      - Faults and model calls: limits/model.md
+      - The budget and prices: limits/budget.md
+      - Judging and records: limits/judging.md
   - Safety and security:
       - Safety: safety.md
       - Security: security.md
