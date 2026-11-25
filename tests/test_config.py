@@ -1312,3 +1312,17 @@ def test_a_bad_label_names_the_server_form_and_the_docs_site(tmp_path: Path) -> 
     assert "'mcp:<server>/<tool>'" in message
     assert "did you mean 'tool'?" in message
     assert "https://manishkumar97.github.io/scrimmage/configuration/" in message
+
+
+@pytest.mark.design("config.fault_word_hint")
+@pytest.mark.parametrize(
+    ("do", "hint"),
+    [("stauts 500", "'status <400 to 599>'"), ("slwo 2s", "'slow <seconds>s'")],
+)
+def test_a_misspelt_word_with_an_argument_is_compared_by_its_first_word(
+    tmp_path: Path, do: str, hint: str
+) -> None:
+    text = f'[[test.fault]]\ncall = "model"\ndo = "{do}"\n'
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, text)
+    assert f"did you mean {hint}?" in str(caught.value)

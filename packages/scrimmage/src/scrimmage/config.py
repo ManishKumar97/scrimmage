@@ -1742,6 +1742,17 @@ FAULT_WORDS = (
 def suggest_word(text: str, words: Sequence[str]) -> str:
     """A did-you-mean for a word that is not one of words, or the whole list when none is close."""
     close = difflib.get_close_matches(text, words, n=1)
+    # status and slow take a second word, so a misspelt one is compared by its first word
+    first = text.partition(" ")[0]
+    if not close and " " in text:
+        close = [
+            w
+            for w in words
+            if w.partition(" ")[0]
+            in difflib.get_close_matches(
+                first, [w.partition(" ")[0] for w in words if " " in w], n=1
+            )
+        ]
     if close:
         return f" (did you mean {close[0]!r}?)"
     return f" (the faults are {', '.join(words)})"
