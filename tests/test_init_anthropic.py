@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from fakes.anthropic_server import FakeAnthropic
+from fakes.openai_server import FakeOpenAI
 from scrimmage import cli
 from scrimmage import init as drafting
 from scrimmage.outcomes import OK
@@ -149,3 +150,36 @@ def test_the_probe_names_a_host_that_is_not_anthropics_and_nothing_is_sent(
     out.write_text(out.read_text() + ONE_TEST)
     capsys.readouterr()
     assert cli.main(["check", str(out)]) == OK, capsys.readouterr().err
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_any_host")
+def test_an_agent_that_picks_its_client_by_key_is_probed_on_the_key_it_has(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A placeholder is set only when the agent has no key, so one it has is not outvoted."""
+    code = (
+        "import os\nimport anthropic\nimport openai\n\n\n"
+        "def answer(question):\n"
+        "    if os.environ.get('ANTHROPIC_API_KEY'):\n"
+        "        anthropic.Anthropic(max_retries=0).messages.create(model='m', max_tokens=16,\n"
+        "            messages=[{'role': 'user', 'content': question}])\n"
+        "    else:\n"
+        "        openai.OpenAI(max_retries=0).chat.completions.create(model='m',\n"
+        "            messages=[{'role': 'user', 'content': question}])\n"
+        "    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-looking-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    exit_code, doc = run(
+        capsys, str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "d.toml")
+    )
+    assert exit_code == OK, doc
+    assert fake.received == []
+    assert hosts_of(doc) == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]

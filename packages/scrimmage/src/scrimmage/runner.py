@@ -411,9 +411,11 @@ class Runner:
         )
         if agent.children:
             env["SCRIMMAGE_CHILDREN"] = "1"
-        if self.probe:  # nothing reaches a model, so a key is needed only to build the client
+        # Nothing reaches a model, so a key is needed only to build the client. A key the agent
+        # already has picks its client, so a placeholder is set only when it has none.
+        if self.probe and not any(env.get(name) for name in PROBE_KEYS):
             for name in PROBE_KEYS:
-                env.setdefault(name, "scrimmage-probe-sends-no-request")
+                env[name] = "scrimmage-probe-sends-no-request"
         return env
 
     def program(self, question: str) -> list[str]:

@@ -175,6 +175,7 @@ ALL_TITLES = [
     "The old SSE transport for MCP.",
     "The plan holds `find` as written.",
     "The probe reaches one replica.",
+    "The probe's placeholder keys are all or none.",
     "The runner runs inside the cluster.",
     "The setup request lists only what it saw.",
     "The startup file needs Python 3.8 or later.",

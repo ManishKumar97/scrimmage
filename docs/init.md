@@ -74,7 +74,8 @@ model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]
 ```
 
 With `--probe`, a first request to `POST /v1/messages` on a host that is not Anthropic's own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
-The probe sets a placeholder `ANTHROPIC_API_KEY` when none is in the environment, so the client can be built.
+The probe sets placeholder keys, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, only when neither is in the environment, so a client can be built.
+When you have one of them set, the probe sets none, and an agent that chooses its client by which key it finds takes the branch your key selects.
 It sends nothing.
 An agent that imports both `openai` and `anthropic` is named for both.
 Each client's host gets its own provider's line, and one gateway that both clients use is listed once for each provider.
@@ -117,7 +118,7 @@ A module that your function imports and cannot find is your agent's crash, and s
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
-With no key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
+With neither key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
 
 In probe mode a POST to a path Scrimmage knows, such as `/v1/chat/completions`, counts as a model request on any host, so a gateway you have not named yet is found and refused, never sent.
