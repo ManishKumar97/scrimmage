@@ -43,11 +43,12 @@ Best first:
 
 | Rank | Candidate |
 |---|---|
-| 1 | A top-level function with one required parameter named `question`, `query`, `prompt`, `message`, `text`, `input` or `user_input`, in a module that imports `openai`, `langchain`, `langgraph`, `mcp` or `httpx` |
+| 1 | A top-level function with one required parameter named `question`, `query`, `prompt`, `message`, `text`, `input` or `user_input`, in a module that imports `openai`, `anthropic`, `langchain`, `langgraph`, `mcp` or `httpx` |
 | 2 | A module with `if __name__ == "__main__":` that reads `sys.argv` or uses `argparse`, as `command = "python <path> {question}"` |
 | 3 | The same function as rank 1, in a module that imports none of those |
 
 Within a rank, a module that builds a model client comes before the rest.
+A module that imports both `openai` and `anthropic` is named for both.
 The best is written. The others are comments, up to five, and `--json` lists all of them.
 A function a tool decorator marks, or one named in a tool spec, is a tool and never an entry point.
 
@@ -58,7 +59,27 @@ A function a tool decorator marks, or one named in a tool spec, is a tool and ne
 
 Tools made at run time, as most real agents make them, have no such mark; `--probe` finds those.
 
-**The model hosts**: `base_url="..."` written as text in an `OpenAI`, `AsyncOpenAI` or `AzureOpenAI` call. A host read from an environment variable is not text in the code, so only the probe sees it.
+**The model hosts**: `base_url="..."` written as text in an `OpenAI`, `AsyncOpenAI`, `AzureOpenAI`, `Anthropic` or `AsyncAnthropic` call.
+A host read from an environment variable is not text in the code, so only the probe sees it.
+The client class says the provider: an `Anthropic` client's host is drafted with `provider = "anthropic"`, and an `OpenAI` client's with `provider = "openai"`.
+A provider's own host, such as `api.anthropic.com` for an `Anthropic` client, needs no line.
+
+## An agent that uses Claude
+
+For an agent that imports `anthropic`, init names the library in the entry point's reason, as it names `openai`.
+A gateway you reach with `Anthropic(base_url="https://gateway.acme.internal")` is drafted as a `model_hosts` line with `provider = "anthropic"`:
+
+```toml
+model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]
+```
+
+With `--probe`, a first request to `POST /v1/messages` on a host that is not Anthropic's own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
+The probe sets a placeholder `ANTHROPIC_API_KEY` when none is in the environment, so the client can be built.
+It sends nothing.
+An agent that imports both `openai` and `anthropic` is named for both.
+Each client's host gets its own provider's line, and one gateway that both clients use is listed once for each provider.
+The draft plus one `[[test]]` passes `scrimmage check`.
+Model prices for Anthropic models are not shipped yet, so set them under `[agent.prices]` before a run with a budget.
 
 ## What it writes
 
@@ -96,7 +117,7 @@ A module that your function imports and cannot find is your agent's crash, and s
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
-With no key in the environment, the run gets a placeholder `OPENAI_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
+With no key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
 
 In probe mode a POST to a path Scrimmage knows, such as `/v1/chat/completions`, counts as a model request on any host, so a gateway you have not named yet is found and refused, never sent.
