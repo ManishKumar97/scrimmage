@@ -28,6 +28,7 @@ Scrimmage runs on your machine, in your CI or in your cluster.
 Scrimmage has no telemetry and no hosted service, and it sends nothing to its authors.
 It makes three kinds of connection, and no others: to its own control server, to the service address your `scrimmage.toml` names for a web service, and to GitHub when you run `scrimmage prices update`, which downloads one public file of model prices.
 That command sends a GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
+If `HTTPS_PROXY` is set, the request goes to that proxy, which sees the connection, and not straight to GitHub.
 No test run makes that connection, and nothing else in Scrimmage does.
 The control server listens on `127.0.0.1`, or, for a service in a container or a cluster, on the `control` address you set, over TLS.
 Your agent's own calls, such as model calls to your provider, go where your agent sends them, or nowhere when a test mocks, faults or refuses them.
