@@ -411,8 +411,11 @@ def test_the_fetch_goes_through_the_proxy_the_environment_names(
 
     thread = threading.Thread(target=accept, daemon=True)
     thread.start()
+    # A .invalid host never resolves, so a fetch that skips the proxy fails here offline
+    # and never reaches the internet.
     with pytest.raises(prices_update.FetchError):  # the listener never answers the CONNECT
-        prices_update.fetch(prices_update.URL)
+        prices_update.fetch("https://prices.scrimmage.invalid/prices.toml")
     thread.join(10)
     listener.close()
-    assert first[0].startswith(b"CONNECT raw.githubusercontent.com:443 ")
+    assert first, "the fetch did not go to the proxy"
+    assert first[0].startswith(b"CONNECT prices.scrimmage.invalid:443 ")
