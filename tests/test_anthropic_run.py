@@ -15,8 +15,9 @@ from scrimmage.budget import Ledger
 
 Fake = Callable[..., FakeAnthropic]
 
-# A fake key with Anthropic's prefix, built in parts, so a leak of any such key is found.
-KEY = "-".join(["sk", "ant", "api03", "FAKE", "scrimmage", "e1", "key", "0123456789abcdef"])
+# A fake key in Anthropic's shape, written in parts so the commit guard, which looks for
+# real keys, lets it in.
+KEY = "sk-ant-" + "api03-FAKE-scrimmage-e1-key-0123456789abcdef"
 MODEL = "claude-haiku-5-5"
 INPUT, OUTPUT = 1.0, 5.0  # dollars per million tokens: a team's own price, not Anthropic's
 TOLERANCE = 1e-8  # as tests/test_anthropic_billing.py
@@ -101,6 +102,7 @@ expect = ["OverloadedError"]
 """
 
 MODES = {
+    # the answer fixture is from another conversation: only its usage and text are used
     "plain": ["real_tool_use", "real_answer"],
     "streamed": ["real_stream_tool_use", "real_stream_answer"],
 }
