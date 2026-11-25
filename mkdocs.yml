@@ -93,6 +93,8 @@ nav:
       - How it works: how-it-works.md
   - Guides:
       - Failing the model: model-faults.md
+      - The budget: budget.md
+      - Prices: prices.md
       - Agents on a framework: frameworks.md
       - An agent run as a script: scripts.md
       - An agent inside a web service: services.md

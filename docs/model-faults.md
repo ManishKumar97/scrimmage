@@ -1,6 +1,7 @@
-# Failing the model, and keeping a budget
+# Failing the model
 
-This guide adds two things to the [quickstart](quickstart.md) test: the model itself fails, and the test has a spending limit.
+This guide adds one thing to the [quickstart](quickstart.md) test: the model itself fails.
+The spending limit of a test is on [The budget](budget.md), and the prices it uses are on [Prices](prices.md).
 
 ## Make the model fail
 
@@ -97,7 +98,7 @@ A faulted attempt sends nothing to Anthropic and costs nothing.
 With the budget on, a call runs only if its model has a price.
 Scrimmage ships the prices of the current Claude models, read from Anthropic's pricing page, with Claude Haiku 5.5's higher rates for a prompt over 100,000 tokens and the fast mode rates.
 A model it does not list, such as a retired one, is refused with the line to paste until you set a price for it under `[agent.prices]`.
-To price a model differently from the shipped file, set it there too: see [Anthropic prices](configuration.md#anthropic-prices).
+To price a model differently from the shipped file, set it there too: see [Anthropic prices](prices.md#anthropic-prices).
 The test suite runs such an agent against a fake of the Messages API, plain and streamed, and checks that no record, blob or log holds the API key.
 
 ## A bad API key, and a prompt that is too long
@@ -590,166 +591,6 @@ And with a budget on, any model call with no name, such as a Responses call on a
 Give calls with no name a price, as the key `""` under `[agent.prices]`, or set `max_cost_usd = "none"`.
 
 Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
-
-## Keep a budget
-
-Every test has a budget for the whole run of `scrimmage test`. It is $5 unless you change it:
-
-```toml
-[agent]
-max_cost_usd = 0.50
-```
-
-A fault row can cost far more than the baseline, such as an agent that retries a failing write in a loop.
-`run_timeout` ends a looping run, and `max_cost_usd` caps the whole test.
-
-Before each model call, Scrimmage reserves an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price, times `n` on Chat Completions, which bills the output of every choice.
-After the call, the real cost from the reply replaces the reservation.
-Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
-So calls at once cannot together pass the limit while each costs no more than it reserved.
-A call can cost more: a reply with no output limit that writes more than `reserve_output_tokens`, or an input with more tokens than the estimate, such as an image.
-Then the limit can be passed by what the calls cost above their reservations, added together; see [A call can cost more than its hold](limits.md#the-budget).
-The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
-
-To turn the budget off on purpose:
-
-```toml
-max_cost_usd = "none"
-```
-
-### When calls in flight hold the budget
-
-A hold can be much larger than what the call costs.
-On `gpt-4.1`, 4096 output tokens at $8 a million hold about $0.033, so three calls in flight hold all of a $0.10 budget while almost nothing is spent.
-A call that needs room then waits for the others to finish and give back what they did not use:
-
-| Money spent plus this call | Spent, held and this call | What happens |
-|---|---|---|
-| over the limit | any | refused at once: waiting cannot help, as spent money never comes back |
-| within the limit | within the limit | the call goes ahead |
-| within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
-
-A waiting call takes a ticket and asks again when the runner says to.
-The first in line asks again within a quarter of a second, and each call ahead adds a twentieth of a second, up to 2 seconds, with some random spread so calls that started together do not ask together.
-So 100 waiting calls ask about 100 times a second, not 400, and the runner stays quick to answer the calls that finish.
-Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
-A call is granted when it fits along with every call ahead of it in line, so many calls that all fit go ahead together.
-An async call waits on its event loop, not on a thread, so asyncio's threads stay free for other work, such as looking up host names.
-How long a call waits depends on whose calls hold the room:
-
-| The holds in the way | The longest wait | Why |
-|---|---|---|
-| this run's own calls would keep it out even if every other run finished | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
-| other runs' calls | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
-| a run that has ended | no wait: refused at once | that hold can never be given back |
-
-If the call is still held out then, it is refused and the test stops with exit code 2.
-The time a run has left counts from when Scrimmage started its program, as `run_timeout` does.
-A slow start-up before the SDK loads, such as `uv run` on a cold cache or a setup script, uses up part of that time, so the wait still ends before the run is stopped.
-A run waits on itself when a hold cannot end until the waiting call returns.
-A stream the agent keeps open across a second call does that, and so does a stream it stopped reading without closing: each keeps its hold until it is closed, or the run ends.
-Close a stream, or read it to its end, before the next call.
-
-The refusal says what the call could cost, what was spent, which calls held the rest, with their run, their label and what each held, and how long it waited.
-When spent money cannot cover a call, the call is refused at once.
-
-| How a run ends | When |
-|---|---|
-| "budget reached" | money spent reached the limit |
-| "not reserved" | the call could not fit, though money spent had not reached the limit: the money left was too little, or calls in flight held it |
-
-The table's last line says what the test spent, and a `test mistake:` line says why the test stopped:
-
-| What stopped the test | The line |
-|---|---|
-| money spent reached the limit | `the budget of $0.1 was reached: $0.1003 was spent, so the test stopped` |
-| a call could not fit, though spent money had not reached the limit | `a model call could not be reserved: it could cost up to $0.0331, $0.0800 was spent and $0.0000 was held by calls in flight, of a budget of $0.1, so the test stopped; ...` |
-| a call waited for calls in flight and still could not fit | the same, with the holds named, such as `(model:openai in run-3f2a $0.0331)`, and `after a wait of 30s for calls in flight` |
-
-A run killed while one of its calls holds money, such as one that ignored SIGTERM, leaves that hold in place, as the call may have been sent.
-It counts as spent from then on: a call it keeps out is refused at once, and the refusal names it as `left by run-3f2a, which ended while still holding`.
-The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
-
-To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
-
-### Prices
-
-Scrimmage ships prices for OpenAI models, cached input included, checked against OpenAI's pricing page on 22 November 2026.
-They cover `gpt-4o`, `gpt-4o-mini`, the `gpt-4.1` family, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna`, the `gpt-6` family, `o3`, `o3-pro`, `chat-latest`, `gpt-5-search-api` and the `text-embedding` models.
-`gpt-4o-2024-05-13` and `gpt-4.1-nano` are no longer on that page, so their prices are the ones listed on 7 November 2026.
-A model with a higher price above 272K input tokens has a `long` table with the price of a call over that size, charged on the whole call.
-Those are `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna` and every `gpt-6` model.
-The page lists these service tiers, and the file holds each for these models only:
-
-| Tier | Models |
-|---|---|
-| `flex` | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` |
-| `fast`, also found as `priority` | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3` and every `gpt-6` model |
-| `ultrafast` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.2-astra` and `gpt-6.2-sol` |
-
-`fast` and `priority` are one tier under two names, so a price that holds one of them prices both.
-`gpt-6.2-astra` and `gpt-6.2-sol` list a promotional Ultrafast rate, 3 times Standard, until 28 February 2027, and 6 times Standard after.
-The file holds the 6 times rate, so those two tiers cost twice the bill until that date.
-A reply that names a tier a model's row does not list is settled at the dearest rates the row does list, and its record line has `unpriced_tier` set and `cost_estimated` true.
-See [Long-context prices](configuration.md#long-context-prices) and [Service tiers](configuration.md#service-tiers).
-`gpt-5.6-sol` is not in the table: the page lists only a promotional price, which ends on 30 November 2026.
-Give it under `[agent.prices]`.
-A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
-For any other model, give the price in dollars per million tokens:
-
-```toml
-[agent.prices]
-llama-70b = {input = 0.6, output = 0.6}
-acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
-```
-
-### Cached input
-
-OpenAI caches a prompt over 1024 tokens that repeats, and bills the cached part at a lower price.
-Scrimmage reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
-The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost column matches the bill.
-
-| Reply | Price of each input token |
-|---|---|
-| 2048 input tokens, 1536 of them cached, on `gpt-4o-mini` | 512 at $0.15 and 1536 at $0.075 per million |
-| a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
-| a cached count above the input count, or not a whole number | every input token at `input` |
-
-The reservation before a call still counts every input token at the full price, since Scrimmage cannot know what the provider will serve from its cache.
-
-A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
-
-```toml
-[agent.prices]
-"" = {input = 2.0, output = 8.0}
-```
-
-With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
-With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
-
-A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
-On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Scrimmage leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
-
-### Cache writes
-
-On newer OpenAI models, such as `gpt-5.6-luna`, a token written to the prompt cache costs more than a plain input token: 1.25 times the input price for 30 minutes, 2.5 times for 12 hours.
-OpenAI bills each input token once, as plain input, as cached or as written, so the cached and written counts are parts of the input count.
-Scrimmage reads the written count from `input_tokens_details.cache_write_tokens` on Responses, split by `cache_write_tokens_details.ttl_30m_tokens` and `ttl_12h_tokens`, and from `prompt_tokens_details.cache_write_tokens` on Chat Completions, where writes last 30 minutes.
-OpenAI states that the counts are parts of the input count for Responses only.
-On Chat Completions, Scrimmage reads the field the openai library names in the same way, and no real Chat Completions reply with writes has confirmed it yet.
-
-| Reply | Price of each input token |
-|---|---|
-| 12000 input tokens: 4000 cached, 3000 written for 30 minutes, 4000 for 12 hours, on `"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}` | 1000 at $0.20, 4000 at $0.02, 3000 at $0.25 and 4000 at $0.50 per million |
-| a price with no `cache_write_30m` or `cache_write_12h` | written tokens at `input`, as on a model that charges nothing extra to write |
-| a written count above the input tokens not cached, or not a whole number | every input token not cached as written for 12 hours |
-| a split by lifetime with no written count | every input token not cached as written for 12 hours |
-| no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and, on Responses, `cache_write_12h` |
-
-The written counts are not on the record line; `cost_usd` includes them.
-The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
-On Chat Completions, where writes last 30 minutes, it leaves out `cache_write_12h`.
-On `gpt-5.6-luna`, 100K input tokens and 4096 output tokens reserve $0.0549 on Responses and $0.0299 on Chat Completions.
 
 ## Use a gateway
 

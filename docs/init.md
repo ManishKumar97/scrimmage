@@ -84,7 +84,7 @@ Each client's host gets its own provider's line, and one gateway that both clien
 The draft plus one `[[test]]` passes `scrimmage check`.
 The budget is on by default, at $5, and the shipped price file prices the current Claude models.
 A drafted Anthropic file runs as it is, unless its model is one the file does not list: then every call is refused until you set a price for the model under `[agent.prices]`, or set `max_cost_usd = "none"` to turn the budget off on purpose.
-See [Where prices come from](configuration.md#where-prices-come-from).
+See [Where prices come from](prices.md#where-prices-come-from).
 
 ## What it writes
 

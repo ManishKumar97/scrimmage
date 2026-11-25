@@ -127,7 +127,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
         assert "any model call with no name, such as a Responses call on a stored prompt" in text
         assert "streamed, multipart" not in text
     assert "a character that does not print" in guide
-    assert '"" = {input = 2.0, output = 8.0}' in guide
+    assert '"" = {input = 2.0, output = 8.0}' in page("prices.md")
     assert 'The key `""` prices a call that sends no model name.' in page("configuration.md")
     assert "with the reply streamed or not" in guide
     safety = page("safety.md")
@@ -140,7 +140,7 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
     text = page("configuration.md")
     assert all(mentioned(text, key) for key in prices.PRICE_KEYS)
     assert "cached tokens cost the full `input` price" in text
-    guide = page("model-faults.md")
+    guide = page("prices.md")
     for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
         assert word in guide, word
     assert "`tokens.cached`" in guide and "the safe overestimate" in guide
@@ -148,20 +148,20 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
 
 @pytest.mark.design("docs.cache_write")
 def test_cache_write_prices_and_the_current_table_are_documented() -> None:
-    guide = page("model-faults.md")
+    guide = page("prices.md")
     assert "### Cache writes" in guide
     for word in ("input_tokens_details.cache_write_tokens", "ttl_12h_tokens", "ttl_30m_tokens"):
         assert word in guide, word
     assert "checked against OpenAI's pricing page on 22 November 2026" in guide
     for model in ("gpt-5", "gpt-5-mini", "gpt-5-nano"):
-        assert f"`{model}`" in guide.split("### Prices")[1].split("### ")[0], model
+        assert f"`{model}`" in guide.split("## The shipped OpenAI prices")[1].split("### ")[0], model
     assert "`cache_write_30m`" in page("json-output.md")
     assert "On Chat Completions, where writes last 30 minutes, it leaves out" in guide
 
 
 @pytest.mark.design("docs.hold_can_be_passed")
 def test_a_call_that_costs_more_than_its_hold_is_documented() -> None:
-    guide = page("model-faults.md")
+    guide = page("budget.md")
     assert "cannot together pass the limit while each costs no more than it reserved" in guide
     assert "](limits.md#the-budget)" in guide
     limits = page("limits.md").split("### The budget")[1].split("### ")[0]
@@ -186,7 +186,7 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
 
 @pytest.mark.design("docs.budget_wait")
 def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
-    guide = page("model-faults.md")
+    guide = page("budget.md")
     assert "### When calls in flight hold the budget" in guide
     assert (
         "even if every other run finished | 30 seconds, or half the time the run has left" in guide
@@ -843,13 +843,16 @@ def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_for
 @pytest.mark.design("docs.prices_as_data")
 def test_the_price_files_the_command_and_the_tier_overshoot_are_documented() -> None:
     config_page, cli_page, limits = page("configuration.md"), page("cli.md"), page("limits.md")
-    for key in ("as_of", "url", "service_tier", "tiers"):
+    prices_page = page("prices.md")
+    for key in ("service_tier", "tiers"):
         assert mentioned(config_page, key), key
+    for key in ("as_of", "url"):
+        assert mentioned(prices_page, key), key
     assert "## scrimmage prices update" in cli_page
     assert "exit 2" in cli_page and "exit 3" in cli_page
     for place in ("`[agent.prices]` in `scrimmage.toml`", "`scrimmage-runs/prices.toml`"):
-        assert place in config_page, place
-    assert "x-litellm-response-cost" in config_page and "usage.cost" in config_page
+        assert place in prices_page, place
+    assert "x-litellm-response-cost" in prices_page and "usage.cost" in prices_page
     assert "A call served on a dearer tier than its hold" in limits
     assert "built-in price table" not in limits  # it is the shipped price file now
     # The one fetch is named where the page promises no other connection.
