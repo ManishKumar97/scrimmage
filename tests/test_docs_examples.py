@@ -16,11 +16,12 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
-from fakes.openai_server import FakeOpenAI, Guard, Rule
+from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, tool_failed
 from scrimmage.cli import main
 from scrimmage.managed import Managed
 from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
@@ -42,6 +43,32 @@ class Example:
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
 
 
+@dataclass(frozen=True)
+class ByTools:
+    """A main model that follows the script of the one tool its request offers.
+
+    A script lists the reply for each turn, `a|b` as in the fake server's replies. A page
+    with two agents on one model name gives each agent its own script this way."""
+
+    scripts: dict[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        for turns in self.scripts.values():
+            for name in turns:
+                Reply(name)  # a missing fixture fails before the test runs
+
+    def __call__(self, request: dict[str, Any]) -> Reply | None:
+        offered = {str(t.get("function", {}).get("name")) for t in request.get("tools", [])}
+        turn = sum(1 for m in request.get("messages", []) if m.get("role") == "assistant")
+        for tool, turns in self.scripts.items():
+            if tool in offered and turn < len(turns):
+                reply = Reply(turns[turn])
+                return (
+                    reply.after_failure if reply.after_failure and tool_failed(request) else reply
+                )
+        return None
+
+
 # The bot asks for the order, then answers, or says it could not if the tool failed.
 ONE_TOOL = ["acme_get_order", "acme_answer|acme_admits"]
 EXAMPLES = {
@@ -50,6 +77,19 @@ EXAMPLES = {
     "examples/script-agent.md": Example(ONE_TOOL, [MISTAKE, OK], base="examples/function-agent.md"),
     "examples/langgraph.md": Example(ONE_TOOL, [ROW_FAILED, OK]),
     "examples/mcp.md": Example(["docs_search", "docs_answer|docs_admits"], [OK]),
+    "examples/unknown-tool.md": Example(
+        [],
+        [ROW_FAILED, OK, MISTAKE, OK],
+        base="examples/function-agent.md",
+        by_model={
+            "gpt-4o-mini": ByTools(
+                {
+                    "search": ("docs_search", "docs_answer", "docs_answer|docs_admits"),
+                    "get_order": ("acme_get_order", "acme_answer", "acme_answer|acme_admits"),
+                }
+            )
+        },
+    ),
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
