@@ -214,7 +214,10 @@ CLASSIFIER_DETAILS: dict[str, object] = {
     "category": None,
     "explanation": None,
 }
-BUILT_OUTPUT_TOKENS = 10  # a built plain reply's output count: about its own length
+# A built plain reply's output count. It is an estimate, as the input count is: Anthropic reports
+# no count for a sentence alone, and the 4 words of the text come to about this with the reply's
+# framing. Nothing is sent or billed, so it only has to look like a reply's.
+BUILT_OUTPUT_TOKENS = 10
 ID_LETTERS = string.ascii_letters + string.digits
 ID_LENGTH = 24  # after msg_, as in a real reply's id
 

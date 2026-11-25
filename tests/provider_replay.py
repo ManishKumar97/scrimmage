@@ -1656,7 +1656,7 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         faults=faulted("refuse", form="classifier"),
     )
     add(
-        "fault replace status 500",
+        "fault replace on an error reply",
         [(MESSAGES, message())],
         ["500:real_error_401"],
         faults=faulted("replace", text="NEW"),

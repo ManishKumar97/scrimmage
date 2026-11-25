@@ -10236,7 +10236,7 @@
   "settles": [],
   "stops": []
 },
-"anthropic fault replace status 500": {
+"anthropic fault replace on an error reply": {
   "blobs": ["4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
     {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.000318, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 138, "preview": "{\"type\": \"error\", \"error\": {\"type\": \"authentication_error\", \"message\": \"invalid x-api-key\"}, \"request_id\": \"req_011ChKY5uroyWoRy4sdpZUsV\"}", "sha256": "4b246828a30c032f5091d2fcf130e68622fbdf21e20450655891cb60d287d80d"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 401, "stream": false, "test": "t", "tokens": {"cached": 0, "input": 23, "output": 34}, "unchanged": {"do": "replace", "why": "the reply status is 401, which is not changed"}, "under": "real", "v": 1}
