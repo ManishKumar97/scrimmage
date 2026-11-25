@@ -17,6 +17,7 @@ import errno
 import hashlib
 import http
 import inspect
+import itertools
 import json
 import math
 import os
@@ -663,7 +664,7 @@ def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
         if why := provider.no_free_tool_call(path, fields):
             run.unchanged(step, why)
             step.decision = Decision("real")
-        elif planned.tool in provider.tool_call_tools(path, fields):
+        elif planned.tool in provider.offered(path, fields).agent:
             not_carried_out(
                 run,
                 step,
@@ -709,28 +710,37 @@ def built_reply(
         form = ctx.run.plan.faults[step.decision.fault or 0].form
         built = provider.refusal_reply(path, fields, tokens, form)
     else:  # reply_checks let it through only on chat, with a tool offered
-        offered = provider.tool_call_tools(path, fields)
+        calls = provider.tool_call_tools(path, fields)
+        offered = provider.offered(path, fields).agent
         named = ctx.run.plan.faults[step.decision.fault or 0].tool
-        tool = unknown_tool_name(ctx.run, step.call.label, named, offered)
+        tool = unknown_tool_name(ctx.run, step.call.label, named, offered, calls)
         built = provider.unknown_tool_reply(path, fields, tokens, tool)
     headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
-def unknown_tool_name(run: RunState, label: str, named: str | None, offered: list[str]) -> str:
+MAX_MADE_UP_NAME = 64  # the longest function name OpenAI takes, the smaller limit of the two APIs
+
+
+def unknown_tool_name(
+    run: RunState, label: str, named: str | None, offered: list[str], calls: list[str]
+) -> str:
     """The tool unknown tool calls: the one the row names; else one an earlier request to this
-    label offered and this one does not; else an offered tool's name with _v2 added, as a
-    rename between two deploys reads. A name that is offered is no unknown tool, so _v2 is
-    added until it is not."""
+    label offered and this one does not; else the name of the first tool the model could call
+    with _v2 added, as a rename between two deploys reads. offered: every tool this request
+    offers, in any field; calls: the ones a call may name. The made-up name is cut to fit
+    MAX_MADE_UP_NAME, and is never one the request offers."""
     if named is not None:
         return named
     if (dropped := run.dropped_tool(label, offered)) is not None:
         return dropped
-    name = f"{offered[0]}_v2"
-    while name in offered:
-        name += "_v2"
-    return name
+    for n in itertools.count(1):
+        suffix = "_v2" * n if n < 10 else f"_v{n}"
+        name = calls[0][: MAX_MADE_UP_NAME - len(suffix)] + suffix
+        if name not in offered:
+            return name
+    raise AssertionError("unreachable")
 
 
 def faulted(

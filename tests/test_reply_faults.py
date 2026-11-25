@@ -377,10 +377,11 @@ def gate_on(word: str) -> tuple[Sink, Counting]:
     return gate_plan(plan_with(word))
 
 
-def gate_plan(plan: Plan) -> tuple[Sink, Counting]:
-    """This plan's run, with both libraries gated."""
+def gate_plan(plan: Plan, listed: tuple[str, ...] = ()) -> tuple[Sink, Counting]:
+    """This plan's run, with both libraries gated. listed: more tool names a gate sees."""
     sink, budget = Sink(), Counting()
     run = state.RunState(plan, sink, [])
+    run.listed.update(listed)
     state.install(run)
     ctx = http_gate.Context(run, budget, sink, never_stopped)
     for name, module in LIBRARIES.items():
@@ -931,12 +932,47 @@ def test_a_tool_offered_on_chat_is_remembered_for_a_responses_call_of_the_same_l
 def test_the_made_up_name_is_never_a_name_the_request_offers() -> None:
     run = state.RunState(plan_naming(None), Sink(), [])
     name = http_gate.unknown_tool_name
-    assert name(run, "model:openai", None, ["get_order"]) == "get_order_v2"
-    assert name(run, "model:openai", None, ["get_order", "get_order_v2"]) == "get_order_v2_v2"
-    assert name(run, "model:openai", "get_order_v2", ["get_order"]) == "get_order_v2"
+
+    def made(named: str | None, offered: list[str], calls: list[str] | None = None) -> str:
+        return name(run, "model:openai", named, offered, offered if calls is None else calls)
+
+    assert made(None, ["get_order"]) == "get_order_v2"
+    assert made(None, ["get_order", "get_order_v2"]) == "get_order_v2_v2"
+    assert made("get_order_v2", ["get_order"]) == "get_order_v2"
     run.remember_offered("model:openai", ["a", "b"])
-    assert name(run, "model:openai", None, ["b"]) == "a"
-    assert name(run, "model:other", None, ["b"]) == "b_v2"
+    assert made(None, ["b"]) == "a"
+    assert made(None, ["a", "b"]) == "a_v2", "a tool still offered is not dropped"
+    assert name(run, "model:other", None, ["b"], ["b"]) == "b_v2"
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+def test_the_made_up_name_fits_the_smaller_name_limit_and_is_not_offered() -> None:
+    run = state.RunState(plan_naming(None), Sink(), [])
+    long = "t" * 64
+    made = http_gate.unknown_tool_name(run, "l", None, [long], [long])
+    assert len(made) == 64 and made.endswith("_v2") and made != long
+    again = http_gate.unknown_tool_name(run, "l", None, [long, made], [long])
+    assert len(again) == 64 and again not in (long, made)
+    crowd = ["t" * (64 - len("_v2") * n) + "_v2" * n for n in range(1, 10)]
+    final = http_gate.unknown_tool_name(run, "l", None, ["t" * 64, *crowd], ["t" * 64])
+    assert len(final) <= 64 and final not in crowd
+
+
+@pytest.mark.design("fault.unknown_tool_name")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_tool_still_offered_in_the_old_functions_field_is_not_dropped_and_not_nameable(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    legacy = [{"name": "legacy_lookup", "parameters": {"type": "object"}}]
+    gate_plan(plan_naming(None), ("legacy_lookup",))
+    completion(loopback, sync, tools=SPECS[:1], functions=legacy)
+    again, _ = completion(loopback, sync, tools=SPECS[1:], functions=legacy)
+    assert called(again) == "get_order", "legacy_lookup is still offered, so get_order was dropped"
+    sink, budget = gate_plan(plan_naming("legacy_lookup"), ("legacy_lookup",))
+    with pytest.raises(ScrimmageMockError, match="names 'legacy_lookup', which this request"):
+        completion(loopback, sync, tools=SPECS, functions=legacy)
+    assert loopback.seen == [] and budget.asked == 0
+    assert line_of(sink, "model")["reason"] == MISTAKE_REFUSAL
 
 
 @pytest.mark.design("fault.unknown_tool_name")
