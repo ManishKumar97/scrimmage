@@ -337,7 +337,7 @@ def test_a_400_to_a_request_that_carries_a_faulted_reply_toolu_id_is_marked() ->
     run, sent = two_calls("truncate", fixture("real_tool_use.json"), result_of(CALL["id"]))
     first, second = model_lines(run)
     assert sent == 2
-    assert (first["action"], first["status"]) == ("real", 200) or first["status"] == 200
+    assert (first["action"], first["status"]) == ("fault", 200)
     assert "after_reply_fault" not in first
     assert (second["action"], second["status"]) == ("real", 400)
     assert second["after_reply_fault"] is True
