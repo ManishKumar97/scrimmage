@@ -350,6 +350,7 @@ class Runner:
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
         self.sent = 0  # service requests sent: the setup request and every run
+        self.setup_spent = 0.0  # what the setup request's model call cost: in no row, in the total
         self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
@@ -791,9 +792,9 @@ class Runner:
 
     def conclude_setup(
         self, run: str, row: planner.Row, state: Any, reply: service_client.Reply
-    ) -> None:
-        """The setup request's summary, in the same shape as a run's. Its labels are not
-        checked here: the first run does that, as before."""
+    ) -> float:
+        """The setup request's summary, in the same shape as a run's, and what its model
+        calls cost. Its labels are not checked here: the first run does that, as before."""
         agent = self.config.agent
         ok = reply.status is not None and 200 <= reply.status < 300
         answer = None
@@ -801,7 +802,7 @@ class Runner:
             answer = service_client.answer_of(reply, agent)[0]
         infra = reply.failed is not None or reply.gate_refused is not None
         ended = Ended(answer, reply.timed_out, answer is not None, [], [], infra)
-        self.concluded(run, row, state, ended)
+        return self.concluded(run, row, state, ended).cost_usd
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
@@ -1031,7 +1032,7 @@ class Runner:
         reply = self.send(header, test.question)
         state = self.wait_record(name, time.monotonic())
         lines = self.store.lines(name)
-        self.conclude_setup(name, row, state, reply)
+        self.setup_spent = self.conclude_setup(name, row, state, reply)
         if self.stop_flag:  # Ctrl-C or SIGTERM ended the request, not the service
             raise Interrupted(self.stop_flag[0])
         gate = reply.gate_refused
@@ -2021,7 +2022,9 @@ def build_report(
             if doc["reason"] == "request" and doc["action"] == "real"
         }
     )
-    spent = sum(r.cost_usd for r in results)
+    # The setup request is no row's run, but its model call was real spend, and the budget
+    # held it: the total counts it, so the total is what the provider bills.
+    spent = sum(r.cost_usd for r in results) + (runner.setup_spent if runner is not None else 0.0)
     warnings: list[str] = []
     if budget_on and spent > (config.agent.max_cost_usd or 0):
         warnings.append(

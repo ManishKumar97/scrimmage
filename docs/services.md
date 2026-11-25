@@ -234,7 +234,7 @@ NTP, the Network Time Protocol, is what servers use to keep their clocks in step
 
 **The setup request.**
 Then it sends the first test's baseline once, as a run named `setup-` and 12 hex digits.
-Its record is kept beside the runs, and its model calls count toward the budget, but no row counts it.
+Its record is kept beside the runs, and its model calls count toward the budget and toward the total the test prints, but no row counts it.
 Its summary line has the shape of a run's: `row` is `baseline` and `judged` and the cost are filled in.
 Only the `setup-` prefix of its file and `run` name tells it apart, and it is never counted in a result.
 A reader that groups summary lines by `test` and `row` must skip every run whose name starts with `setup-`.

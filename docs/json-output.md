@@ -95,7 +95,7 @@ The text of a message can change in any release.
 | `records` | The folder that holds this test's records, as the text's first line names it: under `scrimmage-runs/` beside the file, or under `--records DIR`. `null` when the file did not load, so no folder was made. |
 | `tests` | How many `[[test]]` tables the file has. |
 | `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test before any run ended, or when Scrimmage itself failed. After a signal, it holds the rows of the runs that had ended. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
-| `cost_usd` | What the model calls cost, in dollars. |
+| `cost_usd` | What the model calls cost, in dollars. With a service, it includes the setup request's model call, which no row counts, so it can be above the sum of the rows. |
 | `budget_usd` | The cost cap the test ran under: `max_cost_usd`, or the lower `--max-cost-usd`, or `null` when the budget is off. |
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. `interrupted` when SIGINT or SIGTERM stopped it after some runs had ended: the rows count only those runs, and `result.json` is written. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
