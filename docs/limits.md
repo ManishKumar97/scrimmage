@@ -277,6 +277,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A hook that posts to the MCP endpoint.** An event hook on the MCP client that sends to the endpoint itself while a request is being sent passes the web gate unseen.
 
+- **A web `GET` or `HEAD` that changes data runs for real.** Scrimmage treats those two methods as reads and does not look at what the service does with them. Mock the `GET` to keep it from running. See [Safety](safety.md#what-a-web-request-may-do).
+
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
 
 - **Two MCP servers with one name.** Scrimmage cannot tell them apart, and `mcp:docs/search` names both. Two servers that give no name are the same case.

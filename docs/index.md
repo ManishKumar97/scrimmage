@@ -16,7 +16,9 @@ For each call your agent makes through a gate, a test decides what it gets:
 - **fault**: a failure that looks like a real one, such as a timeout or an HTTP 429 from the model.
 
 Scrimmage does not detect writes.
-A gated call that writes, such as a listed refund tool, an MCP tool call or an httpx POST, never runs for real unless the test lists it.
+It decides by the kind of call.
+A tool, an MCP tool call or a web request that is not a `GET` or `HEAD`, such as a refund tool or an httpx POST, never runs for real unless the test lists it.
+A web `GET` or `HEAD` runs for real, even when the service changes data on it, so mock a `GET` that writes.
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
 
@@ -151,7 +153,7 @@ These descriptions come from each project's own public pages, as of November 202
 Scrimmage reproduces this practice for a Python agent's own calls.
 What it adds is in how it applies it:
 it gates the agent's own Python tools by import path, inside the process, with no proxy;
-it refuses a gated call that could write unless the test lists it;
+it refuses a gated tool call, MCP tool call or web write unless the test lists it;
 and it judges each answer with rules you write, over repeated runs.
 
 ## Next
