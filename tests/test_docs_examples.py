@@ -41,6 +41,7 @@ class Example:
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
+    logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,16 @@ EXAMPLES = {
         [],
         [ROW_FAILED, OK, MISTAKE, OK],
         base="examples/function-agent.md",
+        logs={1: "KeyError: 'fetch'"},
         by_model={
             "gpt-4o-mini": ByTools(
                 {
                     "search": ("docs_search", "docs_answer", "docs_answer|docs_admits"),
                     "get_order": ("acme_get_order", "acme_answer", "acme_answer|acme_admits"),
-                }
+                },
+                # The model's last reply follows the bot's own error: the bot must have
+                # re-listed its tools, so the fault named fetch, and then answered with it.
+                needs={("search", 2): "no tool named fetch"},
             )
         },
     ),
@@ -176,7 +181,7 @@ def check_page(
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    run_blocks(name, root, codes, capsys)
+    run_blocks(name, root, codes, capsys, example.logs or {})
     assert codes == example.codes
     for rule in (example.by_model or {}).values():
         assert not isinstance(rule, ByTools) or not rule.unused, (
@@ -184,8 +189,17 @@ def check_page(
         )
 
 
-def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFixture[str]) -> None:
-    """Each block of the page in order: a file is written, an Output is the command run."""
+def run_blocks(
+    name: str,
+    root: Path,
+    codes: list[int],
+    capsys: pytest.CaptureFixture[str],
+    logs: dict[int, str],
+) -> None:
+    """Each block of the page in order: a file is written, an Output is the command run.
+
+    `logs` names text that a run log of an Output's records must hold, such as the error
+    that crashed the agent, so the page's crash is the one it says and not another."""
     command: list[str] = []
     for lang, title, body in FENCE.findall((DOCS / name).read_text()):
         if lang == "bash":
@@ -203,6 +217,12 @@ def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFi
         codes.append(main(command))
         out = capsys.readouterr().out
         assert normal(out) == normal(block.body), f"{name}, Output {len(codes)}:\n{out}"
+        if len(codes) in logs:
+            folder = Path(re.search(r"records in (\S+)", out).group(1))  # type: ignore[union-attr]
+            held = [log.read_text() for log in folder.glob("run-*.log")]
+            assert any(logs[len(codes)] in text for text in held), (
+                f"{name}, Output {len(codes)}: no run log holds {logs[len(codes)]!r}"
+            )
 
 
 @pytest.mark.design("docs.examples_run")

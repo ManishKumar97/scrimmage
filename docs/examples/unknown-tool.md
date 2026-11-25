@@ -206,6 +206,7 @@ note: refunds fault 1: 3 crashed
 The baseline passes: the model searched, the server retired `fetch`, and the bot listed the tools again.
 The fault row fails, and every run crashed.
 In the second reply the model asked for `fetch`, the bot's list no longer holds it, and `tools[name]` raised `KeyError`.
+The last error in a crashed run's log reads `KeyError: 'fetch'`.
 A model can ask for a tool from a list it was given a moment ago, so a bot that trusts its own list crashes in production the same way.
 
 ## Fix the bot
