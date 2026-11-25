@@ -212,7 +212,7 @@ A file in the old format, with `as_of`, `source` or `models` at the top, is refu
 A file may not make a model free, because that would turn the budget off for it.
 Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
 A `cached_input` or cache-write rate, if you give one, must be at least 0.001 too, even for an embedding model.
-That is far below any real price, the cheapest today being 0.02.
+That is far below any real price, the cheapest today being 0.01.
 A tier cannot be named `default` or `auto`, in any case.
 Only `[agent.prices]` may price a model at 0, as your own choice.
 A file that fails its checks is exit 2, and the message names the file and the line.
