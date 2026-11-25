@@ -34,7 +34,7 @@ from scrimmage import capture, labels
 from scrimmage import decide as engine
 from scrimmage.changes import Changed
 from scrimmage.decide import missed
-from scrimmage.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
+from scrimmage.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit, docs_url
 from scrimmage.outcomes import PREVIEW
 from scrimmage.plan import Plan
 from scrimmage.providers.base import Fields, Given, ModelProvider, ServerChains
@@ -621,7 +621,7 @@ class RunState:
                 "Scrimmage can read, so it cannot tell whether the fault is for this call. Send "
                 "this call as plain JSON with a model field. Taking model off the fault would "
                 "hit every call its label names, and with a budget any model call with no name "
-                'needs a price, as "" under [agent.prices]; see docs/model-faults.md'
+                f'needs a price, as "" under [agent.prices]; see {docs_url("model-faults")}'
             ),
             "redirect_off_host": detail,
             "unsupported_loop": detail,

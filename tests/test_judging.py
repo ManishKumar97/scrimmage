@@ -347,7 +347,10 @@ def test_pass_rate_of_one_is_a_whole_number_in_toml(project: Project) -> None:
 
 def test_a_rule_on_a_mock_is_unknown(project: Project) -> None:
     project.edit('returns = "shipped, Oct 30"', 'returns = "x"\nexpect = ["y"]')
-    with pytest.raises(ConfigError, match=r"expect: unknown setting; see docs/configuration.md"):
+    with pytest.raises(
+        ConfigError,
+        match=r"expect: unknown setting; see https://manishkumar97.github.io/scrimmage/configuration/",
+    ):
         load(project)
 
 
