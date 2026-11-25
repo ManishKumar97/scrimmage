@@ -47,14 +47,14 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 
 Any status from 400 to 599 works.
 
-`bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
+On OpenAI, `bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
+On Anthropic, a chat call gets the start of a Messages reply and a token count gets the start of a token count reply.
 The library does not retry a 200, so `bad body` meets one attempt.
 On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.
 The openai library retries a connection error twice by default, and each attempt meets the fault again, so `when = "first 1"` is absorbed by the first retry.
 
 The table above names the openai library's classes.
 The anthropic library raises the same class names for 400, 401, 429 and 500.
-On a 401 the body is Anthropic's, with the error type `authentication_error`.
 Two statuses are particular to it:
 
 | Fault | What an anthropic-library agent sees |
@@ -107,7 +107,7 @@ On an OpenAI call its body is copied from a real OpenAI 401, the reply to a requ
 The key fragment in the message is made up.
 As in the real reply, the content type is `text/plain` while the body is JSON; the openai library reads it either way.
 
-`context too long` is the error OpenAI sends when a chat request is longer than the model's context:
+`context too long` is the provider's own error for a chat request longer than the model's context:
 
 ```toml
 [[test.fault]]
@@ -124,7 +124,7 @@ It works on a chat call, `model` or `model:openai`, and not on a call that only 
 On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
-The label is `model:anthropic`, and it does not work on a call that only counts tokens, such as `model:anthropic/input_tokens`.
+It works on `model` or `model:anthropic`, and not on a call that only counts tokens, such as `model:anthropic/input_tokens`.
 
 ## A reply that comes back wrong
 
@@ -499,8 +499,8 @@ When two model calls run at once, such as a guardrail next to the main call, Scr
 | `model:anthropic` | chat calls to Anthropic's Messages API |
 | `model:openai/embeddings` | embedding calls to OpenAI |
 | `model:*/embeddings` | embedding calls on any provider |
-| `model:<provider>/moderations` | moderation calls |
-| `model:anthropic/input_tokens` | token counts on Anthropic |
+| `model:openai/moderations` | moderation calls, which only OpenAI has |
+| `model:<provider>/input_tokens` | token counts: OpenAI's Responses token counts and Anthropic's |
 
 A fault on `model` leaves embeddings alone, so you can fail the chat and keep your retrieval working, or the other way around.
 To tell two models apart, see [Failing one model](#failing-one-model).
