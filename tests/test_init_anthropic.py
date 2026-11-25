@@ -110,6 +110,10 @@ def test_an_openai_client_at_anthropics_host_is_still_a_line(
         ("api.anthropic.com", "openai"),
         ("gateway.acme.internal", "anthropic"),
     ]
+    toml = tmp_path / "scrimmage.toml"
+    toml.write_text(toml.read_text() + ONE_TEST)
+    capsys.readouterr()
+    assert cli.main(["check", str(toml)]) == OK, capsys.readouterr().err
 
 
 def test_every_library_that_names_a_provider_is_one_the_registry_has() -> None:
@@ -210,3 +214,35 @@ def test_a_probed_host_is_a_line_unless_it_is_the_requests_own_providers(
     write(tmp_path, {"bot.py": ANSWER})
     _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert [(h["host"], h["provider"]) for h in hosts_of(doc)] == lines
+
+
+@pytest.mark.design("init.model_host")
+@pytest.mark.parametrize(
+    ("client", "import_line", "library", "gateway_hosts"),
+    [
+        ("Anthropic", "import anthropic", "anthropic", ["gateway.acme.internal"]),
+        ("AsyncAnthropic", "import anthropic", "anthropic", ["gateway.acme.internal"]),
+        # Read through langchain, whose package this is a part of; its base_url is not read.
+        ("ChatAnthropic", "import langchain_anthropic", "langchain", []),
+    ],
+)
+def test_each_anthropic_client_class_is_named_and_a_missing_base_url_is_no_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    client: str,
+    import_line: str,
+    library: str,
+    gateway_hosts: list[str],
+) -> None:
+    module = import_line.removeprefix("import ")
+    plain = f"{import_line}\nC = {module}.{client}()\n\n\n" + ANSWER
+    write(tmp_path, {"bot.py": plain})
+    _, doc = run(capsys, str(tmp_path))
+    assert f"in a module that imports {library} and builds a model client" in entry_why(doc)
+    assert doc["model_hosts"] == []
+    with_url = f"{import_line}\nC = {module}.{client}(base_url={GATEWAY!r})\n\n\n" + ANSWER
+    write(tmp_path, {"bot.py": with_url})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "again.toml"))
+    assert [(h["host"], h["provider"]) for h in hosts_of(doc)] == [
+        (host, "anthropic") for host in gateway_hosts
+    ]
