@@ -7,7 +7,20 @@ from collections.abc import Sequence
 import pytest
 
 from scrimmage.config import Fault, Mock
-from scrimmage.decide import Call, Counters, Decision, decide, fires, missed, names
+from scrimmage.decide import (
+    Call,
+    Counters,
+    Decision,
+    Miss,
+    alike,
+    decide,
+    fires,
+    labelled,
+    missed,
+    names,
+    on_label,
+    schedule,
+)
 from scrimmage.labels import matches
 from scrimmage.plan import Plan
 from scrimmage.state import RunState
@@ -467,3 +480,163 @@ def test_a_miss_under_a_carried_fault_keeps_its_evidence() -> None:
     # A call a mock answers under a carried fault is not a miss.
     same = get_order_call({"order_id": "1"})
     assert RunState.found_miss(same, p, decide(same, p, [1])) is None
+
+
+def fresh(text: str) -> str:
+    """An equal string that is not the same object, as one read from a file or a request is."""
+    return "".join(list(text))
+
+
+WEB_LABEL = "http:orders.acme.internal"
+
+
+def web(name: str = "/orders", method: str = "GET") -> Call:
+    return Call("http", WEB_LABEL, name, None, method)
+
+
+@pytest.mark.design("decide.web_narrowing")
+def test_a_web_mock_narrowed_to_a_method_names_only_that_method() -> None:
+    mock = Mock(WEB_LABEL, None, None, method="GET")
+    for sent, named_by_it in [("GET", True), ("POST", False), ("DELETE", False), ("PUT", False)]:
+        assert labelled(mock, web(method=sent)) is named_by_it
+    assert labelled(mock, web(method=fresh("GET")))  # equal is enough, identical is not needed
+    assert labelled(Mock(WEB_LABEL, None, None, method=fresh("GET")), web(method="GET"))
+    assert labelled(Mock(WEB_LABEL, None, None), web(method="POST"))  # no method: any method
+
+
+@pytest.mark.design("decide.web_narrowing")
+def test_a_web_mock_narrowed_to_a_path_names_only_that_path() -> None:
+    mock = Mock(WEB_LABEL, None, None, path="/b")
+    for sent, named_by_it in [("/a", False), ("/b", True), ("/c", False), ("/b/c", False)]:
+        assert labelled(mock, web(sent)) is named_by_it
+    assert labelled(mock, web(fresh("/b")))
+    assert labelled(Mock(WEB_LABEL, None, None, path=fresh("/b")), web("/b"))
+    assert labelled(Mock(WEB_LABEL, None, None), web("/anything"))
+
+
+@pytest.mark.design("decide.web_narrowing")
+def test_a_fault_narrowed_to_a_method_and_a_path_is_counted_only_for_that_request() -> None:
+    fault = Fault(WEB_LABEL, "status 503", "always", method="POST", path="/orders")
+    p = make(faults=[fault], real=[WEB_LABEL])
+    counters = Counters(p)
+    for call in (web(method="GET"), web("/other", "POST"), web(method="PUT")):
+        assert counters.note(call) == [0]
+    assert counters.note(web(method="POST")) == [1]
+
+
+@pytest.mark.design("decide.mcp_short_label")
+def test_an_mcp_mock_by_its_short_name_is_on_the_tools_label_and_names_it() -> None:
+    call = Call("mcp", "mcp:docs/search", "search", short=fresh("search"))
+    mock = Mock("search", None, None)
+    assert labelled(mock, call) and on_label(mock, call)
+    assert not on_label(Mock("lookup", None, None), call)
+
+
+@pytest.mark.design("decide.schedule")
+def test_a_schedule_reads_to_its_kind_and_count_and_rejects_what_is_not_one() -> None:
+    assert schedule("always") == ("always", 0)
+    assert schedule("first 3") == ("first", 3)
+    assert schedule("requests 2") == ("requests", 2)
+    assert schedule("call 10") == ("call", 10)
+    for bad in ("", "Always", "bogus 3", "first", "first x", "first -1", "call"):
+        with pytest.raises(ValueError, match="is not a schedule"):
+            schedule(bad)
+
+
+@pytest.mark.design("decide.schedule")
+def test_a_schedule_fires_only_on_the_numbers_of_a_call_that_was_counted() -> None:
+    assert not fires("always", 0) and fires("always", 5)
+    assert not fires("first 3", 0) and fires("first 3", 1) and not fires("first 3", 4)
+    assert not fires("requests 3", 0) and fires("requests 3", 3)
+    assert fires("call 1000", 1000) and not fires("call 1000", 999) and not fires("call 1000", 1001)
+
+
+@pytest.mark.design("decide.counts_exact_label")
+def test_every_fault_that_names_a_call_is_counted_and_the_rest_keep_zero() -> None:
+    other = Fault("tool:other", "timeout", "always")
+    first = Fault("tool:get_order", "timeout", "first 5")
+    p = make(faults=[other, TIMEOUT, first])
+    counters = Counters(p)
+    assert counters.note(GET_ORDER) == [0, 1, 1]
+    assert counters.note(GET_ORDER) == [0, 2, 2]
+    assert counters.attempts == [0, 2, 2]
+
+
+@pytest.mark.design("decide.counts_exact_label")
+def test_only_a_retry_of_a_request_the_counters_know_keeps_that_requests_number() -> None:
+    p = make(faults=[Fault("model", "status 429", "requests 2")])
+    counters = Counters(p)
+    assert counters.note(chat(0, "a")) == [1]
+    assert counters.note(chat(0, "a")) == [2]  # a first attempt is a new request, key or no
+    assert counters.note(chat(1, "a")) == [2]  # a retry of a request the counters know
+    assert counters.note(chat(1, "b")) == [3]  # a retry of one they never saw
+    assert counters.note(chat(1, None)) == [4]  # with no key, nothing ties it to a request
+
+
+def test_alike_counts_the_leading_path_segments_two_paths_share() -> None:
+    assert alike("/a/b", "/a/c") == 2
+    assert alike("/a/b", "/a/b") == 3
+    assert alike("/a", "/a/b") == 2  # the shorter path ends the count; it is not an error
+    assert alike("/a/b", "/a") == 2
+    assert alike("/x/b", "/a/b") == 1  # a segment that differs ends it for good
+    assert alike(None, "/a") == 1  # no path on the mock: only the empty first segment is shared
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_missed_web_request_names_the_nearest_mock_of_its_own_label() -> None:
+    before = Mock("http:billing.acme.internal", None, None, path="/orders/1/status")
+    after = Mock("http:zeta.acme.internal", None, None, path="/orders/1/status")
+    far = Mock(WEB_LABEL, None, None, path="/orders/9")
+    near = Mock(WEB_LABEL, None, None, path="/orders/1/refund")
+    p = make([before, after, far, near], real=[WEB_LABEL])
+    for label in (WEB_LABEL, fresh(WEB_LABEL)):  # the same label, read from the request
+        call = Call("http", label, "/orders/1/status", None, "GET")
+        decision = decide(call, p, [])
+        assert decision.action == "real"
+        assert missed(call, p, decision) == Miss("request", 3, ("path",), True)
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_missed_web_request_prefers_the_mock_of_its_own_method_to_a_nearer_path() -> None:
+    nearer_path = Mock(WEB_LABEL, None, None, method="POST", path="/orders/1/status")
+    own_method = Mock(WEB_LABEL, None, None, method="GET", path="/orders/2")
+    p = make([nearer_path, own_method], real=[WEB_LABEL])
+    call = web("/orders/1/status", "GET")
+    assert missed(call, p, decide(call, p, [])) == Miss("request", 1, ("path",), True)
+    assert missed(web("/x", "GET"), make(real=[WEB_LABEL]), Decision("real")) is None
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_missed_call_says_whether_its_arguments_could_be_read() -> None:
+    p = make([HAND], real=["tool:get_order"])
+    call = get_order_call({"order_id": "2"})
+    assert missed(call, p, decide(call, p, [])) == Miss("arguments", 0, ("order_id",), True)
+    assert missed(get_order_call(None), p, Decision("real")) == Miss("arguments", 0, (), False)
+
+
+@pytest.mark.design("decide.web_write_refused")
+def test_a_real_entry_for_one_method_and_path_lets_only_that_web_write_run() -> None:
+    p = make(real=[f"{WEB_LABEL} POST /orders"])
+    assert decide(web("/orders", "POST"), p, []) == Decision("real")
+    assert decide(web("/refunds", "POST"), p, []) == Decision("refused", reason="web_write")
+    assert decide(web("/orders", "DELETE"), p, []) == Decision("refused", reason="web_write")
+    assert decide(web("/refunds", "GET"), p, []) == Decision("real")  # a read needs no entry
+    host = make(real=[WEB_LABEL])
+    assert decide(web("/anything", "POST"), host, []) == Decision("real")
+
+
+def test_a_call_and_a_decision_are_made_once_and_never_changed() -> None:
+    for made, name in (
+        (GET_ORDER, "label"),
+        (Decision("real"), "reason"),
+        (Miss("no_mock"), "known"),
+    ):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(made, name, "x")
+
+
+def test_a_call_is_a_marked_first_attempt_unless_said_otherwise() -> None:
+    call = Call("tool", "tool:x", "x")
+    assert (call.retry, call.marked, call.args, call.key) == (0, True, None, None)
+    miss = Miss("no_mock")
+    assert (miss.nearest, miss.differs, miss.known) == (None, (), False)
