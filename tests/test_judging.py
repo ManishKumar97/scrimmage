@@ -1239,3 +1239,21 @@ def test_a_fault_row_beside_a_failing_baseline_shows_baseline_failed(
     out = Capture()
     assert report(cfg, results, tmp_path, out) == 0  # type: ignore[arg-type]
     assert "baseline failed" not in out.text
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.xfail(reason="RB-19: a control character still hides a forbidden word", strict=True)
+@pytest.mark.slow
+def test_a_control_character_inside_a_forbidden_word_does_not_hide_it(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The model writes "sec\x07ret", as hostile tool output can tell it to."""
+    project.edit(
+        'expect   = ["shipped", ["Oct 30", "October 30"]]',
+        'expect   = ["shipped"]\nforbid   = ["secret"]',
+    )
+    project.toml.write_text(project.toml.read_text().split("[[test.fault]]")[0])
+    result = project.test(fake_openai(["acme_get_order", "acme_get_stock", "acme_bell"]))
+    assert result.code == 1, result.out
+    texts = [b["text"] for s in result.summaries() for b in s["broken_rules"]]  # type: ignore[attr-defined]
+    assert texts == ['forbid "secret" found'] * 3
