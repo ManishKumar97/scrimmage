@@ -169,7 +169,8 @@ def test_cache_write_prices_and_the_current_table_are_documented() -> None:
         assert word in guide, word
     assert "checked against OpenAI's pricing page on 22 November 2026" in guide
     for model in ("gpt-5", "gpt-5-mini", "gpt-5-nano"):
-        assert f"`{model}`" in guide.split("## The shipped OpenAI prices")[1].split("### ")[0], model
+        shipped = guide.split("## The shipped OpenAI prices")[1].split("### ")[0]
+        assert f"`{model}`" in shipped, model
     assert "`cache_write_30m`" in page("json-output.md")
     assert "On Chat Completions, where writes last 30 minutes, it leaves out" in guide
 

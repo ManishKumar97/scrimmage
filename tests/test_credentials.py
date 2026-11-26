@@ -122,7 +122,8 @@ def test_a_nested_vault_mount_is_found_by_its_token_header_not_its_path(
             return client.get(url, headers={"X-Vault-Token": "s.abc"}).text
 
     parsed = httpx2.URL(url)
-    # The path alone cannot tell it from /v1/stations/KSEA/data/latest, so docs/limits/judging.md says so.
+    # The path alone cannot tell it from /v1/stations/KSEA/data/latest, so
+    # docs/limits/judging.md says so.
     assert credentials.credential(http_gate.host_of(parsed), http_gate.path_of(parsed)) is None
     gated(fetch_secret)(name="a")
     (line,) = [line for line in web.calls() if line["kind"] == "http"]

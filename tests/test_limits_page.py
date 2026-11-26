@@ -293,7 +293,11 @@ def test_every_limit_is_under_a_use_case_heading() -> None:
             "## In a Kubernetes cluster",
             "## Programs and processes",
         ],
-        "limits/calls.md": ["## Tools and frameworks", "## MCP tools", "## Web requests and recorded mocks"],
+        "limits/calls.md": [
+            "## Tools and frameworks",
+            "## MCP tools",
+            "## Web requests and recorded mocks",
+        ],
         "limits/budget.md": ["## The budget"],
         "limits/judging.md": ["## Judging an answer", "## Records and secrets"],
     }
