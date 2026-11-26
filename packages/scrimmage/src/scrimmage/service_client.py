@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from scrimmage import protocol, records, tls, versions
+from scrimmage import protocol, records, tls, ungated, versions
 from scrimmage.config import (
     SERVICE_URL,
     Agent,
@@ -219,7 +219,8 @@ def send(
         cutter.start()
     replied = False
     try:
-        conn.request(method, path, body=body, headers=headers)
+        with ungated.own():
+            conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
         replied = True
         if limit is None:

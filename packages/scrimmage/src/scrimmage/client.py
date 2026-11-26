@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import TypeVar
 from urllib.parse import urlsplit
 
-from scrimmage import protocol, threads, versions
+from scrimmage import protocol, threads, ungated, versions
 from scrimmage.budget import Held, Shortfall
 from scrimmage.plan import items, number, obj
 from scrimmage.redact import redact
@@ -228,7 +228,8 @@ class ControlClient:
             headers["Content-Type"] = "application/json"
         conn = self._connection(timeout)
         try:
-            conn.request(method, path, body=body, headers=headers)
+            with ungated.own():
+                conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             data = response.read()
             signature = response.getheader(protocol.SIGNATURE) or ""
