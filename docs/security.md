@@ -363,7 +363,7 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
 
   *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_a_marker_is_removed_with_what_sticks_to_it`, `tests/test_record.py::test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json`, `tests/test_redact.py::test_what_starts_inside_a_bearer_token_is_read_again`, `tests/test_redact.py::test_a_bearer_token_shields_no_secret_glued_after_it`*
 
-  A form field with an empty value, prose such as "reset your password at", a URL path that holds the word `token`, and these names are left as written: the paging names (`next_page_token`, `page_token`), anything after `is_`, `has_`, `top_`, `max_`, `min_`, `num_` or `n_`, the tokenizer names (`eos_token`, `bos_token`, `pad_token`, `unk_token`, `sep_token`, `cls_token`) and a name glued to a word, such as `mytoken`.
+  A form field with an empty value, prose such as "reset your password at", a URL path that holds the word `token`, and <a id="exempt-names"></a>these names are left as written: the paging names (`next_page_token`, `page_token`), anything after `is_`, `has_`, `top_`, `max_`, `min_`, `num_` or `n_`, the tokenizer names (`eos_token`, `bos_token`, `pad_token`, `unk_token`, `sep_token`, `cls_token`) and a name glued to a word, such as `mytoken`.
   `None`, `True` and `False` alone as a value, and a bare name as an argument of a call that has a name, such as `f(token=tok)`, are code and are left as written.
   A value kept this way ends where a field name or a key shape begins in it, and the rest is read again by every rule: in `next_page_token=ab,password=x` the paging token stays and the password is removed, and in `f(token=ghp_...)` the GitHub token is removed.
   For a text that is JSON as a whole, a field name at the end of a string cannot run into the next string: the JSON object, array or string is read first and each string in it is cleaned on its own, so the result still parses, with the same keys and list lengths, and only a change is written back.
@@ -402,7 +402,7 @@ The rules below say where a form field, a name or a JSON text is cut, and what i
 They are the detail behind the limit "A form field is cut at the first space, quote or `&`" on the [Limits](limits/judging.md#records-and-secrets) page.
 
 `password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
-Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are on the security page.
+Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are [listed above](#exempt-names).
 `None`, `True` and `False` alone as a value are taken for code and kept, and so is a bare name as an argument of a call that has a name, as in `f(password=changeme)`, right after the parenthesis or after `, `.
 After a bare comma it is not read as code, so `f(token=tok,secret=sec)` loses `secret=sec)`: a removal is the safe side.
 A parenthesis with no name before it, as in `set it (PASSWORD=hunter2) then`, is not a call.
@@ -418,7 +418,7 @@ An escaped quote with more of the value after it is part of the value, as in `pa
 In a string read out of a JSON text, and in a Python string, such as what a tool takes or returns or the agent's answer, a `\n` or `\r` with more of the value after it is a backslash and a letter, as in the path `password=C:\new2zz`, and is part of the value.
 There a raw quote with more of the value after it is part of the value too, unless the field name sits inside a quote, which the quote then closes.
 A text that is one whole JSON string literal, as in `"password=C:\newhunt1"`, is read as JSON, so a `\n` in it is a line break and ends a value there: `ewhunt1` after it is kept.
-This holds for a Python string of that shape too, and redaction did the same before these rules.
+This holds for a Python string of that shape too.
 The same text outside JSON, where `\n` cannot be told from an escaped line break, still ends the value at `\n`: `password=C:\new2zz` as plain text keeps `\new2zz`.
 The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
 A kept value, such as a paging token, ends where a field name or a key shape begins in it, and the rest is read again: `next_page_token=ab,password=x` keeps `next_page_token=ab,` and removes the password.
