@@ -8,6 +8,7 @@ The model is the fake OpenAI server, scripted per page below, so no key is neede
 """
 
 import contextlib
+import difflib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ import yaml
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.anthropic_server import FakeAnthropic
 from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, text_of, tool_failed
+from ports import free_port
 from scrimmage.cli import main
 from scrimmage.managed import Managed
 from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
@@ -50,7 +52,7 @@ class Example:
     logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
     provider: str = "openai"  # the API the agent speaks, so the fake server that answers it
     own_host: bool = False  # the page names its model host itself, so the test adds no line
-    port: int = 0  # the port the page's address names, or 0 for any free one
+    port: int = 0  # the port the page's address names, which a run copy moves to a free one
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,15 @@ def with_fake_host(toml: Path, provider: str | None = "openai") -> None:
         toml.write_text(text.replace("[agent]\n", "[agent]\n" + host, 1))
 
 
+def retarget(root: Path, page_port: int, port: int) -> None:
+    """Move the port a page's address names to a free one, in the run copy only, so two test
+    processes never ask for the same fixed port. The page itself keeps the familiar number."""
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+        if f"localhost:{page_port}" in text:
+            path.write_text(text.replace(f"localhost:{page_port}", f"localhost:{port}"))
+
+
 def check_page(
     name: str,
     example: Example,
@@ -187,7 +198,8 @@ def check_page(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     fake_anthropic: Callable[..., FakeAnthropic] | None = None,
-) -> None:
+) -> int:
+    """Run the page's blocks. Returns the port its fake model listens on."""
     root = tmp_path / "project"
     if example.start:
         shutil.copytree(example.start, root, ignore=shutil.ignore_patterns("__pycache__"))
@@ -195,13 +207,15 @@ def check_page(
     for block in blocks(example.base) if example.base else []:
         if block.title != OUTPUT:
             apply(root, block)
+    moved = 0
     if example.provider == "anthropic":
         assert fake_anthropic is not None, "an Anthropic page needs the fake Anthropic server"
         claude = fake_anthropic(example.replies)
         monkeypatch.setenv("ANTHROPIC_BASE_URL", claude.base_url)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     else:
-        fake = fake_openai(example.replies, by_model=example.by_model, port=example.port)
+        moved = free_port() if example.port else 0
+        fake = fake_openai(example.replies, by_model=example.by_model, port=moved)
         monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
         monkeypatch.setenv("OPENAI_API_KEY", "test")
     # A page runs `python`: the venv's, whatever else PATH holds.
@@ -210,6 +224,7 @@ def check_page(
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
+    ports = (example.port, moved) if example.port else None
     run_blocks(
         name,
         root,
@@ -217,12 +232,14 @@ def check_page(
         capsys,
         example.logs or {},
         None if example.own_host else example.provider,
+        ports,
     )
     assert codes == example.codes
     for rule in (example.by_model or {}).values():
         assert not isinstance(rule, ByTools) or not rule.unused, (
             f"script entries never asked for: {rule.unused}"
         )
+    return moved
 
 
 def run_blocks(
@@ -232,6 +249,7 @@ def run_blocks(
     capsys: pytest.CaptureFixture[str],
     logs: dict[int, str],
     provider: str | None = "openai",
+    ports: tuple[int, int] | None = None,
 ) -> None:
     """Each block of the page in order: a file is written, an Output is the command run.
 
@@ -250,6 +268,8 @@ def run_blocks(
             apply(root, block)
             continue
         with_fake_host(root / "scrimmage.toml", provider)
+        if ports:
+            retarget(root, *ports)
         capsys.readouterr()
         codes.append(main(command))
         out = capsys.readouterr().out
@@ -396,8 +416,9 @@ def test_the_guardrails_page_runs_and_prints_its_table(
 
 
 # The gateway page names its own model host, so the test adds no line. The fake listens where
-# the page's address says, on port 4000, so this one test holds the port: it runs the page, and
-# then runs it again with the `model_hosts` line cut out, which must not give the same result.
+# the page's address says, port 4000, which the run copy moves to a free port. The test runs the
+# page, and then runs it again with the `model_hosts` line cut out, which must not give the same
+# result.
 GATEWAY = "examples/gateway.md"
 GATEWAY_RUN = Example(
     ["gateway_get_order", "gateway_answer"],
@@ -416,7 +437,7 @@ def test_the_gateway_page_runs_on_its_own_model_hosts_line(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    check_page(GATEWAY, GATEWAY_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+    moved = check_page(GATEWAY, GATEWAY_RUN, tmp_path, fake_openai, capsys, monkeypatch)
     page = (DOCS / GATEWAY).read_text()
     assert len(HOST_LINE.findall(re.search(r"```toml.*?```", page, re.S).group(0))) == 1  # type: ignore[union-attr]
     # The same page without that line: its calls are no model calls to Scrimmage.
@@ -430,6 +451,7 @@ def test_the_gateway_page_runs_on_its_own_model_hosts_line(
             apply(root, block)
     toml = root / "scrimmage.toml"
     toml.write_text(HOST_LINE.sub("", toml.read_text()))
+    retarget(root, GATEWAY_RUN.port, moved)
     monkeypatch.chdir(root)
     capsys.readouterr()
     code = main(["test"])
@@ -525,17 +547,26 @@ def masked(text: str) -> list[str]:
     return normal(re.sub(r"\d{4}-\d\d-\d\d", "<date>", text))
 
 
-def printed(text: str) -> list[str]:
-    """What a command printed, masked as above, and without the line numbers of a diff hunk and
-    its unchanged lines, which the host line shifts or joins. Every changed line is compared."""
-    kept = [line for line in text.splitlines() if not line.startswith(" ")]
-    return masked(re.sub(r"^@@ .* @@$", "@@", "\n".join(kept), flags=re.M))
+def unified(old: str, new: str) -> str:
+    """The diff `scrimmage record` prints, worked out here from the two files, header lines and
+    hunk headers included."""
+    lines = difflib.unified_diff(
+        old.splitlines(), new.splitlines(), "scrimmage.toml", RECORDED, lineterm=""
+    )
+    return "\n".join(lines)
+
+
+def split_diff(out: str) -> tuple[str, str]:
+    """What a record run printed before its diff, and the diff."""
+    head, found, diff = out.partition("--- scrimmage.toml\n")
+    assert found, f"no diff in:\n{out}"
+    return head, found + diff
 
 
 class OrdersService:
-    """A stand-in for the orders service, on the port the recording page's tool asks."""
+    """A stand-in for the orders service, on the port the run copy of the page's tool asks."""
 
-    def __init__(self) -> None:
+    def __init__(self, port: int) -> None:
         self.asked: list[str] = []
         asked = self.asked
 
@@ -551,7 +582,7 @@ class OrdersService:
             def log_message(self, format: str, *args: Any) -> None:
                 del format, args
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", ORDERS_PORT), Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.running = True
@@ -564,6 +595,21 @@ class OrdersService:
             self.thread.join()
 
 
+def check_record_output(root: Path, before: str, out: str, shown: str) -> None:
+    """The run's text and diff, and the page's, each exact.
+
+    The run's diff is the diff of the two files on disk, host line and all. The page's diff is
+    the diff of the page's own two blocks, which hold no such line. So a changed context line or
+    hunk header on the page, or in what record printed, fails; nothing in a diff is masked but
+    the date and the run id."""
+    head, diff = split_diff(out)
+    page_head, page_diff = split_diff(shown)
+    assert masked(head) == masked(page_head), out
+    assert masked(diff) == masked(unified(before, (root / RECORDED).read_text())), out
+    page = {b.title: b.body for b in blocks(RECORDING)}
+    assert masked(page_diff) == masked(unified(page["scrimmage.toml"], page[RECORDED])), shown
+
+
 @pytest.mark.slow
 def test_the_recording_page_records_a_real_call_and_replays_it_without_the_service(
     tmp_path: Path,
@@ -571,7 +617,8 @@ def test_the_recording_page_records_a_real_call_and_replays_it_without_the_servi
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = OrdersService()
+    port = free_port()
+    service = OrdersService(port)
     try:
         root = tmp_path / "project"
         root.mkdir()
@@ -599,14 +646,19 @@ def test_the_recording_page_records_a_real_call_and_replays_it_without_the_servi
             if title != OUTPUT:
                 apply(root, Block(lang, title, body))
                 continue
+            retarget(root, ORDERS_PORT, port)
             if command[0] == "test":  # the replay: the service is gone
                 service.stop()
                 assert service.asked == ["/orders/1234"]  # record asked once
             with_fake_host(root / "scrimmage.toml")
+            before = (root / "scrimmage.toml").read_text()
             capsys.readouterr()
             codes.append(main(command))
             out = capsys.readouterr().out
-            assert printed(out) == printed(body), f"{command}:\n{out}"
+            if command[0] == "record":
+                check_record_output(root, before, out, body)
+            else:
+                assert masked(out) == masked(body), f"{command}:\n{out}"
         assert codes == [OK, OK]
         assert service.asked == ["/orders/1234"]  # and the replay asked nobody
     finally:

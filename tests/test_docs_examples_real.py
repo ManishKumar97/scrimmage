@@ -20,11 +20,13 @@ from pathlib import Path
 
 import pytest
 
+from ports import free_port
 from test_docs_examples import (
     BUDGET,
     DOCS,
     EXAMPLES,
     FENCE,
+    ORDERS_PORT,
     OUTPUT,
     RECORDED,
     RECORDING,
@@ -35,6 +37,7 @@ from test_docs_examples import (
     OrdersService,
     apply,
     blocks,
+    retarget,
 )
 
 PAGES = {**EXAMPLES, SERVICE: SERVICE_RUN}
@@ -150,7 +153,8 @@ def test_the_recording_page_passes_on_a_real_model(tmp_path: Path) -> None:
     for block in blocks("examples/function-agent.md"):
         if block.title != OUTPUT:
             apply(root, block)
-    service = OrdersService()
+    port = free_port()
+    service = OrdersService(port)
     command: list[str] = []
     total = 0.0
     stdout = ""
@@ -166,6 +170,7 @@ def test_the_recording_page_passes_on_a_real_model(tmp_path: Path) -> None:
                 continue
             if command[0] == "test":  # the replay: the service is gone
                 service.stop()
+            retarget(root, ORDERS_PORT, port)
             run = subprocess.run(
                 [sys.executable, "-m", "scrimmage", *command, *CAP_FLAG],
                 cwd=root,
@@ -231,6 +236,8 @@ def test_the_budget_page_stops_at_its_budget_on_a_real_model(tmp_path: Path) -> 
         runs.append(run)
     looping, unpriced = runs
     spent_usd, budget = (float(x) for x in BUDGET_LINE.findall(looping.stdout)[0])
+    # --max-cost-usd lowers the page's $0.06 to the $0.05 page cap, and the run says so.
+    assert budget == CAP
     assert spent_usd <= budget or "warning: the test spent more than its budget" in looping.stdout
     assert looping.returncode in (0, 1, 2), looping.stdout + looping.stderr
     assert unpriced.returncode == 2
