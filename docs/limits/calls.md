@@ -116,6 +116,7 @@ Limits of the tools Scrimmage gates, of MCP tools, and of web requests and recor
   A request through http.client, requests, urllib3, urllib or aiohttp is reported: the report has one warning line per test with the library, the host and the method, `--json` lists it under `notices`, and `scrimmage show` puts it on the run's timeline as `ungated`.
   The report never shows the path, the query, the headers or the body, and it never changes a row's result or the exit code.
   A request is reported when it is sent, even if the connection then fails.
+  A request sent when no run is open, or by a thread after its run closed, goes to stderr and to `scrimmage check --service`, not to a test's report.
   A raw socket, pycurl or grpc is not reported.
   Only the `tools` list guards such a write: a listed tool that is neither mocked nor under `real` never runs.
   The web gates stop accidental writes, not code written to get around them.
