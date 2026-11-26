@@ -866,6 +866,8 @@ def test_missing_key_reads_the_providers_own_error_from_every_run_log(
 
 SLASHED = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE"
 SIGNED = "Tr0ub4dor&3horse<staple>"
+SPACED = "abcd/efgh  ijklmnopqrst"
+TABBED = "tab/value\tsecretvalue12345"
 
 
 def go_escape(text: str) -> str:
@@ -879,8 +881,10 @@ def go_escape(text: str) -> str:
         (SLASHED, lambda t: t.replace("/", "\\/")),
         (SIGNED, go_escape),
         (SLASHED, lambda t: t),
+        (SPACED, lambda t: t.replace("/", "\\/")),
+        (TABBED, lambda t: t.replace("/", "\\/")),
     ],
-    ids=["php_slash", "go_html", "plain"],
+    ids=["php_slash", "go_html", "plain", "double_space", "tab"],
 )
 @pytest.mark.parametrize("long", [False, True], ids=["whole", "cut"])
 def test_a_secret_the_provider_echoes_in_an_escape_is_not_printed(
@@ -893,6 +897,7 @@ def test_a_secret_the_provider_echoes_in_an_escape_is_not_printed(
     line["result"] = entry
     said = runner_module.real_error(line, (), [secret]) or ""
     assert secret not in said and "returned 401" in said, said
+    assert " ".join(secret.split()) not in said, said  # the line collapses whitespace
 
 
 @pytest.mark.design("runner.provider_message")

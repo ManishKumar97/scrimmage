@@ -1428,7 +1428,7 @@ def provider_message(line: dict[str, object], scrub: Sequence[str] = ()) -> str:
     # The preview was redacted as JSON text, where a secret can still sit behind an escape
     # (\/ or \u0026). Decoding made it plain, so redact it again as the plain text it is, and
     # show what a terminal would act on as escapes.
-    text = render.plain(redact_decoded(" ".join(text.split()), scrub))
+    text = render.plain(" ".join(redact_decoded(text, scrub).split()))
     text = "".join(
         f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cf", "Zl", "Zp") else c for c in text
     )
