@@ -24,6 +24,8 @@ TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
 FORMAT = "Cf"  # the Unicode category of characters that do not show
+CONTROL = "Cc"  # the Unicode category of control characters, such as a bell or a null
+LINE_SPACE = "\t\n\r\x0b\x0c"  # the controls that are a space on a page
 COMBINING_DOT = "\u0307"
 BLANK = dict.fromkeys(map(ord, "\u034f\ufe0e\ufe0f\u1160"))  # blank, yet not of that category
 # A crash or a time-out is a result about the agent. Every other ending with no answer
@@ -79,14 +81,21 @@ class RowResult:
     floor: int  # the judged runs this row needs for any verdict
 
 
+def leaves_mark(char: str) -> bool:
+    """False for a character that must be dropped, so it cannot sit inside a word."""
+    kind = unicodedata.category(char)
+    return kind != FORMAT and (kind != CONTROL or char in LINE_SPACE)
+
+
 def normal(text: str) -> str:
     """Text as it is compared: one form for each character, no case, single spaces.
 
     Format characters such as a zero-width space leave no mark, so they cannot hide a word.
+    Nor can a control character such as a bell or a null; a tab or a line break is a space.
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
     plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    shown = "".join(char for char in plain.translate(BLANK) if unicodedata.category(char) != FORMAT)
+    shown = "".join(char for char in plain.translate(BLANK) if leaves_mark(char))
     return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
 
 

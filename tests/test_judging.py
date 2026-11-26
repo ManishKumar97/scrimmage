@@ -171,6 +171,21 @@ def test_case_spaces_and_unicode_forms_do_not_decide_a_match(answer: str, rule: 
     assert broken_texts(answer, Rules(((rule,),), (), 1.0)) == []
 
 
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("control", ["\x00", "\x07", "\x1b", "\x7f", "\x85", "\x9b"])
+def test_a_control_character_inside_a_word_leaves_no_mark(control: str) -> None:
+    assert normal(f"sec{control}ret") == "secret"
+    assert broken_texts(f"the sec{control}ret", Rules((), ("secret",), 1.0)) == [
+        'forbid "secret" found'
+    ]
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("space", ["\t", "\n", "\r", "\x0b", "\x0c"])
+def test_a_tab_or_a_line_break_is_still_a_space(space: str) -> None:
+    assert normal(f"Oct{space}30") == "oct 30"
+
+
 def test_normal_touches_nothing_else() -> None:
     assert normal("  Oct **30**,  2026 ") == "oct **30**, 2026"
 
@@ -1242,7 +1257,6 @@ def test_a_fault_row_beside_a_failing_baseline_shows_baseline_failed(
 
 
 @pytest.mark.design("judge.control_char")
-@pytest.mark.xfail(reason="RB-19: a control character still hides a forbidden word", strict=True)
 @pytest.mark.slow
 def test_a_control_character_inside_a_forbidden_word_does_not_hide_it(
     project: Project, fake_openai: Fake
