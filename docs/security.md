@@ -442,7 +442,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 
   *Checked by: `tests/test_budget.py::test_a_budget_that_cannot_cover_a_call_stops_the_test`*
 
-- If the runner cannot be reached to check the budget, the call is refused rather than sent.
+- If the runner cannot be reached to check the budget, the gated call is refused rather than sent.
 
   *Checked by: `tests/test_http_gate.py::test_an_unreachable_control_server_refuses_the_call`*
 
@@ -482,7 +482,7 @@ See [The budget](budget.md).
   Mock it.
 - **Code that is not a gated call.** Only listed tools, LangChain tools, httpx and httpx2 requests, MCP tool calls and model calls are gated.
   A database driver, boto3 and other cloud SDKs, urllib3, `requests`, gRPC or a raw socket inside code that is not a listed tool runs untouched and is not recorded.
-  A gated tool, one listed under `tools` that is neither mocked nor under `real`, never runs, so a write inside it never happens.
+  A gated tool, which is any tool listed under `tools`, that is neither mocked nor under `real` never runs, so a write inside it never happens.
 - **MCP requests that are not tool calls.** They pass, and a server can act on them; see [Limits](limits/calls.md#mcp-tools).
   What a stdio MCP server does by itself, such as writing to its own database, is not gated.
 - **A provider that is neither OpenAI's nor Anthropic's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts; see [Real spending has a cap](#real-spending-has-a-cap-and-the-cap-is-soft).

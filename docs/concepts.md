@@ -33,7 +33,7 @@ Every test has a budget: the most its model calls may cost together, set by `max
 Before a model call is sent, Scrimmage sets aside an estimate of the most that call could cost.
 That estimate is a **hold**.
 When the reply arrives, the real cost replaces the hold, and the hold is given back.
-A call that does not fit in the money left, with the holds of the calls in flight counted, waits or is refused.
+A gated call that does not fit in the money left, with the holds of the calls in flight counted, waits or is refused.
 The docs say "hold" for this, and nowhere "reserve" or "reservation".
 The words `reserve_output_tokens` and `not reserved` are the names of a setting and of an outcome, so they keep their spelling.
 See [The budget](budget.md).

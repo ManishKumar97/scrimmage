@@ -56,7 +56,10 @@ A refusal here ends the run, as it does for a tool.
 
 A `GET` that changes data, which some services allow, is not caught. Mock it.
 Other HTTP libraries are not gated. Only your listed tools guard a write sent with one: a gated tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens.
-A run that sends a request through one of them says so in the report, with the library and the host, and a write sent that way still runs for real. See [Limits](limits/calls.md#web-requests-and-recorded-mocks).
+A run that sends a request through requests, urllib3, urllib or aiohttp says so in the report, with the library, the host and the method.
+A write sent that way is not stopped.
+A raw socket, pycurl or grpc is not reported at all.
+See [Limits](limits/calls.md#web-requests-and-recorded-mocks).
 
 ## What an MCP tool may do
 
@@ -146,13 +149,13 @@ A faulted model call holds nothing and costs nothing.
 
 ## The budget
 
-A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
+A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the gated call is refused rather than sent.
 See [The budget](budget.md).
 
 The Scrimmage MCP server adds guards for a coding agent that runs tests: every `test` and `record` call names a `max_cost_usd` the person approves, the server checks the file before any spend, refuses a file with no budget, keeps a ceiling for the session, and runs one spend at a time.
 They stop accidents, not a coding agent with a shell; see [Driving Scrimmage from a coding agent](mcp-server.md#the-guards).
 
-## A misspelled tool never runs ungated
+## A misspelled tool stops the run
 
 The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.
 
