@@ -22,6 +22,7 @@ from scrimmage.errors import ConfigError, docs_url
 from scrimmage.outcomes import plural
 
 DOCS = docs_url("configuration")
+PRICES_DOCS = docs_url("prices")
 SHIPPED = "prices.toml"
 RUNS = "scrimmage-runs"
 RATE_KEYS_ORDER = (
@@ -292,7 +293,8 @@ def parse(text: str, name: str) -> PriceFile:
     for provider in data:
         if not SECTION_NAME.match(provider) or not isinstance(data[provider], dict):
             raise ConfigError(
-                f"{name} {provider}: expected a provider's section, such as [openai]; see {DOCS}"
+                f"{name} {provider}: expected a provider's section, such as [openai]; "
+                f"see {PRICES_DOCS}"
             )
         sections.append(
             (provider, parse_section(text, f"{name} {provider}", provider, data[provider]))
@@ -306,7 +308,7 @@ def parse_section(text: str, item: str, provider: str, raw: object) -> Section:
     table = as_table(raw, item)
     for key in table:
         if key not in SECTION_KEYS:
-            raise ConfigError(f"{item} {key}: unknown setting; see {DOCS}")
+            raise ConfigError(f"{item} {key}: unknown setting; see {PRICES_DOCS}")
     as_of, url = table.get("as_of"), table.get("url")
     try:
         if not isinstance(as_of, str):
