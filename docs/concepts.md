@@ -64,10 +64,10 @@ This version knows these labels:
 For every call, in this order:
 
 1. **Fault**: if a fault names the call, it fires. Faults win over mocks, because a fault row is the baseline plus one fault.
-2. **Mock**: if a mock names the call, the mock's value is returned and the real tool never runs.
+2. **Mock**: if a mock names the call, the mock's value is returned and the gated tool never runs.
 3. **Real**: if the call is listed under `real`, the real tool runs.
 4. **Reads**: a web `GET` or `HEAD` runs for real.
-5. **Refused**: anything else is refused. See [Safety](safety.md).
+5. **Refused**: any other gated call is refused. See [Safety](safety.md).
 
 ## Mocks
 
@@ -92,7 +92,7 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 |---|---|
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
 | `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
-| `empty` | a tool returns the empty value of its declared return type, and never runs; an MCP tool returns a result with no content; a web request gets a 200 with no body and no `Content-Type` |
+| `empty` | a gated tool returns the empty value of its declared return type, and never runs; an MCP tool returns a result with no content; a web request gets a 200 with no body and no `Content-Type` |
 | `bad body` | a model call or a web request gets a complete 200 that says it is JSON, whose JSON does not parse |
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is; on an Anthropic call the text of every `text` block of the reply is, and `thinking` blocks and every other field stay as sent |

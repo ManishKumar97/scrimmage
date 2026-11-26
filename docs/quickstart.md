@@ -93,7 +93,7 @@ This file says:
 - run `acme.agent:answer` with the question;
 - `get_order` returns "shipped, Oct 30", and `get_stock` returns a `Stock` with 12 in stock, so no real system is called;
 - `check_inventory` is safe to run for real;
-- `refund_order` is neither mocked nor safe, so if the agent calls it, the call is refused;
+- `refund_order` is neither mocked nor safe, so if the agent calls it, the [gated](concepts.md#gate) call is refused;
 - the answer must say "shipped" and give the date, in either spelling;
 - then run the same test with `get_order` timing out.
   There the answer must admit the failure and give no date.

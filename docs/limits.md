@@ -14,6 +14,7 @@ Every other limit is on one of the pages listed below, by area.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
   A write through `requests` or `aiohttp` reaches the real system.
+  A run that sends a request through `requests`, `urllib3`, `urllib` or `aiohttp` says so in the report, with the library, the host and the method.
   The openai SDK uses httpx2, so model calls are covered.
   Move the call to httpx or httpx2, or list the tool that makes it under `tools`; see [What is covered](web-requests.md#what-is-covered).
 - **No streaming replies.** A service that streams its answer stops the test with exit 2, and a streamed model or web reply cannot take `replace` or `append`.

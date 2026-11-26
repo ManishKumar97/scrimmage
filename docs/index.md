@@ -17,7 +17,7 @@ For each call your agent makes through a [gate](concepts.md#gate), a test decide
 
 Scrimmage does not detect writes.
 It decides by the kind of call.
-A gated call that can write, such as a refund tool listed under `tools`, an MCP tool call, or an httpx request that is not a `GET` or `HEAD`, never runs for real unless the test mocks it or lists it under `real`.
+A [gated](concepts.md#gate) call that can write, such as a refund tool listed under `tools`, an MCP tool call, or an httpx request that is not a `GET` or `HEAD`, never runs for real unless the test mocks it or lists it under `real`.
 A web `GET` or `HEAD` runs for real, even when the service changes data on it, so mock a `GET` that writes.
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
@@ -79,7 +79,7 @@ def refund_order(order_id: str) -> str:
 ```
 
 The test mocks `get_order`, then runs again with it failing.
-It leaves `refund_order` unmocked and does not list it as safe, so a call to it is refused:
+It leaves `refund_order` unmocked and does not list it as safe, so a gated call to it is refused:
 
 ```toml
 # scrimmage.toml

@@ -112,7 +112,10 @@ Limits of the tools Scrimmage gates, of MCP tools, and of web requests and recor
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.
 
 - **Two HTTP libraries.** The gate sits in the clients of httpx and httpx2.
-  A request sent with requests, urllib, aiohttp or a raw socket, or handed to a transport object by your own code, is not seen, so nothing refuses or records it.
+  A request sent with requests, urllib, aiohttp or a raw socket, or handed to a transport object by your own code, is not gated, so nothing refuses or mocks it, and it runs for real.
+  A request through requests, urllib3, urllib or aiohttp is reported: the report has one warning line per test with the library, the host and the method, `--json` lists it under `notices`, and `scrimmage show` puts it on the run's timeline as `ungated`.
+  The report never shows the path, the query, the headers or the body, and it never changes a row's result or the exit code.
+  A raw socket, pycurl or grpc is not reported either.
   Only the `tools` list guards such a write: a listed tool that is neither mocked nor under `real` never runs.
   The web gates stop accidental writes, not code written to get around them.
   See [Safety](../safety.md#what-the-gates-assume).
