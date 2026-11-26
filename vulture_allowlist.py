@@ -195,3 +195,4 @@ _.kind_load  # tests/k8s/images.py: the kind tests call it once they load the ru
 _.LateStock  # tests/test_tool_gate.py: named only in a string annotation, on purpose
 _.CallbackManagerForToolRun  # tests/test_tool_gate.py: named only in a string annotation
 _.https_open  # scrimmage/prices_update.py: urllib calls an HTTPS handler's https_open by name
+_.total_spend  # tests/test_docs_examples_real.py: pytest runs an autouse fixture by itself

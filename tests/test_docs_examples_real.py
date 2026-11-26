@@ -37,6 +37,7 @@ PAGES = {**EXAMPLES, SERVICE: SERVICE_RUN}
 RESULT = re.compile(r"^(?!full name).*\s(pass|fail)\s*$", re.M)
 COST = re.compile(r"model calls cost \$([0-9.]+)")
 CAP = 0.05  # dollars for one page; a page that spends more has a loop or a wrong model
+CAP_FLAG = ["--max-cost-usd", str(CAP)]
 spent: dict[str, float] = {}
 
 
@@ -57,6 +58,11 @@ def answers(output: str) -> str:
     )
 
 
+def child_env() -> dict[str, str]:
+    path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
+    return {**os.environ, "PATH": path}
+
+
 def run_page(name: str, example: Example, root: Path) -> float:
     if example.start:
         shutil.copytree(example.start, root, ignore=shutil.ignore_patterns("__pycache__"))
@@ -67,8 +73,6 @@ def run_page(name: str, example: Example, root: Path) -> float:
     for block in blocks(example.base) if example.base else []:
         if block.title != OUTPUT:
             apply(root, block)
-    path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
-    env = {**os.environ, "PATH": path}
     command: list[str] = []
     codes: list[int] = []
     total = 0.0
@@ -84,9 +88,16 @@ def run_page(name: str, example: Example, root: Path) -> float:
             apply(root, block)
             continue
         run = subprocess.run(
-            [sys.executable, "-m", "scrimmage", *command],
+            # The runner itself refuses spend over the cap, so a loop cannot run up a bill.
+            [
+                sys.executable,
+                "-m",
+                "scrimmage",
+                *command,
+                *(CAP_FLAG if command[:1] == ["test"] else []),
+            ],
             cwd=root,
-            env=env,
+            env=child_env(),
             capture_output=True,
             text=True,
             timeout=600,
@@ -111,6 +122,8 @@ def total_spend() -> Iterator[None]:
 @pytest.mark.slow
 @pytest.mark.parametrize("name", sorted(PAGES))
 def test_the_page_passes_on_a_real_model(name: str, tmp_path: Path) -> None:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("run the real check with -n 0: parallel pages would share one spend cap")
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.fail("OPENAI_API_KEY is not set; the real check needs the provider key")
     cost = run_page(name, PAGES[name], tmp_path / "project")

@@ -49,9 +49,17 @@ SCRIMMAGE_REAL=1 uv run pytest -n 0 -s tests/test_docs_examples_real.py
 ```
 
 `-s` shows what each run answered, which is what to read when a rule fails.
-Every page uses `gpt-4o-mini`, so all pages cost about two cents together.
-Each page prints `REAL SPEND`, and a page that spends more than five cents fails.
-A row that fails on a real model needs a look at the answers first: widen the rule only to a wording that is right, and never to one that is wrong.
+Pages use `gpt-4o-mini`, except `one-model.md`, whose baseline row also calls `gpt-4.1`.
+The last full run, 10 pages, cost $0.0113.
+Each page prints `REAL SPEND`, and the total prints at the end.
+Every `scrimmage test` the check runs gets `--max-cost-usd 0.05`, so the runner refuses spend over that cap.
+Run it with `-n 0`: the check fails under xdist.
+
+A model can fail a row once by chance.
+Rerun the failing page once.
+If it fails again, read the answers.
+Widen a rule only to a wording that is right, and never to a bare word such as "issue" or "problem", which also appears in "let me know if you have any issues".
+Every widening needs a made-up answer that still fails, added to `tests/test_docs_rules.py`, which reads the rules from the docs and judges real and made-up answers against them.
 The check needs the extra libraries the pages import: `uv sync` installs them.
 
 ## The Docker tests
