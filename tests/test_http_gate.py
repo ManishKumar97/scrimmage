@@ -1404,3 +1404,17 @@ def test_a_recorded_web_request_names_a_credential_by_its_token_header_and_a_cha
     refused = http_gate.web_recorded(vault, reply, b"ok", "identity")
     assert refused["code"] == "credential"  # a Vault token header says whose API it is
     assert "Vault" in cast("str", refused["why"])
+
+
+def test_a_client_whose_transport_cannot_be_looked_up_is_not_in_process() -> None:
+    """In process means no gate decides the request. A lookup that fails is decided like any
+    other request, never waved through."""
+
+    class Broken:
+        def _transport_for_url(self, url: object) -> object:
+            raise RuntimeError("a library this version does not know")
+
+    request = httpx2.Request("GET", "https://api.acme.internal/orders/1")
+    assert http_gate.in_process(Broken(), request) is False
+    assert http_gate.in_process(object(), request) is False  # no lookup at all
+    assert http_gate.in_process(httpx2.Client(), request) is False  # a real network client
