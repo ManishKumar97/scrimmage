@@ -807,7 +807,11 @@ class Recorder:
         self.skip(node, OUTSIDE_TOOL)
 
     def note_orphan(self, node: Node) -> None:
-        if node.action == "real" and node.kind in ("tool", "mcp", "http"):
+        if node.action == "refused":
+            # The refusal stops the run, and the stop can come before the tool that made the
+            # call writes its own line, so the refusal is listed whether or not that line came.
+            self.refused(node)
+        elif node.action == "real" and node.kind in ("tool", "mcp", "http"):
             self.tally(node)
             self.manual(node, Listed(NOT_FINISHED, "the tool that made it never finished"))
 

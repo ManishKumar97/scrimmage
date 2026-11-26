@@ -2683,6 +2683,28 @@ def test_a_call_whose_tool_never_finished_is_not_a_sibling_failure(tmp_path: Pat
     assert [e.code for e in found.manual.values()] == ["not_finished"]
 
 
+def test_a_refusal_whose_tool_line_never_came_is_still_listed(tmp_path: Path) -> None:
+    # The run is stopped at the first refusal, and the stop can land before the tool that made
+    # the call writes its line. The refusal line then has a parent no line names.
+    refused = {
+        "call": "http:localhost",
+        "kind": "http",
+        "action": "refused",
+        "call_id": 2,
+        "parent": 1,
+        "proc": {"pid": 1},
+        "method": "POST",
+        "path": "/write",
+        "reason": "web_write",
+        "error": "ScrimmageRefused: http:localhost POST /write can change data",
+    }
+    config = loaded(tmp_path)
+    test = config.tests[1]
+    run = result_for(test)
+    found = recording.Recorder(test, [run], tmp_path).run([(run, [refused])], [])
+    assert [(e.code, e.path) for e in found.manual.values()] == [("refused", "/write")]
+
+
 @pytest.mark.design("record.runs_merge")
 @pytest.mark.parametrize("bad", ["status", "binary"])
 @pytest.mark.parametrize("bad_first", [False, True])
