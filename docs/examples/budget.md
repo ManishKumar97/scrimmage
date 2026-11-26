@@ -52,7 +52,7 @@ forbid = ["shipped", "ships", "will ship", "ship soon", "ship today", "ship tomo
   The real price is far lower, so this short test spends enough to meet the cap.
 - `reserve_output_tokens` is what a call holds before it is sent, when it sets no `max_tokens`.
   At the default of 4096 and $30 a million, one call would hold $0.12 and the cap could never fit it.
-  Here it is 64, so a call holds about $0.007.
+  Here it is 64, so a call holds far less.
 - `parallel = 1` runs one run at a time, so the point where the cap is reached does not depend on timing.
 
 ## Run it
@@ -76,14 +76,13 @@ test mistake: the budget of $0.06 was reached: $0.0656 was spent, so the test st
 
 The baseline passed, and its 3 runs cost $0.04.
 In the fault row the first run asked the model again after each failure.
-Each reply cost $0.0128, more than the $0.007 a call held, because the model reasoned before it called the tool.
+Each reply cost $0.0128, more than the call held, because the model reasoned before it called the tool.
 After 2 turns the money spent, $0.0656, was over the cap, and Scrimmage refused the next call: "budget reached".
 The test stopped with exit code 2, and the fault row has no result, as only one run began.
 
 The cap is passed by what the last calls cost above their holds, and by no more than that.
 Scrimmage cannot know how long a reply will be before it is sent, and the `warning:` line says so.
 The rest of the loop never ran: the 6 turns left in the bot's 8 cost nothing.
-
 
 ## A model with no price
 

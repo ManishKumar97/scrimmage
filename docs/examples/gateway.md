@@ -66,7 +66,7 @@ The row passes if the bot still answers.
 A gateway can state what a call cost: OpenRouter in `usage.cost`, a LiteLLM proxy in the `x-litellm-response-cost` header.
 Scrimmage settles such a call at the larger of that cost and the cost of its tokens at your prices.
 It adds nothing to the request to ask for it.
-In this example the scripted gateway states $0.005 for each call, and the tokens at the prices above come to a few millionths of a dollar, so the stated cost is what the budget is charged.
+In this example the scripted gateway states $0.005 for each call, and the tokens at the prices above come to under $0.0001, so the stated cost is what the budget is charged.
 
 ## Run it
 
