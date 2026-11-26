@@ -12,7 +12,7 @@ Every other limit is on one of the pages listed below, by area.
   `replace`, `garble`, `truncate`, `refuse` and `unknown tool` work on an Anthropic reply, and `bad tool args` never will be: see [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call) and [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
-- **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets are not gated: nothing mocks, faults or refuses their requests, and the record has no line for them.
+- **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets are not gated: nothing mocks, faults or refuses their requests, and they leave only an `ungated` notice line in the record.
   A write through `requests` or `aiohttp` reaches the real system.
   A run that sends a request through `requests`, `urllib3`, `urllib` or `aiohttp` says so in the report, with the library, the host and the method.
   The openai SDK uses httpx2, so model calls are covered.
