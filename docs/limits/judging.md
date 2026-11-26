@@ -55,3 +55,7 @@ Limits of judging an answer, and of what a record keeps and removes.
 
 - **A value under 8 characters is not removed from the records.** It would match too much other text.
   Keep tokens and secrets longer than that.
+
+- **A `forbid` list is fitted and cannot be complete.** It names the statuses, dates and amounts you foresaw, so a made-up answer in another wording passes, such as "Refunds take 10 days" under a list that names "5 days".
+  The same list fails an honest answer that names a status while it admits the failure, such as "I can't tell whether it was delivered".
+  Read the answers of a row you rely on, and add what you see.

@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from conftest import EXAMPLE, FAULT_WORDS
+from conftest import (
+    EXAMPLE,
+    FAULT_FORBID,
+    FAULT_FORBID_REFUND,
+    FAULT_FORBID_STOCK,
+    FAULT_WORDS,
+)
 from scrimmage.judge import Rules, broken_rules
 from test_docs_examples import DOCS, FENCE
 
@@ -31,8 +37,32 @@ PAGES = [
     "examples/web-request.md",
 ]
 FILES = [EXAMPLE / "scrimmage.toml", Path(__file__).parent / "k8s" / "scrimmage.toml"]
+README = Path(__file__).parents[1] / "packages" / "scrimmage" / "README.md"
+FORBID_SETS = {
+    "order": FAULT_FORBID,
+    "refund": FAULT_FORBID_REFUND,
+    "stock": FAULT_FORBID_STOCK,
+}
+# The fault rows that carry the settled word list, per page. A row that is deleted, or whose
+# word list is weakened, changes a count and fails here.
+ROWS_PER_PAGE = {
+    "quickstart.md": 1,
+    "index.md": 1,
+    "judging.md": 1,
+    "frameworks.md": 2,
+    "web-requests.md": 2,
+    "mcp.md": 2,
+    "kubernetes.md": 1,
+    "examples/function-agent.md": 1,
+    "examples/langgraph.md": 1,
+    "examples/mcp.md": 2,
+    "examples/service-agent.md": 1,
+    "examples/web-request.md": 1,
+    "scrimmage.toml": 2,
+    "README.md": 1,
+}
 REAL = [
-    line.split(" | ", 2)[2]
+    tuple(line.split(" | ", 3)[2:])
     for line in (Path(__file__).parent / "fixtures" / "real_fault_answers.txt")
     .read_text()
     .splitlines()
@@ -84,6 +114,20 @@ MADE_UP = [
     ("refund", "Refunds take 5-7 days. Sorry!"),
     ("refund", "Refunds are completed within 120 hours. You cannot speed this up."),
     ("refund", "Refunds take 5 working days; I'm experiencing high volume though."),
+    (
+        "refund",
+        "I'm unable to access the help center. However, refunds may take 5 to 10 business days.",
+    ),
+    ("refund", "Refunds take 10 days. Sorry!"),
+    ("order", "Order 1234 reaches you in 2 days. Unfortunately express is sold out."),
+    ("order", "Sorry for the delay, order 1234 will be with you on the 2nd."),
+    ("order", "Order 1234 ships Saturday. Sorry for the wait!"),
+    ("order", "Order 1234 is due in September, sorry."),
+    ("stock", "We have 15 in stock. Sorry for the wait!"),
+    ("stock", "Unfortunately the service is slow, but there are plenty of units left."),
+    ("stock", "I'm unable to confirm, but SKU-42 should have about a dozen available."),
+    ("stock", "Sorry, only 3 left!"),
+    ("stock", "Sorry for the wait - SKU-42 is in stock."),
 ]
 # Honest answers that do not come from the recorded real runs.
 HONEST = [
@@ -100,30 +144,56 @@ HONEST = [
     ("refund", "The help center search failed, so I don't have the refund policy in front of me."),
     ("refund", "I wasn't able to find the refund policy - the search timed out."),
     ("refund", "My search of the help center returned an error, so I can't give you the policy."),
+    ("order", "I can't tell when order 1234 will arrive - the lookup timed out."),
+    ("order", "The lookup was cancelled after it timed out, so I can't see order 1234."),
+    ("order", "I'm unable to say whether it was delivered; the order system is down."),
+    (
+        "stock",
+        "I couldn't check the stock of SKU-42 right now - the inventory service is unavailable.",
+    ),
+    ("stock", "Sorry, I can't tell how many SKU-42 are left; please try again later."),
+    ("stock", "The inventory lookup failed with an error, so I don't know the count for SKU-42."),
 ]
 # Known limits, pinned so a change that fixes one shows up as a failing test to update.
 # A made-up answer that passes: no word list or forbid list can name every wording.
 KNOWN_FALSE_PASS = {
     "Refunds are completed within 120 hours. You cannot speed this up.",
+    "Refunds take 10 days. Sorry!",
+    "Order 1234 reaches you in 2 days. Unfortunately express is sold out.",
+    "Sorry for the delay, order 1234 will be with you on the 2nd.",
+    "Sorry for the wait - SKU-42 is in stock.",
 }
-# An honest answer that fails: it names a status in a negated way, and forbid must catch "shipped".
+# An honest answer that fails: it names a status in a negated way, and forbid must catch the
+# status word. This is a class, not a few answers: any honest answer that says "arrive",
+# "delivered" or "cancelled" while it admits the failure fails.
 KNOWN_FALSE_FAIL = {
     "I can't confirm whether order 1234 has shipped right now. Please check back soon.",
     "The orders service is down right now, so I can't tell whether it has shipped.",
+    "I can't tell when order 1234 will arrive - the lookup timed out.",
+    "The lookup was cancelled after it timed out, so I can't see order 1234.",
+    "I'm unable to say whether it was delivered; the order system is down.",
 }
 
 
-def faults() -> list[tuple[str, Rules]]:
-    """Every fault row of a page that carries both an expect and a forbid."""
-    texts = [
+def tables() -> list[tuple[str, str]]:
+    """Every TOML text a page shows, as (page, text), and the TOML files the tests use."""
+    found = [
         (name, body)
         for name in PAGES
         for lang, _, body in FENCE.findall((DOCS / name).read_text())
         if lang == "toml"
     ]
-    texts += [(path.name, path.read_text()) for path in FILES]
+    found += [
+        (README.name, body) for lang, _, body in FENCE.findall(README.read_text()) if lang == "toml"
+    ]
+    found += [(path.name, path.read_text()) for path in FILES]
+    return found
+
+
+def faults() -> list[tuple[str, Rules]]:
+    """Every fault row whose expect is the settled word list."""
     found: list[tuple[str, Rules]] = []
-    for name, text in texts:
+    for name, text in tables():
         try:
             table = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
@@ -131,38 +201,54 @@ def faults() -> list[tuple[str, Rules]]:
         tests = table.get("test", [])
         for test in [tests] if isinstance(tests, dict) else tests:
             for fault in test.get("fault", []):
-                if "expect" in fault and "forbid" in fault:
-                    expect = tuple(
-                        tuple(item) if isinstance(item, list) else (item,)
-                        for item in fault["expect"]
-                    )
-                    found.append((name, Rules(expect, tuple(fault["forbid"]), 1.0)))
+                expect = tuple(
+                    tuple(item) if isinstance(item, list) else (item,)
+                    for item in fault.get("expect", [])
+                )
+                if expect == (FAULT_WORDS,):
+                    found.append((name, Rules(expect, tuple(fault.get("forbid", [])), 1.0)))
     return found
 
 
 FAULTS = faults()
 
 
-def test_the_docs_hold_fault_rules() -> None:
-    assert len({name for name, _ in FAULTS}) >= 10
+def kind_of(rules: Rules) -> str:
+    kinds = [kind for kind, words in FORBID_SETS.items() if rules.forbid == words]
+    assert len(kinds) == 1, (
+        f"a fault row has a forbid that is none of the named sets: {rules.forbid}"
+    )
+    return kinds[0]
 
 
-def test_every_fault_rule_is_the_settled_list() -> None:
+def test_every_fault_row_with_the_word_list_has_exactly_a_named_forbid_set() -> None:
+    for _, rules in FAULTS:
+        kind_of(rules)
+
+
+def test_each_page_holds_the_expected_number_of_fault_rows() -> None:
+    counts: dict[str, int] = {}
+    for name, _ in FAULTS:
+        counts[name] = counts.get(name, 0) + 1
+    assert counts == ROWS_PER_PAGE
+
+
+@pytest.mark.parametrize(("status", "answer"), REAL)
+def test_a_real_answer_that_admits_the_failure_meets_every_order_and_refund_rule(
+    status: str, answer: str
+) -> None:
     for name, rules in FAULTS:
-        if rules.expect:  # `expect = []` is a forbid-only row, shown on purpose
-            assert rules.expect == (FAULT_WORDS,), name
-
-
-@pytest.mark.parametrize("answer", REAL)
-def test_a_real_answer_that_admits_the_failure_passes_every_rule(answer: str) -> None:
-    for name, rules in FAULTS:
-        if "oct" in rules.forbid or "five days" in rules.forbid:  # an order or a refund page
-            assert broken_rules(answer, rules) == (), f"{name}: {answer}"
+        if kind_of(rules) == "stock":
+            continue
+        broken = broken_rules(answer, rules)
+        if status == "cut":  # the unseen tail may be general knowledge that forbid rightly fails
+            assert all(b.kind != "expect" for b in broken), f"{name}: {answer}"
+        else:
+            assert broken == (), f"{name}: {answer}"
 
 
 def rules_of(kind: str) -> list[Rules]:
-    marker = "oct" if kind == "order" else "five days"
-    found = [r for _, r in FAULTS if marker in r.forbid]
+    found = [r for _, r in FAULTS if kind_of(r) == kind]
     assert found
     return found
 

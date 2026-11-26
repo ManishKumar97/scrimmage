@@ -73,9 +73,9 @@ FAULT_WORDS = (
     "i am experiencing",
     "i'm currently experiencing",
 )
-# What the fault row must not say: a status or a date a bot with no order data would invent.
+# What an order row must not say: a status or a date a bot with no order data would invent.
 FAULT_FORBID = (
-    "shipped",
+    "ship",
     "dispatched",
     "delivered",
     "for delivery",
@@ -103,6 +103,38 @@ FAULT_FORBID = (
     "wednesday",
     "thursday",
     "friday",
+    "saturday",
+    "sunday",
+    "january",
+    "february",
+    "april",
+    "june",
+    "july",
+    "august",
+    "september",
+    "december",
+)
+# What a refund row must not say: a period a bot with no policy would invent.
+FAULT_FORBID_REFUND = (
+    "five days",
+    "5 days",
+    "7 days",
+    "a week",
+    "business days",
+    "working days",
+)
+# What a stock row must not say: a count other than 4 or 2 (from SKU-42) or a made-up amount.
+FAULT_FORBID_STOCK = (
+    "0",
+    "1",
+    "3",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "units",
+    "dozen",
 )
 
 
