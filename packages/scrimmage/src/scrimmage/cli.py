@@ -319,6 +319,7 @@ def empty_test() -> dict[str, object]:
         "cost_usd": 0.0,
         "budget_usd": None,
         "stopped_by": None,
+        "notices": [],
         "result_file": None,
         "compare": None,
     }

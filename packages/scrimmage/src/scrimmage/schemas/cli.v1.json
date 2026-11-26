@@ -117,6 +117,7 @@
         "cost_usd",
         "budget_usd",
         "stopped_by",
+        "notices",
         "mistakes",
         "notes",
         "warnings",
