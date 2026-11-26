@@ -15,8 +15,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -507,13 +509,117 @@ def test_the_ci_page_runs_its_workflow_steps_and_a_failed_row_fails_the_job(
     assert set(workflow_steps(root)) - ran == {"uv sync"}
 
 
+# The recording page: `scrimmage record` runs the baseline with a tool under `real`, and the
+# request inside the tool goes to a stand-in for the orders service on the port the page names.
+# The recorded file the page shows must be the one the run wrote, and the service is stopped
+# before the replay, so the replay can only pass on the mock.
+RECORDING = "examples/recording.md"
+RECORDED = "scrimmage.recorded.toml"
+ORDERS_PORT = 8765
+ORDER = b'{"status": "shipped", "date": "Oct 30"}'
+
+
+def masked(text: str) -> list[str]:
+    """Text without the model host line the test adds, and with the date and run id masked."""
+    text = text.replace(FAKE_HOST.format(provider="openai"), "")
+    return normal(re.sub(r"\d{4}-\d\d-\d\d", "<date>", text))
+
+
+def printed(text: str) -> list[str]:
+    """What a command printed, masked as above, and without the line numbers of a diff hunk and
+    its unchanged lines, which the host line shifts or joins. Every changed line is compared."""
+    kept = [line for line in text.splitlines() if not line.startswith(" ")]
+    return masked(re.sub(r"^@@ .* @@$", "@@", "\n".join(kept), flags=re.M))
+
+
+class OrdersService:
+    """A stand-in for the orders service, on the port the recording page's tool asks."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+        asked = self.asked
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                asked.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(ORDER)))
+                self.end_headers()
+                self.wfile.write(ORDER)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                del format, args
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", ORDERS_PORT), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.running = True
+
+    def stop(self) -> None:
+        if self.running:
+            self.running = False
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+
+
+@pytest.mark.slow
+def test_the_recording_page_records_a_real_call_and_replays_it_without_the_service(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OrdersService()
+    try:
+        root = tmp_path / "project"
+        root.mkdir()
+        for block in blocks("examples/function-agent.md"):
+            if block.title != OUTPUT:
+                apply(root, block)
+        fake = fake_openai(ONE_TOOL)
+        monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setenv(
+            "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
+        )
+        monkeypatch.chdir(root)
+        command: list[str] = []
+        codes: list[int] = []
+        for lang, title, body in FENCE.findall((DOCS / RECORDING).read_text()):
+            if lang == "bash":
+                command = body.strip().split()[1:]
+                continue
+            if not title:
+                continue
+            if title == RECORDED:
+                assert masked((root / RECORDED).read_text()) == masked(body)
+                continue
+            if title != OUTPUT:
+                apply(root, Block(lang, title, body))
+                continue
+            if command[0] == "test":  # the replay: the service is gone
+                service.stop()
+                assert service.asked == ["/orders/1234"]  # record asked once
+            with_fake_host(root / "scrimmage.toml")
+            capsys.readouterr()
+            codes.append(main(command))
+            out = capsys.readouterr().out
+            assert printed(out) == printed(body), f"{command}:\n{out}"
+        assert codes == [OK, OK]
+        assert service.asked == ["/orders/1234"]  # and the replay asked nobody
+    finally:
+        service.stop()
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI, RECORDING}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:
