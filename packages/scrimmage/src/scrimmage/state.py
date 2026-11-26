@@ -1397,7 +1397,8 @@ class Orphan(RunState):
 
     def tell_target(self, kind: str, library: str, message: str) -> bool:
         """Give a notice to the run while its record is open; False if there is no such run.
-        The one check: a run that closes after it still gets the line, and none is refused."""
+        The one check: a close after it never prints a refusal. The line is handed to the run,
+        which may drop it if its record has already sent its last batch."""
         target = self.target
         if target is None or target.refused == CLOSED:
             return False
