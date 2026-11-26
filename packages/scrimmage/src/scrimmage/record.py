@@ -814,6 +814,10 @@ class Recorder:
         elif node.action == "real" and node.kind in ("tool", "mcp", "http"):
             self.tally(node)
             self.manual(node, Listed(NOT_FINISHED, "the tool that made it never finished"))
+        # The tool is not written, so no mock under it is kept; a refusal under it is still listed.
+        for child in walk(node.children):
+            if child.action == "refused":
+                self.refused(child)
 
     def level(self, node: Node) -> Verdict:
         """This call's verdict. A tool with gated calls under it is written as those calls when

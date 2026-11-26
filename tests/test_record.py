@@ -2705,6 +2705,38 @@ def test_a_refusal_whose_tool_line_never_came_is_still_listed(tmp_path: Path) ->
     assert [(e.code, e.path) for e in found.manual.values()] == [("refused", "/write")]
 
 
+@pytest.mark.parametrize("depth", [1, 2])
+def test_a_refusal_under_a_tool_whose_caller_never_wrote_its_line_is_listed(
+    tmp_path: Path, depth: int
+) -> None:
+    # Tool A calls tool B (and C) and one swallows a refusal; the stop lands before A's line.
+    lines: list[dict[str, object]] = []
+    for level in range(depth):
+        line = tool_line(tmp_path, level + 2, "{}", {"ok": True})
+        line["parent"] = level + 1
+        lines.append(line)
+    lines.append(
+        {
+            "call": "http:localhost",
+            "kind": "http",
+            "action": "refused",
+            "call_id": depth + 2,
+            "parent": depth + 1,
+            "proc": {"pid": 1},
+            "method": "POST",
+            "path": "/write",
+            "reason": "web_write",
+            "error": "ScrimmageRefused: http:localhost POST /write can change data",
+        }
+    )
+    config = loaded(tmp_path)
+    test = config.tests[1]
+    run = result_for(test)
+    found = recording.Recorder(test, [run], tmp_path).run([(run, lines)], [])
+    assert ("refused", "/write") in {(e.code, e.path) for e in found.manual.values()}
+    assert found.written == []  # the outer tool never finished, so no mock under it is kept
+
+
 @pytest.mark.design("record.runs_merge")
 @pytest.mark.parametrize("bad", ["status", "binary"])
 @pytest.mark.parametrize("bad_first", [False, True])
