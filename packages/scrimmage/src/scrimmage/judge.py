@@ -9,6 +9,7 @@ import math
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 
 from scrimmage.redact import redact
 
@@ -23,7 +24,7 @@ NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
-CONTROL = "Cc"  # the Unicode category of control characters, such as a bell or a null
+NOT_DRAWN = ("Cf", "Cc")  # format and control characters, such as a bell or a null
 # The controls Python's str.split() treats as a space, which they stay.
 SPLIT_SPACE = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f\x85"
 # Default_Ignorable_Code_Point, from DerivedCoreProperties.txt of Unicode 15.1.0. Such a
@@ -102,11 +103,25 @@ class RowResult:
     floor: int  # the judged runs this row needs for any verdict
 
 
-def hidden(char: str) -> bool:
-    """A character that is not drawn and is not a space: it can sit inside a word."""
-    if char in SPLIT_SPACE:
-        return False
-    return ord(char) in IGNORABLE or unicodedata.category(char) == CONTROL
+@cache
+def not_drawn() -> frozenset[int]:
+    """The code points a reader does not see, bar the ones str.split reads as a space.
+
+    Unicode lists some as default ignorable, and the rest are format or control characters.
+    """
+    found = {
+        code
+        for code in (*range(0x20000), *range(0xE0000, 0xE1000))  # no format character is elsewhere
+        if code in IGNORABLE or unicodedata.category(chr(code)) in NOT_DRAWN
+    }
+    return frozenset(found - set(map(ord, SPLIT_SPACE)))
+
+
+@cache
+def gaps(spaced: bool) -> dict[int, str]:
+    """What each character that is not drawn becomes, as a table for str.translate."""
+    table = dict.fromkeys(not_drawn(), " " if spaced else "")
+    return table | dict.fromkeys(map(ord, SPLIT_SPACE), " ")
 
 
 def normal(text: str, spaced: bool = False) -> str:
@@ -117,15 +132,12 @@ def normal(text: str, spaced: bool = False) -> str:
     which is the other way a reader may take it. A tab or a line break is a space either way.
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
-    plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    gap = " " if spaced else ""
-    shown = "".join(gap if hidden(char) else char for char in plain)
-    return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
+    plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS).translate(gaps(spaced))
+    return " ".join(plain.casefold().replace(COMBINING_DOT, "").split())
 
 
-def found(word: str, answer: str) -> bool:
-    """Whether a forbid text is in the answer, with a hidden character dropped or as a space."""
-    return normal(word) in normal(answer) or normal(word) in normal(answer, spaced=True)
+def forbids(word: str, text: str) -> bool:
+    return normal(word) in normal(text) or normal(word) in normal(text, spaced=True)
 
 
 def quoted(item: tuple[str, ...]) -> str:
@@ -137,6 +149,7 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     text = normal(answer)
     if not text:
         return (Broken("empty", EMPTY),)
+    spaced = normal(answer, spaced=True)  # once for the answer, not once for each word
     # A team may forbid a secret by its value, so a rule can hold what a record must not.
     expect = [
         Broken("expect", redact(f"expect {quoted(item)} not found"))
@@ -146,7 +159,7 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     forbid = [
         Broken("forbid", redact(f'forbid "{word}" found'))
         for word in rules.forbid
-        if found(word, answer)
+        if normal(word) in text or normal(word) in spaced
     ]
     return (*expect, *forbid)
 
@@ -209,6 +222,6 @@ def wilson(passed: int, judged: int) -> tuple[float, float]:
 def impossible(rules: Rules) -> str | None:
     """Every alternative of an expect item holds a forbid text: no answer can pass."""
     for item in rules.expect:
-        if all(any(found(w, a) for w in rules.forbid) for a in item):
+        if all(any(forbids(w, a) for w in rules.forbid) for a in item):
             return redact(f"forbid {quoted(rules.forbid)} rules out expect {quoted(item)}")
     return None

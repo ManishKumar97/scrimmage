@@ -239,18 +239,42 @@ def test_a_forbid_text_rules_out_an_expect_text_in_either_form() -> None:
 def test_the_ignorable_table_is_the_unicode_one() -> None:
     """Python has no Default_Ignorable property, so check what it can.
 
-    Every such character is a format character, a mark, a letter or unassigned. Every format
-    character of the running Python is in the table, bar the ones Unicode draws.
+    Every such character is a format character, a mark, a letter or unassigned.
     """
-    drawn = {  # Cf characters that are not Default_Ignorable_Code_Point, as of Unicode 15.1
-        *range(0x600, 0x606), 0x6DD, 0x70F, 0x890, 0x891, 0x8E2, *range(0xFFF9, 0xFFFC),
-        0x110BD, 0x110CD, *range(0x13430, 0x13440),
-    }  # fmt: skip
     for code in judge.IGNORABLE:
         assert unicodedata.category(chr(code)) in {"Cf", "Mn", "Lo", "Cn"}, hex(code)
-    formats = {c for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf"}
-    assert formats - judge.IGNORABLE - drawn == set()
     assert len(judge.IGNORABLE) == 4174
+
+
+@pytest.mark.design("judge.control_char")
+def test_every_format_and_control_character_is_dropped_bar_the_split_spaces() -> None:
+    every = {c for c in range(0x110000) if unicodedata.category(chr(c)) in {"Cf", "Cc"}}
+    spaces = set(map(ord, judge.SPLIT_SPACE))
+    assert judge.not_drawn() == (every | judge.IGNORABLE) - spaces
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("hidden", ["\ufff9", "\U00013430", "\u0600", "\u06dd", "\U000110bd"])
+def test_a_format_character_that_is_not_default_ignorable_is_still_dropped(hidden: str) -> None:
+    assert broken_texts(f"sec{hidden}ret", Rules((), ("secret",), 1.0)) == ['forbid "secret" found']
+
+
+@pytest.mark.design("judge.control_char")
+def test_the_answer_is_normalised_once_not_once_for_each_forbid_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    real = judge.normal
+
+    def counted(text: str, spaced: bool = False) -> str:
+        calls.append(text)
+        return real(text, spaced)
+
+    monkeypatch.setattr(judge, "normal", counted)
+    answer = "Order 1234 shipped on Oct 30."
+    words = tuple(f"never said {i}" for i in range(40))
+    assert broken_texts(answer, Rules((("shipped",),), words, 1.0)) == []
+    assert calls.count(answer) == 2
 
 
 def test_normal_touches_nothing_else() -> None:
