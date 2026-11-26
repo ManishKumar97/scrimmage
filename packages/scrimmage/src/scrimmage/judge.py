@@ -136,10 +136,6 @@ def normal(text: str, spaced: bool = False) -> str:
     return " ".join(plain.casefold().replace(COMBINING_DOT, "").split())
 
 
-def forbids(word: str, text: str) -> bool:
-    return normal(word) in normal(text) or normal(word) in normal(text, spaced=True)
-
-
 def quoted(item: tuple[str, ...]) -> str:
     return " or ".join(f'"{text}"' for text in item)
 
@@ -222,6 +218,6 @@ def wilson(passed: int, judged: int) -> tuple[float, float]:
 def impossible(rules: Rules) -> str | None:
     """Every alternative of an expect item holds a forbid text: no answer can pass."""
     for item in rules.expect:
-        if all(any(forbids(w, a) for w in rules.forbid) for a in item):
+        if all(any(normal(w) in normal(a) for w in rules.forbid) for a in item):
             return redact(f"forbid {quoted(rules.forbid)} rules out expect {quoted(item)}")
     return None

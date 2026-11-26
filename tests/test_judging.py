@@ -229,8 +229,8 @@ def test_expect_reads_a_hidden_character_as_dropped_only() -> None:
 
 
 @pytest.mark.design("judge.control_char")
-def test_a_forbid_text_rules_out_an_expect_text_in_either_form() -> None:
-    assert judge.impossible(Rules((("ship\x07soon",),), ("ship soon",), 1.0)) is not None
+def test_a_forbid_text_rules_out_an_expect_text_as_expect_reads_it_dropped() -> None:
+    assert judge.impossible(Rules((("ship\x07soon",),), ("ship soon",), 1.0)) is None
     assert judge.impossible(Rules((("ship\x07soon",),), ("shipsoon",), 1.0)) is not None
     assert judge.impossible(Rules((("ship soon",),), ("shipsoon",), 1.0)) is None
 
