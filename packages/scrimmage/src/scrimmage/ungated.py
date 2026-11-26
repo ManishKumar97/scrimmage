@@ -77,6 +77,20 @@ def message(library: str, host: str, method: str) -> str:
     )
 
 
+def targets(run: "RunState") -> "list[RunState]":
+    """The runs that hear of a request. A stand-in made for each call is never the key: code
+    outside any request tells every run open, as other gates do, and a thread a run started
+    but lost the context of tells that run."""
+    from scrimmage.state import CLOSED, Orphan, Outside
+
+    if isinstance(run, Outside):
+        return list(run.runs)
+    if isinstance(run, Orphan):
+        target = run.target
+        return [] if target is None or target.refused == CLOSED else [target]
+    return [run]
+
+
 class Observer:
     """Writes one notice for each distinct (library, host, method) of a run."""
 
@@ -94,17 +108,24 @@ class Observer:
             host = redact(host.rpartition("@")[2])  # never a login, never a key in a name
             key = (library, host, method)
             run = self.process.current()
-            with self.lock:
-                held = self.outside if run is None else self.seen.setdefault(run, set())
-                if key in held:
-                    return
-                held.add(key)
+            group = [] if run is None else targets(run)
             text = message(library, host, method)
-            if run is None:
-                self.process.notice(KIND, library, text)
+            if not group:  # a request with no run to hold it
+                with self.lock:
+                    new = key not in self.outside
+                    self.outside.add(key)
+                if new:
+                    self.process.notice(KIND, library, text)
                 return
             now = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-            run.notice(KIND, library, text, extra={"host": host, "method": method, "start": now})
+            extra = {"host": host, "method": method, "start": now}
+            for target in group:
+                with self.lock:
+                    held = self.seen.setdefault(target, set())
+                    new = key not in held
+                    held.add(key)
+                if new:
+                    target.notice(KIND, library, text, extra=extra)
         except Exception:  # watching must never break the agent's request
             return
 
