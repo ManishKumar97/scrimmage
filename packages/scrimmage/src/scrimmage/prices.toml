@@ -772,7 +772,7 @@ output = 0.0
 # Fast mode is deprecated on Opus 4.8, whose fast requests Anthropic removes on 30 November 2026,
 # and is a research preview on Opus 5.
 # Left out on purpose: the Batch API, which is not a tier a reply names; US-only inference
-# (inference_geo "us"), which costs 1.1 times and which docs/limits.md says is settled at the normal
+# (inference_geo "us"), which costs 1.1 times and which docs/limits/budget.md says is settled at the normal
 # rate; data residency multipliers; and the retired models Opus 4.1, Opus 4 and Sonnet 4, which the
 # page marks retired; and Claude Mythos Preview (claude-mythos-preview), which the pricing page
 # names with no price and the deprecations page marks deprecated since 9 June 2026.
