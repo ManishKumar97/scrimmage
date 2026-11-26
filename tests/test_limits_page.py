@@ -102,6 +102,7 @@ ALL_TITLES = [
     "A transport's own retries.",
     "A value that changes between runs is frozen by its mock.",
     "A value under 8 characters is not removed from the records.",
+    "A visible space or mark inside a word hides it.",
     "A waiter keeps its place until it stops waiting.",
     "A web `GET` or `HEAD` that changes data runs for real.",
     "A web mock cannot match a query or a body.",

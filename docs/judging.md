@@ -28,7 +28,9 @@ The rule and the answer go through the same steps first:
 
 - case is ignored;
 - a non-breaking space, a full-width letter and other Unicode variants become the plain character;
-- characters that do not show, such as a zero-width space, a soft hyphen, or a control character like a bell or a null, are dropped, so they cannot hide a word from `forbid`; a tab or a line break is not dropped, it is a space;
+- a character that Unicode lists as default ignorable, such as a zero-width space, a soft hyphen or a variation selector, and a control character such as a bell or a null, is dropped, so it cannot hide a word from `forbid`;
+- `forbid` also looks at the answer with each such character turned into a space, so "ship\x07soon" breaks `forbid = ["ship soon"]`, while `expect` reads it as "shipsoon" only;
+- a tab, a line break and the other controls that Python's `str.split()` reads as a space stay a space;
 - curly quotes become straight, and the dash and non-breaking hyphen forms become `-`;
 - a run of spaces or new lines becomes one space.
 

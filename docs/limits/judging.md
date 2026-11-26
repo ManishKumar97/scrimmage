@@ -11,6 +11,9 @@ Limits of judging an answer, and of what a record keeps and removes.
 - **A look-alike letter is a different letter.** A Cyrillic "е" is not a Latin "e", so `forbid = ["secret"]` does not find "sеcret".
   Scrimmage drops characters that do not show, but it does not fold letters that only look alike.
 
+- **A visible space or mark inside a word hides it.** A non-breaking space is read as a plain space, and a combining accent stays on its letter, so `forbid = ["secret"]` does not find "sec ret" or "secrét".
+  Only characters that are not drawn are dropped.
+
 - **No model judges an answer, and there is no built-in list for "admits the failure".** You write the words.
 
 - **A rule cannot tell where a word came from.** An agent that answers from general knowledge can pass a rule that its tools should have earned.
