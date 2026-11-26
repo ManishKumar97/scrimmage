@@ -297,6 +297,8 @@ class ProcessState:
         """A notice that may come with no run: it goes to the run, if there is one, else to
         the startup report and stderr."""
         run = self.current()
+        if isinstance(run, Orphan) and (run.target is None or run.target.refused == CLOSED):
+            run = None  # a lost thread with no open record to hold the line
         if run is not None:
             run.notice(kind, library, message)
             return

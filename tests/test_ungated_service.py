@@ -90,3 +90,38 @@ def test_a_lost_thread_of_a_closed_run_prints_the_request_and_no_refusal(
     assert "a write there is not stopped by Scrimmage" in err
     assert "is refused" not in err
     assert [x["notice"] for x in service.report] == ["ungated"]
+
+
+@pytest.mark.parametrize("closed", [True, False])
+def test_a_notice_from_a_lost_thread_of_a_closed_run_prints_no_refusal(
+    service: state.ProcessState,  # noqa: F811
+    capsys: pytest.CaptureFixture[str],
+    closed: bool,
+) -> None:
+    """A library first imported in such a thread, as http_gate.py does, calls this directly."""
+    run = a_run(service, "run-a")
+    if closed:
+        run.refused = state.CLOSED
+
+    def lost() -> None:
+        thread = threading.Thread(
+            target=lambda: contextvars.Context().run(
+                service.notice, "newer_version", "httpx", "httpx 9.0 is newer than tested"
+            )
+        )
+        thread.start()
+        thread.join()
+
+    joined(run).run(lost)
+    err = capsys.readouterr().err
+    assert "is refused" not in err
+    if closed:
+        assert "scrimmage: httpx: httpx 9.0 is newer than tested" in err
+        assert [x["notice"] for x in service.report] == ["newer_version"]
+    else:
+        assert [x["notice"] for x in told_lines(run)] == ["newer_version"]
+        assert service.report == []
+
+
+def told_lines(run: state.RunState) -> list[dict[str, object]]:
+    return [x for x in sink_of(run).lines if "notice" in x]

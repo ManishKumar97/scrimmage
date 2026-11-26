@@ -99,14 +99,6 @@ class Observer:
         )
         self.outside: set[tuple[str, str, str]] = set()  # a request with no run to hold it
 
-    def tell_process(self, library: str, text: str) -> None:
-        """The startup report and stderr. Not ProcessState.notice, which asks for the current
-        run again and, for a lost thread of a closed run, would print a refusal that did not
-        happen."""
-        with self.process.lock:
-            self.process.report.append({"notice": KIND, "library": library, "message": text})
-        print(f"scrimmage: {library}: {text}", file=sys.stderr)
-
     def observe(self, library: str, host: str, method: str) -> None:
         """Only the three names are kept: never a path, a query, a header or a body."""
         try:
@@ -120,7 +112,7 @@ class Observer:
                     new = key not in self.outside
                     self.outside.add(key)
                 if new:
-                    self.tell_process(library, text)
+                    self.process.notice(KIND, library, text)
                 return
             now = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             extra: dict[str, object] = {"host": host, "method": method, "start": now}
