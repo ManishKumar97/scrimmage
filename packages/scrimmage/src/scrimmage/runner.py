@@ -1629,9 +1629,7 @@ def ungated_requests(results: list[RunResult]) -> dict[tuple[str, str], tuple[se
     that sent them. A fact the record holds, so it never changes a row's result."""
     found: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
     for r in results:
-        if r.outcome == "stopped":
-            continue
-        for line in r.notices:
+        for line in r.notices:  # a stopped run's request ran as well
             if line.get("notice") == "ungated":
                 key = (str(line.get("library")), str(line.get("host")))
                 methods, runs = found.setdefault(key, (set(), set()))

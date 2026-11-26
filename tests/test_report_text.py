@@ -128,3 +128,12 @@ def test_the_ungated_line_changes_neither_the_table_nor_the_exit_code() -> None:
     with_notice = printed("failing", add)
     plain = printed("failing", lambda _: None)
     assert [x for x in with_notice.splitlines() if "does not gate" not in x] == plain.splitlines()
+
+
+def test_a_stopped_run_that_sent_an_ungated_request_is_still_reported() -> None:
+    def add(results: list[RunResult]) -> None:
+        results[0].outcome = "stopped"
+        results[0].notices = [ungated("requests", "api.acme.com", "POST")]
+
+    out = printed("passing", add)
+    assert any("1 run sent" in x and "api.acme.com (POST)" in x for x in out.splitlines())
