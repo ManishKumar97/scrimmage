@@ -24,7 +24,6 @@ NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
-NOT_DRAWN = ("Cf", "Cc")  # format and control characters, such as a bell or a null
 # The controls Python's str.split() treats as a space, which they stay.
 SPLIT_SPACE = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f\x85"
 # Default_Ignorable_Code_Point, from DerivedCoreProperties.txt of Unicode 15.1.0. Such a
@@ -47,6 +46,34 @@ IGNORABLE_RANGES = (
     (0x1BCA0, 0x1BCA3),
     (0x1D173, 0x1D17A),
     (0xE0000, 0xE0FFF),
+)
+# The format (Cf) and control (Cc) characters, as Unicode 16.0 lists them, the same as 15.0 and
+# 15.1. They are pinned here, not read from unicodedata, so that one answer is judged the same
+# on every Python: unicodedata is Unicode 14.0 on Python 3.11 and newer on later ones.
+FORMAT_AND_CONTROL_RANGES = (
+    (0x0000, 0x001F),
+    (0x007F, 0x009F),
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
 )
 IGNORABLE = frozenset(code for low, high in IGNORABLE_RANGES for code in range(low, high + 1))
 COMBINING_DOT = "\u0307"
@@ -109,10 +136,8 @@ def not_drawn() -> frozenset[int]:
 
     Unicode lists some as default ignorable, and the rest are format or control characters.
     """
-    found = {
-        code
-        for code in (*range(0x20000), *range(0xE0000, 0xE1000))  # no format character is elsewhere
-        if code in IGNORABLE or unicodedata.category(chr(code)) in NOT_DRAWN
+    found = IGNORABLE | {
+        code for low, high in FORMAT_AND_CONTROL_RANGES for code in range(low, high + 1)
     }
     return frozenset(found - set(map(ord, SPLIT_SPACE)))
 

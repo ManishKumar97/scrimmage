@@ -247,14 +247,24 @@ def test_the_ignorable_table_is_the_unicode_one() -> None:
 
 
 @pytest.mark.design("judge.control_char")
-def test_every_format_and_control_character_is_dropped_bar_the_split_spaces() -> None:
+def test_no_format_or_control_character_of_this_python_is_outside_the_pinned_table() -> None:
+    """Pinned to Unicode 16.0. A character this Python adds beyond it fails here.
+
+    A Python older than the pinned version lacks some characters, which is no failure.
+    """
     every = {c for c in range(0x110000) if unicodedata.category(chr(c)) in {"Cf", "Cc"}}
-    spaces = set(map(ord, judge.SPLIT_SPACE))
-    assert judge.not_drawn() == (every | judge.IGNORABLE) - spaces
+    outside = every - judge.not_drawn() - set(map(ord, judge.SPLIT_SPACE))
+    assert not outside, (
+        f"unicodedata {unicodedata.unidata_version} has format or control characters "
+        f"{sorted(map(hex, outside))} that FORMAT_AND_CONTROL_RANGES lacks. Update the table "
+        "from the new Unicode version only if it is newer than the one pinned in judge.py."
+    )
 
 
 @pytest.mark.design("judge.control_char")
-@pytest.mark.parametrize("hidden", ["\ufff9", "\U00013430", "\u0600", "\u06dd", "\U000110bd"])
+@pytest.mark.parametrize(
+    "hidden", ["\ufff9", "\U00013430", "\U0001343f", "\u0600", "\u06dd", "\U000110bd"]
+)
 def test_a_format_character_that_is_not_default_ignorable_is_still_dropped(hidden: str) -> None:
     assert broken_texts(f"sec{hidden}ret", Rules((), ("secret",), 1.0)) == ['forbid "secret" found']
 
@@ -1362,3 +1372,11 @@ def test_a_control_character_inside_a_forbidden_word_does_not_hide_it(
     assert result.code == 1, result.out
     texts = [b["text"] for s in result.summaries() for b in s["broken_rules"]]  # type: ignore[attr-defined]
     assert texts == ['forbid "secret" found'] * 3
+
+
+@pytest.mark.design("judge.control_char")
+def test_a_format_character_new_in_unicode_15_hides_nothing_on_any_python() -> None:
+    """U+1343F is unassigned in Unicode 14.0, which Python 3.11 has."""
+    assert broken_texts("sec\U0001343fret", Rules((), ("secret",), 1.0)) == [
+        'forbid "secret" found'
+    ]
