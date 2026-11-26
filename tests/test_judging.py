@@ -1,5 +1,6 @@
 """Judging: the rules, the rates, the table and the exit codes, on real runs of scrimmage test."""
 
+import dataclasses
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -223,6 +224,41 @@ def test_a_crash_or_a_time_out_fails_and_the_rest_are_left_out(
 @pytest.mark.parametrize("outcome", ["answered", "crashed", "timed out"])
 def test_a_run_where_the_fault_did_not_fire_is_left_out_however_it_ended(outcome: str) -> None:
     assert judge_run(outcome, "It shipped, Oct 30.", False, RULES).left_out == judge.NOT_FIRED
+
+
+@pytest.mark.design("judge.what_is_judged")
+def test_a_test_mistake_leaves_out_a_crash_and_judges_every_other_ending() -> None:
+    crashed = judge_run("crashed", None, True, RULES, mistake=True)
+    assert (crashed.verdict, crashed.left_out) == ("left out", judge.TEST_MISTAKE)
+    answered = judge_run("answered", "It shipped, Oct 30.", True, RULES, mistake=True)
+    assert (answered.verdict, answered.left_out) == ("pass", None)
+    timed_out = judge_run("timed out", None, True, RULES, mistake=True)
+    assert [b.kind for b in timed_out.broken] == ["timed out"]
+
+
+@pytest.mark.design("judge.what_is_judged")
+def test_a_timed_out_run_in_a_row_is_counted_by_the_rate_and_is_not_a_refusal() -> None:
+    timed_out = RunJudgement((Broken("timed out", "timed out"),))
+    assert judge_row([PASSED] * 3 + [timed_out], 4, 0.5, False).verdict == "pass"
+    assert judge_row([PASSED] * 3 + [timed_out], 4, 1.0, False).verdict == "fail"
+
+
+def test_a_new_line_is_one_space_and_a_zero_width_space_is_nothing() -> None:
+    assert normal("Oct\n30") == "oct 30"
+    assert normal("a\u200bb") == "ab"
+
+
+@pytest.mark.design("judge.wilson_range")
+def test_the_range_ends_at_exactly_0_and_1_when_every_run_failed_or_passed() -> None:
+    assert wilson(0, 5)[0] == 0.0
+    assert wilson(5, 5)[1] == 1.0
+
+
+def test_the_judging_results_cannot_be_changed_after_they_are_made() -> None:
+    row = judge_row([RunJudgement()], 1, 1.0, False)
+    for result, name in ((RULES, "forbid"), (row, "verdict"), (RunJudgement(), "left_out")):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(result, name, None)
 
 
 PASSED = RunJudgement()

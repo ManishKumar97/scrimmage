@@ -1385,3 +1385,36 @@ def test_the_setup_reasons_are_mistakes_the_agent_did_not_choose() -> None:
         "redirect_off_host",
         "unsupported_loop",
     }
+
+
+def test_a_recorded_web_request_names_a_credential_by_its_token_header_and_a_changed_path() -> None:
+    reply = httpx2.Response(200, headers={"content-type": "text/plain"}, text="ok")
+    plain = httpx2.Request("GET", "https://api.acme.internal/orders/1?page=2")
+    secret = "sk-" + "a1b2c3d4" * 3
+    leaky = httpx2.Request("GET", f"https://api.acme.internal/keys/{secret}")
+    vault = httpx2.Request("GET", "https://api.acme.internal/x", headers={"X-Vault-Token": "s.abc"})
+    kept = http_gate.web_recorded(plain, reply, b"ok", "identity")
+    assert "code" not in kept  # an ordinary request is recorded
+    assert kept["path_changed"] is False
+    assert http_gate.web_recorded(leaky, reply, b"ok", "identity")["path_changed"] is True
+    capital = httpx2.Request(
+        "GET", "https://api.acme.internal/keys/" + "AK" + "IA" + "ABCDEFGHIJKLMNOP"
+    )
+    assert http_gate.web_recorded(capital, reply, b"ok", "identity")["path_changed"] is True
+    refused = http_gate.web_recorded(vault, reply, b"ok", "identity")
+    assert refused["code"] == "credential"  # a Vault token header says whose API it is
+    assert "Vault" in cast("str", refused["why"])
+
+
+def test_a_client_whose_transport_cannot_be_looked_up_is_not_in_process() -> None:
+    """In process means no gate decides the request. A lookup that fails is decided like any
+    other request, never waved through."""
+
+    class Broken:
+        def _transport_for_url(self, url: object) -> object:
+            raise RuntimeError("a library this version does not know")
+
+    request = httpx2.Request("GET", "https://api.acme.internal/orders/1")
+    assert http_gate.in_process(Broken(), request) is False
+    assert http_gate.in_process(object(), request) is False  # no lookup at all
+    assert http_gate.in_process(httpx2.Client(), request) is False  # a real network client
