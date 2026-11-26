@@ -989,3 +989,15 @@ def test_the_first_use_of_gated_on_a_page_links_to_its_definition(name: str) -> 
     body = [s for s in claim_sentences(name) if not s.startswith("#")]  # a heading has no link
     first = next((s for s in body if says_gated(s)), None)
     assert first is None or GATE_LINK.search(first), f"{name}: link the first 'gated': {first}"
+
+
+def test_every_list_of_reported_web_clients_names_all_five() -> None:
+    """A line that lists the clients a notice is written for names http.client too."""
+    five = ("http.client", "requests", "urllib3", "urllib", "aiohttp")
+    bad = [
+        f"{path.relative_to(DOCS)}:{number}"
+        for path in DOCS.rglob("*.md")
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if "urllib3" in line and "aiohttp" in line and not all(name in line for name in five)
+    ]
+    assert not bad, f"these lists of reported clients miss one: {bad}"
