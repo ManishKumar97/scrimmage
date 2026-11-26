@@ -75,7 +75,12 @@ FAULT_WORDS = (
 )
 # What an order row must not say: a status or a date a bot with no order data would invent.
 FAULT_FORBID = (
-    "ship",
+    "shipped",
+    "ships",
+    "will ship",
+    "ship soon",
+    "ship today",
+    "ship tomorrow",
     "dispatched",
     "delivered",
     "for delivery",
@@ -133,7 +138,8 @@ FAULT_FORBID_STOCK = (
     "7",
     "8",
     "9",
-    "units",
+    "units left",
+    "units in stock",
     "dozen",
 )
 

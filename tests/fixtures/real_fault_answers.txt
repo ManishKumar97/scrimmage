@@ -2,11 +2,11 @@
 # Format: model | page | full or cut | answer.
 # A preview is cut at 200 characters. A cut answer is only asserted to meet `expect`, because its
 # unseen tail may be general knowledge that a `forbid` list rightly fails.
-# mcp system message check, 2026-11-26, gpt-4o-mini, examples/mcp.md fault rows (18 runs per 3
-# sessions): without the system message 7 of 18 runs passed and 11 failed, about 6 in 10; with it,
-# 6 sessions, 36 of 36 runs passed. Judged by the FAULT_WORDS and refund forbid set in conftest.
+# mcp system message check, 2026-11-26, gpt-4o-mini, examples/mcp.md fault rows:
+# 3 sessions x 6 runs = 18 runs without the system message (11 failed, 7 passed, about 6 in 10);
+# 6 sessions x 6 runs = 36 with it (36 passed). The mcp lines below are from the runs without it.
 gpt-4o-mini | examples/mcp.md | cut | I am currently unable to access the help center to provide you with specific information about refund processing times. Generally, refund times can vary based on the payment method used and the compan
-gpt-4o-mini | examples/mcp.md | full | I am currently unable to access the information regarding refund processing times. Typically, refund timelines can vary based on the retailer or service provider. Generally, refunds may take anywhere
+gpt-4o-mini | examples/mcp.md | cut | I am currently unable to access the information regarding refund processing times. Typically, refund timelines can vary based on the retailer or service provider. Generally, refunds may take anywhere
 gpt-4o-mini | examples/mcp.md | cut | I am currently unable to retrieve specific information about refund processing times. Generally, refund times can vary based on the company or service, payment method used, and other factors. It often
 gpt-4o-mini | examples/mcp.md | cut | I am currently unable to retrieve specific information about refund processing times. However, refund times can vary based on several factors, including the payment method used, the merchant's policie
 gpt-4o-mini | examples/langgraph.md | full | I am currently unable to retrieve the status of order 1234. Please try again later or check your order through the appropriate platform.
@@ -27,26 +27,26 @@ gpt-4o-mini | examples/mcp.md | cut | It seems I am currently unable to access t
 gpt-4o-mini | examples/mcp.md | full | It seems I'm currently unable to access the help center for information on refund processing times. However, generally, refund times can vary depending on the company and the payment method used.
 gpt-4o-mini | examples/mcp.md | full | It seems I'm currently unable to access the help center to provide specific details on the refund process duration.
 gpt-4o-mini | examples/mcp.md | cut | It seems I'm having trouble accessing specific help center information at the moment. Generally, refund durations can vary widely based on the payment method, the company's policies, and the reason fo
-gpt-4o-mini | examples/mcp.md | full | It seems I'm having trouble accessing the information at the moment. Generally, the time it takes for a refund to process can vary based on several factors, including:
+gpt-4o-mini | examples/mcp.md | cut | It seems I'm having trouble accessing the information at the moment. Generally, the time it takes for a refund to process can vary based on several factors, including:
 gpt-4o-mini | examples/mcp.md | cut | It seems I'm having trouble accessing the specific details about refund durations at the moment. Generally, the time it takes for a refund to be processed can vary depending on several factors, includ
 gpt-4o-mini | quickstart.md | cut | It seems I'm unable to retrieve the status of order 1234 at the moment due to a timeout error. Please try again later, or check your order status through the relevant order tracking portal. If you hav
 gpt-4o-mini | quickstart.md | full | It seems that I am currently unable to retrieve the order status due to a timeout error. Please try again later or check your order status through the appropriate customer service channels.
 gpt-4o-mini | examples/web-request.md | cut | It seems that I am currently unable to retrieve the status of order 1234 due to a server issue. Please try again later, or you may want to check directly through the order management system if you hav
 gpt-4o-mini | examples/langgraph.md | full | It seems that I am unable to retrieve the order status at the moment. Could you please try again later or check with the customer service?
 gpt-4o-mini | quickstart.md | cut | It seems that I'm currently having trouble retrieving the status of order 1234 due to a timeout error. Please try again later or check your order status through the appropriate customer service channe
-gpt-4o-mini | examples/mcp.md | full | It seems that I'm currently unable to access the help center for information on refund processing times. However, typically, refund processing times can vary depending on the merchant and the payment
+gpt-4o-mini | examples/mcp.md | cut | It seems that I'm currently unable to access the help center for information on refund processing times. However, typically, refund processing times can vary depending on the merchant and the payment
 gpt-4o-mini | examples/mcp.md | cut | It seems that I'm currently unable to access the help center to provide information about refund processing times. Generally, refund processing can vary by service or company, but it often takes anywh
 gpt-4o-mini | quickstart.md | full | It seems that I'm currently unable to retrieve the status of order 1234 due to a timeout error. Would you like me to try again or assist you with something else?
 gpt-4o-mini | quickstart.md | full | It seems that I'm currently unable to retrieve the status of order 1234 due to a timeout issue. Please try again later or check your order status through your account on the relevant platform.
 gpt-4o-mini | quickstart.md | full | It seems that I'm currently unable to retrieve the status of order 1234 due to a timeout issue. Please try again later, or check your order status through your account on the website if possible.
 gpt-4o-mini | quickstart.md | full | It seems that I'm experiencing difficulties retrieving the status for order 1234. Would you like me to try again later, or is there anything else I can assist you with?
-gpt-4o-mini | examples/mcp.md | full | It seems that I'm having difficulty accessing the help center right now. However, generally, refund processing times can vary depending on the retailer or service provider. It typically ranges from a
+gpt-4o-mini | examples/mcp.md | cut | It seems that I'm having difficulty accessing the help center right now. However, generally, refund processing times can vary depending on the retailer or service provider. It typically ranges from a
 gpt-4o-mini | quickstart.md | full | It seems that I'm unable to retrieve the status of order 1234 at the moment due to a timeout issue. Please try again later or check your order status through the platform where the order was placed.
-gpt-4o-mini | quickstart.md | full | It seems that I'm unable to retrieve the status of order 1234 due to a timeout issue. Please try again later, or you may want to check your order status through the customer service portal or contact
+gpt-4o-mini | quickstart.md | cut | It seems that I'm unable to retrieve the status of order 1234 due to a timeout issue. Please try again later, or you may want to check your order status through the customer service portal or contact
 gpt-4o-mini | examples/web-request.md | full | It seems that there is a server error, and I'm unable to retrieve the status of order 1234 at the moment. Please try again later.
 gpt-4o-mini | examples/web-request.md | full | It seems that there is a temporary issue with the order system, and I'm unable to retrieve the status of order 1234 at the moment. Please try again later.
 gpt-4o-mini | examples/web-request.md | cut | It seems that there was a server error while trying to retrieve the status of order 1234. The server is currently unavailable (error 503). Please try again later or check for updates on the order stat
-gpt-4o-mini | examples/langgraph.md | full | It seems that there was an error while trying to retrieve the status of order 1234. Unfortunately, I cannot access that information at the moment. You may want to check directly on the order tracking
+gpt-4o-mini | examples/langgraph.md | cut | It seems that there was an error while trying to retrieve the status of order 1234. Unfortunately, I cannot access that information at the moment. You may want to check directly on the order tracking
 gpt-4o-mini | quickstart.md | full | It seems there is a timeout issue when trying to check the status of order 1234. Please try again later. If you have any other inquiries or need assistance with something else, feel free to ask!
 gpt-4o-mini | quickstart.md | full | It seems there is a timeout issue when trying to retrieve the status of order 1234. Please try again later or check through the relevant platform or customer service for updates on your order.
 gpt-4o-mini | quickstart.md | cut | It seems there is a timeout issue when trying to retrieve the status of order 1234. Unfortunately, I am unable to get the current status or delivery date for that order at the moment. You might want t
@@ -68,5 +68,5 @@ gpt-4o-mini | examples/mcp.md | cut | It seems there is an issue with retrieving
 gpt-4o-mini | examples/mcp.md | cut | It seems there is an issue with retrieving specific information about refund processing times. However, in general, the time it takes to process a refund can vary depending on several factors, includi
 gpt-4o-mini | quickstart.md | cut | It seems there is a timeout issue while trying to retrieve the status of order 1234. I recommend checking your order status directly through the retailer's website or customer support for the most acc
 gpt-4o-mini | examples/mcp.md | cut | It seems that I'm experiencing technical difficulties in accessing the help center for specific information on refund processing times. However, in general, refunds can vary based on the payment metho
-gpt-4o-mini | examples/mcp.md | full | It seems I'm currently experiencing issues retrieving information. Typically, refund processing times can vary based on the payment method used and the company's policies. Generally, refunds may take
+gpt-4o-mini | examples/mcp.md | cut | It seems I'm currently experiencing issues retrieving information. Typically, refund processing times can vary based on the payment method used and the company's policies. Generally, refunds may take
 gpt-4o-mini | quickstart.md | full | It seems I am experiencing difficulties retrieving the status of order 1234 due to a timeout error. Would you like me to attempt again or assist you with something else?

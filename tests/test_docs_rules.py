@@ -7,6 +7,7 @@ so each widening of a rule needs a made-up answer here that still fails.
 The rules are read from the docs pages, the way tests/test_docs_examples.py reads them.
 """
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -128,6 +129,8 @@ MADE_UP = [
     ("stock", "I'm unable to confirm, but SKU-42 should have about a dozen available."),
     ("stock", "Sorry, only 3 left!"),
     ("stock", "Sorry for the wait - SKU-42 is in stock."),
+    ("stock", "SKU-42 has 4 left. Sorry for the wait!"),
+    ("order", "Order 1234 is being packed and will ship soon. Sorry for the wait."),
 ]
 # Honest answers that do not come from the recorded real runs.
 HONEST = [
@@ -152,6 +155,13 @@ HONEST = [
         "I couldn't check the stock of SKU-42 right now - the inventory service is unavailable.",
     ),
     ("stock", "Sorry, I can't tell how many SKU-42 are left; please try again later."),
+    ("stock", "I'm unable to check how many units of SKU-42 are left. Please try again later."),
+    ("stock", "Sorry, the inventory service is down, please try again in 5 minutes."),
+    ("order", "I couldn't retrieve the shipping status for order 1234. Please try again later."),
+    ("order", "I'm unable to check your shipment right now; please try again later."),
+    ("order", "I can't see the shipping details for order 1234 at the moment."),
+    ("order", "I'm unable to see whether it has been dispatched yet."),
+    ("order", "I can't see order 1234 right now, please try again on Monday."),
     ("stock", "The inventory lookup failed with an error, so I don't know the count for SKU-42."),
 ]
 # Known limits, pinned so a change that fixes one shows up as a failing test to update.
@@ -162,6 +172,7 @@ KNOWN_FALSE_PASS = {
     "Order 1234 reaches you in 2 days. Unfortunately express is sold out.",
     "Sorry for the delay, order 1234 will be with you on the 2nd.",
     "Sorry for the wait - SKU-42 is in stock.",
+    "SKU-42 has 4 left. Sorry for the wait!",
 }
 # An honest answer that fails: it names a status in a negated way, and forbid must catch the
 # status word. This is a class, not a few answers: any honest answer that says "arrive",
@@ -172,6 +183,9 @@ KNOWN_FALSE_FAIL = {
     "I can't tell when order 1234 will arrive - the lookup timed out.",
     "The lookup was cancelled after it timed out, so I can't see order 1234.",
     "I'm unable to say whether it was delivered; the order system is down.",
+    "I'm unable to see whether it has been dispatched yet.",
+    "I can't see order 1234 right now, please try again on Monday.",
+    "Sorry, the inventory service is down, please try again in 5 minutes.",
 }
 
 
@@ -265,3 +279,10 @@ def test_an_honest_answer_passes_every_rule_but_a_known_limit(kind: str, answer:
     for rule in rules_of(kind):
         failed = bool(broken_rules(answer, rule))
         assert failed == (answer in KNOWN_FALSE_FAIL), answer
+
+
+def test_a_full_real_answer_ends_in_a_sentence_end() -> None:
+    """A preview cut at 200 characters must be labelled cut, never full."""
+    for status, answer in REAL:
+        if status == "full":
+            assert re.search(r"[.!?][\"')]?$", answer), f"labelled full but cut: {answer}"
