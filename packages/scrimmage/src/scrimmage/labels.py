@@ -4,10 +4,11 @@ This version knows tool labels, model labels, web labels, MCP labels and, under
 [agent] real only, hosted MCP servers and process:python.
 """
 
+import difflib
 import ipaddress
 import re
 
-from scrimmage.errors import ConfigError
+from scrimmage.errors import ConfigError, docs_url
 
 # The name the model sees. Providers allow hyphens, which a Python function cannot have.
 TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
@@ -21,7 +22,8 @@ WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded,
 PROCESS = "process:python"  # a Python child that would run with no gates
 # A program a service run may start for real, by its base name: process:git, process:sh.
 PROGRAM = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]*")
-DOCS = "see docs/configuration.md"
+KINDS = ("tool", "mcp", "http", "model")
+DOCS = f"see {docs_url('configuration')}"
 NAME_CAP = 200  # a model name comes from a request, so a line shows this much of it
 
 
@@ -59,9 +61,11 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
     if kind == "mcp" and sep:
         return check_mcp(text, where)
     if kind != "tool" or not sep or not name:
+        close = difflib.get_close_matches(kind, KINDS, n=1)
+        guess = f" (did you mean {close[0]!r}?)" if close and close[0] != kind else ""
         raise ConfigError(
-            f"{where}: {text!r} is not a label of the form 'tool:<name>', 'mcp:<tool>', "
-            f"'http:<host>' or 'model'; {DOCS}"
+            f"{where}: {text!r} is not a label of the form 'tool:<name>', "
+            f"'mcp:<server>/<tool>', 'mcp:<tool>', 'http:<host>' or 'model'{guess}; {DOCS}"
         )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
@@ -153,7 +157,7 @@ def model_name(value: object, where: str) -> str:
     ):
         raise ConfigError(
             f"{where} model: {value!r} is not a model name; write the whole name your code "
-            "sends, as text, with no wildcard; see docs/model-faults.md"
+            f"sends, as text, with no wildcard; see {docs_url('model-faults')}"
         )
     return value
 

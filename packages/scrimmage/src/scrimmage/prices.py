@@ -18,10 +18,10 @@ from importlib import resources
 from pathlib import Path
 from typing import cast
 
-from scrimmage.errors import ConfigError
+from scrimmage.errors import ConfigError, docs_url
 from scrimmage.outcomes import plural
 
-DOCS = "docs/configuration.md"
+DOCS = docs_url("configuration")
 SHIPPED = "prices.toml"
 RUNS = "scrimmage-runs"
 RATE_KEYS_ORDER = (

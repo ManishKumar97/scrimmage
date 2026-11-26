@@ -1460,7 +1460,7 @@ def test_a_good_label_is_kept_as_it_is(label: str) -> None:
     "label", ["mcp:", "mcp:*", "mcp:docs/*", "mcp:/search", "mcp:docs/", "mcp: x", "mcp:a\nb"]
 )
 def test_a_bad_label_is_rejected_with_a_pointer(label: str) -> None:
-    with pytest.raises(ConfigError, match=r"docs/configuration\.md"):
+    with pytest.raises(ConfigError, match=r"/scrimmage/configuration/"):
         labels.check(label, "x", pattern=True)
 
 

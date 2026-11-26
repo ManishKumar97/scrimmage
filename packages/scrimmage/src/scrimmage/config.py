@@ -10,6 +10,7 @@ expanded value is never read again.
 """
 
 import builtins
+import difflib
 import ipaddress
 import math
 import os
@@ -17,13 +18,13 @@ import re
 import shlex
 import shutil
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from scrimmage import labels, prices, python_args
-from scrimmage.errors import ConfigError
+from scrimmage.errors import ConfigError, docs_url
 from scrimmage.judge import Rules, impossible, normal
 from scrimmage.mocks import allowed
 from scrimmage.prices import PriceFile, Rates, read_prices
@@ -89,8 +90,8 @@ WEB_FAULT_KEYS = {
 # A mock's body is sent as written, so these could only make the reply lie about it.
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
-DOCS = "docs/configuration.md"
-JUDGING = "docs/judging.md"
+DOCS = docs_url("configuration")
+JUDGING = docs_url("judging")
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = (
     "timeout", "status", "error", "empty", "append", "replace", "slow", "refused", "reset", "dns",
@@ -562,6 +563,11 @@ def load(path: Path, env: Mapping[str, str] | None = None) -> Config:
         raise ConfigError(f"{path.name}: {exc}") from None
     except UnicodeDecodeError:
         raise ConfigError(f"{path.name}: the file is not UTF-8 text") from None
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"{path.name}: cannot read it: {exc.strerror}; run 'scrimmage init' to draft one, "
+            f"or see {docs_url('quickstart')}"
+        ) from None
     except OSError as exc:
         raise ConfigError(f"{path.name}: cannot read it: {exc.strerror}") from None
     reject_unsendable(data, path.name)
@@ -1560,7 +1566,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     if do == "context too long" and (kind != "model" or "/" in call):
         raise ConfigError(
             f"{where} do: 'context too long' works only on a chat model call, such as "
-            f'call = "model", the one OpenAI sends it for; see docs/model-faults.md'
+            f'call = "model", the one OpenAI sends it for; see {docs_url("model-faults")}'
         )
     if do in CONNECTION and kind in ("tool", "mcp"):
         raise ConfigError(
@@ -1677,12 +1683,12 @@ def carried_on_a_model(call: str, do: str, named: bool, where: str) -> None:
     if word == "append":
         raise ConfigError(
             f"{where} do: append does not work on a model call; use replace on its reply, "
-            "or append to a tool result the model reads; see docs/model-faults.md"
+            f"or append to a tool result the model reads; see {docs_url('model-faults')}"
         )
     if "/" in call:  # model:openai/moderations and the other calls that only read or compute
         raise ConfigError(
             f"{where} do: {word} works on a chat call, not on {call}, whose reply is not text; "
-            "use timeout or status on it; see docs/model-faults.md"
+            f"use timeout or status on it; see {docs_url('model-faults')}"
         )
     if word == "replace" and not named:
         raise ConfigError(
@@ -1697,7 +1703,7 @@ def reply_fault_on(call: str, do: str, named: bool, where: str) -> None:
     if labels.kind_of(call) != "model" or "/" in call:
         raise ConfigError(
             f'{where} do: {do!r} works only on a chat model call, such as call = "model", '
-            "whose reply is the model's answer; see docs/model-faults.md"
+            f"whose reply is the model's answer; see {docs_url('model-faults')}"
         )
     if not named:
         raise ConfigError(
@@ -1725,6 +1731,33 @@ def carried_model_warnings(config: Config) -> list[str]:
     ]
 
 
+# What do may be, as a person writes it: status takes a code and slow takes seconds.
+FAULT_WORDS = (
+    *(word for word in FAULTS if word not in ("status", "slow")),
+    "status <400 to 599>",
+    "slow <seconds>s",
+)
+
+
+def suggest_word(text: str, words: Sequence[str]) -> str:
+    """A did-you-mean for a word that is not one of words, or the whole list when none is close."""
+    close = difflib.get_close_matches(text, words, n=1)
+    # status and slow take a second word, so a misspelt one is compared by its first word
+    first = text.partition(" ")[0]
+    if not close and " " in text:
+        close = [
+            w
+            for w in words
+            if w.partition(" ")[0]
+            in difflib.get_close_matches(
+                first, [w.partition(" ")[0] for w in words if " " in w], n=1
+            )
+        ]
+    if close:
+        return f" (did you mean {close[0]!r}?)"
+    return f" (the faults are {', '.join(words)})"
+
+
 def word_problem(do: str) -> str | None:
     """Why do is not a fault word this version builds, whatever the call; None when it is.
 
@@ -1743,7 +1776,7 @@ def word_problem(do: str) -> str | None:
             return f"{do!r} must be above 0 and at most {MAX_SLOW_S:g} seconds"
         return None
     if do not in FAULTS or do == "status":
-        return f"{do!r} is not a fault; see {DOCS}"
+        return f"{do!r} is not a fault{suggest_word(do, FAULT_WORDS)}; see {DOCS}"
     return None
 
 

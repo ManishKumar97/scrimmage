@@ -159,6 +159,18 @@ def test_a_file_that_cannot_be_read_is_one_problem(
     assert captured.out == "scrimmage check: 1 problem; nothing was run\n"
 
 
+@pytest.mark.design("check.missing_file_hint")
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_a_missing_file_says_to_run_init_and_links_the_docs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    assert cli.main([command, str(tmp_path / "scrimmage.toml")]) == outcomes.MISTAKE
+    err = capsys.readouterr().err
+    assert "cannot read it: No such file or directory" in err
+    assert "run 'scrimmage init'" in err
+    assert "https://manishkumar97.github.io/scrimmage/quickstart/" in err
+
+
 def test_a_valid_file_gets_one_line_with_what_it_holds(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:

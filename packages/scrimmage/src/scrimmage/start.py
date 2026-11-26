@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from types import ModuleType
 from typing import cast
 
+from scrimmage.errors import docs_url
 from scrimmage.state import current
 
 
@@ -27,12 +28,12 @@ class BadAnswerPath(Exception):
 STEP = re.compile(r"\[(-?\d+)\]|\.?([A-Za-z_]\w*)")
 NOT_AN_ANSWER = (
     "[agent] answer: {path!r} is a {kind}, not the answer, so all of it would be judged, tool "
-    "results included. Point answer at the text inside it; see docs/frameworks.md"
+    "results included. Point answer at the text inside it; see " + docs_url("frameworks")
 )
 NOT_TEXT = (
     "[agent] answer: the agent returned {kind}, not text, so the whole value would be judged, "
     "tool results included. Set answer to the path of the final reply, such as "
-    "'messages[-1].text'; see docs/frameworks.md"
+    "'messages[-1].text'; see " + docs_url("frameworks")
 )
 
 

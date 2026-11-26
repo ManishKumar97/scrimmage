@@ -896,3 +896,25 @@ def test_the_three_pages_make_the_same_promise_about_connections() -> None:
     assert "any third party" not in readme and "any third party" not in page("security.md")
     assert "your IP address" in blocks[0] and "`User-Agent`" in blocks[0]
     assert "test_only_the_prices_update_command_calls_the_one_fetch" in page("security.md")
+
+
+@pytest.mark.design("docs.mcp_extra_pin")
+def test_the_install_page_names_both_extras_and_only_mcps_pin() -> None:
+    """Both extras can change a library an agent uses, and only mcp is pinned to one minor."""
+    import tomllib
+
+    root = Path(__file__).parents[1] / "packages" / "scrimmage" / "pyproject.toml"
+    extras = tomllib.loads(root.read_text())["project"]["optional-dependencies"]
+    text = page("install.md")
+    assert f"`{extras['mcp'][0]}`" in text
+    assert f"`{extras['cert'][0]}`" in text
+    assert "installing it never changes" not in text
+    assert "The two extras are the exception" in text
+    assert "Only `mcp` is pinned to one minor" in text
+
+
+@pytest.mark.design("docs.setup_cost")
+def test_the_setup_requests_cost_is_said_to_be_in_the_total_everywhere() -> None:
+    text = page("json-output.md")
+    assert "no run total and no `result.json`" not in text
+    assert "only its cost is in the test's `cost_usd`" in text
