@@ -992,12 +992,17 @@ def test_the_first_use_of_gated_on_a_page_links_to_its_definition(name: str) -> 
 
 
 def test_every_list_of_reported_web_clients_names_all_five() -> None:
-    """A line that lists the clients a notice is written for names http.client too."""
-    five = ("http.client", "requests", "urllib3", "urllib", "aiohttp")
-    bad = [
-        f"{path.relative_to(DOCS)}:{number}"
-        for path in DOCS.rglob("*.md")
-        for number, line in enumerate(path.read_text().splitlines(), 1)
-        if "urllib3" in line and "aiohttp" in line and not all(name in line for name in five)
-    ]
-    assert not bad, f"these lists of reported clients miss one: {bad}"
+    """A line that lists the clients a notice is written for names all five, and a line that
+    names two of them never says such a request is not recorded or leaves no line."""
+    five = (r"http\.client", r"\brequests\b", r"urllib3", r"urllib\.request", r"aiohttp")
+    named = (*five[:3], r"\burllib\b(?!3)", five[4])
+    claim = re.compile(r"not recorded|no line|leaves no\b")
+    bad: list[str] = []
+    for path in DOCS.rglob("*.md"):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            every = all(re.search(name, line) for name in five)
+            some = sum(bool(re.search(name, line)) for name in named) >= 2
+            listed = "urllib3" in line and "aiohttp" in line
+            if (listed and not every) or (some and not every and claim.search(line)):
+                bad.append(f"{path.relative_to(DOCS)}:{number}")
+    assert not bad, f"these lines about reported clients are wrong or incomplete: {bad}"
