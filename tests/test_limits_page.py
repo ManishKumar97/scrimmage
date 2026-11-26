@@ -298,17 +298,29 @@ def test_every_limit_is_under_a_use_case_heading() -> None:
             "## MCP tools",
             "## Web requests and recorded mocks",
         ],
+        "limits/model.md": [
+            "## Providers and gateways",
+            "## Faults on tools, MCP and web requests",
+            "## Faults on a model reply",
+            "## Bodies, retries and guardrails",
+            "## Naming a model",
+            "## Refusals",
+        ],
         "limits/budget.md": ["## The budget"],
         "limits/judging.md": ["## Judging an answer", "## Records and secrets"],
     }
     for name, headings in wanted.items():
         present = [line for line in area_lines(name) if line in headings]
         assert present == headings, name
-    # Every area page is linked from the index, and no limit sits in a page above its first heading.
+    # Every area page is linked from the index, and no limit sits above its first `##` heading.
     index = "\n".join(lines())
     for name in PAGES:
         assert f"]({name})" in index, name
-        assert area_lines(name)[0].startswith("# Limits: "), name
+        page_lines = area_lines(name)
+        assert page_lines[0].startswith("# Limits: "), name
+        first = next(i for i, line in enumerate(page_lines) if line.startswith("## "))
+        above = [line[:60] for line in page_lines[:first] if line.startswith("- **")]
+        assert not above, f"{name}: a limit is above the first section heading: {above}"
 
 
 def test_the_two_refuse_limits_sit_with_the_faults_not_the_budget() -> None:
