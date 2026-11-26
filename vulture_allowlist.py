@@ -196,3 +196,4 @@ _.LateStock  # tests/test_tool_gate.py: named only in a string annotation, on pu
 _.CallbackManagerForToolRun  # tests/test_tool_gate.py: named only in a string annotation
 _.https_open  # scrimmage/prices_update.py: urllib calls an HTTPS handler's https_open by name
 _.do_DELETE  # tests/test_ungated.py: http.server calls do_<METHOD> by name
+_.total_spend  # tests/test_docs_examples_real.py: pytest runs an autouse fixture by itself

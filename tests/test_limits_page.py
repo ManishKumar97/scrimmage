@@ -18,6 +18,7 @@ ALL_TITLES = [
     "A 400 after a reply fault on Responses is an infrastructure error.",
     "A Responses agent that chains to a faulted reply is not supported.",
     "A Vault secret read at a nested mount.",
+    "A `forbid` list is fitted and cannot be complete.",
     "A blind child not started from Python.",
     "A blind child on another Python.",
     "A body cut by a dropped connection.",

@@ -102,8 +102,8 @@ EXAMPLES = {
         by_model={
             "gpt-4o-mini": ByTools(
                 {
-                    "search": ("docs_search", "docs_answer", "docs_answer|docs_admits"),
-                    "get_order": ("acme_get_order", "acme_answer", "acme_answer|acme_admits"),
+                    "search": ("docs_search", "docs_answer", "docs_answer"),
+                    "get_order": ("acme_get_order", "acme_answer", "acme_answer"),
                 },
                 # The model's last reply follows the bot's own error: the bot must have
                 # re-listed its tools, so the fault named fetch, and then answered with it.

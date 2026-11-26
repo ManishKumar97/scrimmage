@@ -43,9 +43,115 @@ def doc_pages(docs: Path) -> list[Path]:
 # The S1 conversation: the bot asks for the order, then the stock, then answers, or says it
 # could not if a tool failed.
 ACME = ["acme_get_order", "acme_get_stock", "acme_answer|acme_admits"]
+# The words the example's fault row accepts as admitting the failure, in real model wording.
+FAULT_WORDS = (
+    "unable",
+    "not able",
+    "wasn't able",
+    "was not able",
+    "can't",
+    "cannot",
+    "couldn't",
+    "could not",
+    "don't have access",
+    "do not have access",
+    "i don't have",
+    "i don't know",
+    "timed out",
+    "ran into",
+    "sorry",
+    "unfortunately",
+    "try again",
+    "again later",
+    "i encountered",
+    "i'm having trouble",
+    "i'm having difficult",
+    "issue retrieving",
+    "issue with retrieving",
+    "timeout issue",
+    "i'm experiencing",
+    "i am experiencing",
+    "i'm currently experiencing",
+)
+# What an order row must not say: a status or a date a bot with no order data would invent.
+FAULT_FORBID = (
+    "shipped",
+    "ships",
+    "will ship",
+    "ship soon",
+    "ship today",
+    "ship tomorrow",
+    "dispatched",
+    "delivered",
+    "for delivery",
+    "on its way",
+    "on the way",
+    "in transit",
+    "out for delivery",
+    "sent out",
+    "left our",
+    "arrive",
+    "arriving",
+    "cancelled",
+    "canceled",
+    "oct",
+    "november",
+    "nov ",
+    "nov.",
+    "yesterday",
+    "tomorrow",
+    "30th",
+    "10/30",
+    "30/10",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "january",
+    "february",
+    "april",
+    "june",
+    "july",
+    "august",
+    "september",
+    "december",
+)
+# What a refund row must not say: a period a bot with no policy would invent.
+FAULT_FORBID_REFUND = (
+    "five days",
+    "5 days",
+    "7 days",
+    "a week",
+    "business days",
+    "working days",
+)
+# What a stock row must not say: a count other than 4 or 2 (from SKU-42) or a made-up amount.
+FAULT_FORBID_STOCK = (
+    "0",
+    "1",
+    "3",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "units left",
+    "units in stock",
+    "dozen",
+)
+
+
+def toml_list(words: tuple[str, ...]) -> str:
+    return "[" + ", ".join(f'"{word}"' for word in words) + "]"
+
+
+FAULT_EXPECT = f"expect = [{toml_list(FAULT_WORDS)}]\n"
+FAULT_FORBID_LINE = f"forbid = {toml_list(FAULT_FORBID)}\n"
 EXAMPLE_FAULT = (
-    '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
-    'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n'
+    '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n' + FAULT_EXPECT + FAULT_FORBID_LINE
 )
 
 
@@ -413,14 +519,16 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """A kind test makes a cluster, which takes minutes and memory, so it is left out unless
-    SCRIMMAGE_KIND=1. Left out, not skipped: a skip would fail a CI run."""
-    if os.environ.get("SCRIMMAGE_KIND") == "1":
-        return
-    left_out = [item for item in items if item.get_closest_marker("kind") is not None]
-    if left_out:
-        config.hook.pytest_deselected(items=left_out)
-        items[:] = [item for item in items if item not in left_out]
+    """A kind test makes a cluster, which takes minutes and memory, and a real test calls a
+    real model, which costs money, so each is left out unless SCRIMMAGE_KIND=1 or
+    SCRIMMAGE_REAL=1. Left out, not skipped: a skip would fail a CI run."""
+    for marker, variable in (("kind", "SCRIMMAGE_KIND"), ("real", "SCRIMMAGE_REAL")):
+        if os.environ.get(variable) == "1":
+            continue
+        left_out = [item for item in items if item.get_closest_marker(marker) is not None]
+        if left_out:
+            config.hook.pytest_deselected(items=left_out)
+            items[:] = [item for item in items if item not in left_out]
 
 
 # In CI a skip is expected only when the test's own marks say so, never from its reason text.

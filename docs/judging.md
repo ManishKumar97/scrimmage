@@ -50,13 +50,22 @@ A fault can carry its own `expect` and `forbid`. Each one replaces the test's fo
 [[test.fault]]
 call   = "tool:get_order"
 do     = "timeout"
-expect = [["unable", "try again", "sorry"]]
-forbid = ["Oct 30", "October 30"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i am experiencing", "i'm currently experiencing"]]
+forbid = ["shipped", "ships", "will ship", "ship soon", "ship today", "ship tomorrow", "dispatched", "delivered", "for delivery", "on its way", "on the way", "in transit", "out for delivery", "sent out", "left our", "arrive", "arriving", "cancelled", "canceled", "oct", "november", "nov ", "nov.", "yesterday", "tomorrow", "30th", "10/30", "30/10", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "april", "june", "july", "august", "september", "december"]
 ```
 
 This row passes only if the bot says it could not get the order and states no date.
 The test's own `expect` could not do this: a bot with no order data should not say "shipped".
 Scrimmage has no word list for "admits the failure". You write the words your agent uses.
+Use phrases of inability, such as "unable" or "try again".
+An `expect` word list checks wording, not truth.
+It cannot tell "I could not look it up" from "sorry, it was delivered".
+`forbid` is the guard against a made-up answer, so list what a bot with no data would invent: the statuses and dates you can foresee, such as "shipped", "delivered" or a month name.
+That list can never name them all, so a made-up answer in a wording you did not foresee passes.
+It also fails an honest answer that names a status while it admits the failure, such as "I can't tell whether it was delivered".
+The example list was written against `gpt-4o-mini`.
+Run your own model once, read what it says when the tool fails, and add its phrases.
+Never widen the list with a word that can sit in a sign-off, such as "issue" or "problem", as in "let me know if you have any issues".
 
 `forbid = []` on a fault drops the test's list for that row.
 
