@@ -50,13 +50,16 @@ A fault can carry its own `expect` and `forbid`. Each one replaces the test's fo
 [[test.fault]]
 call   = "tool:get_order"
 do     = "timeout"
-expect = [["unable", "try again", "sorry"]]
-forbid = ["Oct 30", "October 30"]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
+forbid = ["shipped", "Oct 30", "October 30", "Oct. 30", "10/30"]
 ```
 
 This row passes only if the bot says it could not get the order and states no date.
 The test's own `expect` could not do this: a bot with no order data should not say "shipped".
 Scrimmage has no word list for "admits the failure". You write the words your agent uses.
+Use phrases of inability, such as "unable" or "try again".
+A bare word such as "issue" or "problem" also appears in "let me know if you have any issues", so a word list that wide passes a run that made up an answer.
+The `forbid` list is the other guard: it names what a made-up answer would say.
 
 `forbid = []` on a fault drops the test's list for that row.
 

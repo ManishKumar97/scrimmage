@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 
 import config_cases
-from conftest import EXAMPLE, FAULT_WORDS
+from conftest import EXAMPLE, FAULT_FORBID, FAULT_WORDS
 from scrimmage import config, judge, plan
 from scrimmage.errors import ConfigError
 from scrimmage.provider_openai import Rates
@@ -41,7 +41,7 @@ def test_the_example_expands_to_two_rows_and_six_runs(tmp_path: Path) -> None:
                 "timeout",
                 "always",
                 expect=(FAULT_WORDS,),
-                forbid=("Oct 30", "October 30"),
+                forbid=FAULT_FORBID,
             ),
         ),
     ]

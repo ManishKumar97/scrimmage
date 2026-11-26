@@ -275,6 +275,7 @@ def delete_account() -> str:
 An order's note is text from outside, so a tool result can carry an instruction to the model.
 Without a system message, a real model can obey the note in the baseline row too.
 It has no `delete_account` to call, so it reaches for `refund_order`, and the baseline fails on a refused call before the fault row runs.
+That is a prompt-injection finding in itself, and the gate caught it: the model did what a tool result told it to do, and the refusal kept the refund from running.
 Give the bot a system message that says what a tool result is:
 
 ```diff title="shop/agent.py"
@@ -287,6 +288,7 @@ Give the bot a system message that says what a tool result is:
 ```
 
 With it, the baseline passes.
+The last sentence of the message limits what the bot may do, the way a shorter list of tools would.
 The fault row does not depend on the model obeying the note: it builds the call to `delete_account` itself.
 
 The mock gives the order status, and then a note that names `delete_account`.

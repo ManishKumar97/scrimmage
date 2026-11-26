@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 
 import scrimmage
-from conftest import ACME, FAULT_EXPECT, Project, Result, TimeLimit
+from conftest import ACME, FAULT_EXPECT, FAULT_FORBID_LINE, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage import config, judge, plan
 from scrimmage.errors import ConfigError
@@ -388,7 +388,7 @@ def test_a_row_no_answer_can_pass_costs_no_model_call(
     project: Project, old: str, new: str, message: str
 ) -> None:
     project.edit(FAULT_EXPECT, "")
-    project.edit('forbid = ["Oct 30", "October 30"]\n', "")
+    project.edit(FAULT_FORBID_LINE, "")
     project.edit('do   = "timeout"\n', 'do   = "timeout"\nwhen = "first 1"\n')
     project.edit(old, new)
     fake = FakeOpenAI(ACME)

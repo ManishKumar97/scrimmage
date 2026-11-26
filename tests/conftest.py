@@ -50,19 +50,43 @@ FAULT_WORDS = (
     "cannot",
     "can't",
     "couldn't",
+    "not able",
     "try again",
     "again later",
-    "trouble",
-    "difficulty",
-    "problem",
-    "issue",
-    "error",
+    "i encountered",
+    "i'm having trouble",
+    "i'm having difficult",
+    "i'm currently having trouble",
+    "i'm currently having difficult",
+    "issue retrieving",
+    "issue with retrieving",
+    "issue accessing",
+    "issue with accessing",
+    "timeout",
+    "server error",
+    "server issue",
+    "trying to retrieve",
+    "trying to look up",
+    "trying to access",
+    "trying to check",
+    "i'm experiencing",
+    "i'm still experiencing",
+    "i am experiencing",
+    "i'm currently experiencing",
+    "technical difficult",
 )
-FAULT_EXPECT = "expect = [[" + ", ".join(f'"{word}"' for word in FAULT_WORDS) + "]]\n"
+# What the fault row must not say: a status with no order data behind it, or a date.
+FAULT_FORBID = ("shipped", "Oct 30", "October 30", "Oct. 30", "10/30")
+
+
+def toml_list(words: tuple[str, ...]) -> str:
+    return "[" + ", ".join(f'"{word}"' for word in words) + "]"
+
+
+FAULT_EXPECT = f"expect = [{toml_list(FAULT_WORDS)}]\n"
+FAULT_FORBID_LINE = f"forbid = {toml_list(FAULT_FORBID)}\n"
 EXAMPLE_FAULT = (
-    '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
-    + FAULT_EXPECT
-    + 'forbid = ["Oct 30", "October 30"]\n'
+    '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n' + FAULT_EXPECT + FAULT_FORBID_LINE
 )
 
 

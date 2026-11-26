@@ -80,8 +80,8 @@ returns = {sku = "SKU-42", count = 12}
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
-expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "try again", "again later", "trouble", "difficulty", "problem", "issue", "error"]]
-forbid = ["Oct 30", "October 30"]
+expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
+forbid = ["shipped", "Oct 30", "October 30", "Oct. 30", "10/30"]
 ```
 
 The file in the repository has one more line, `model_hosts`.
@@ -96,9 +96,10 @@ This file says:
 - `refund_order` is neither mocked nor safe, so if the agent calls it, the call is refused;
 - the answer must say "shipped" and give the date, in either spelling;
 - then run the same test with `get_order` timing out.
-  There the answer must admit the failure and give no date.
+  There the answer must admit the failure, and must not say "shipped" or give a date.
   The list of words is long on purpose.
   A real model has many ways to say it could not, and a rule that is too narrow fails a run that did the right thing.
+  A list that is too wide passes a run that made up an answer, so it holds phrases of inability and not bare words like "issue", and `forbid` names what a made-up answer says.
 
 ## 4. Run it
 
