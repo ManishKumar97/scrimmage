@@ -70,6 +70,7 @@ FAULT_WORDS = (
     "issue with retrieving",
     "timeout issue",
     "i'm experiencing",
+    "i am experiencing",
     "i'm currently experiencing",
 )
 # What the fault row must not say: a status or a date a bot with no order data would invent.
