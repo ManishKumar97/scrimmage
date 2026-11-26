@@ -115,7 +115,7 @@ class Observer:
                     self.process.notice(KIND, library, text)
                 return
             now = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-            extra = {"host": host, "method": method, "start": now}
+            extra: dict[str, object] = {"host": host, "method": method, "start": now}
             for target in group:
                 with self.lock:
                     held = self.seen.setdefault(target, set())
