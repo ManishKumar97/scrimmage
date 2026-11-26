@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from scrimmage import hooks
 from scrimmage.errors import docs_url
+from scrimmage.redact import redact
 
 if TYPE_CHECKING:
     from scrimmage.state import ProcessState, RunState
@@ -90,6 +91,7 @@ class Observer:
     def observe(self, library: str, host: str, method: str) -> None:
         """Only the three names are kept: never a path, a query, a header or a body."""
         try:
+            host = redact(host.rpartition("@")[2])  # never a login, never a key in a name
             key = (library, host, method)
             run = self.process.current()
             with self.lock:
@@ -119,11 +121,23 @@ def patch_http_client(module: ModuleType, observer: Observer) -> None:
         if not getattr(_own, "on", False):
             with contextlib.suppress(Exception):
                 method = str(args[0] if args else kwargs.get("method", ""))
-                observer.observe(library_of(), str(getattr(self, "host", "")), method.upper())
+                observer.observe(library_of(), target_of(self, args, kwargs), method.upper())
         return original(self, *args, **kwargs)
 
     setattr(putrequest, MARK, True)
     cls.putrequest = putrequest
+
+
+def target_of(conn: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """The host the request is for: behind a proxy, the target and not the proxy. A tunnel
+    (HTTPS through CONNECT) names it, and so does the absolute URL a forwarding proxy gets."""
+    tunnel = getattr(conn, "_tunnel_host", None)
+    if tunnel:
+        return str(tunnel)
+    url = str(args[1] if len(args) > 1 else kwargs.get("url", ""))
+    if url.startswith(("http://", "https://")):
+        return urlsplit(url).hostname or ""
+    return str(getattr(conn, "host", ""))
 
 
 def host_of(session: Any, url: object) -> str:

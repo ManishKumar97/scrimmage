@@ -3,14 +3,25 @@
 import http.client
 import http.server
 import json
+import re
+import select
+import socket
+import socketserver
+import ssl
 import threading
 import urllib.request
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from scrimmage import ungated
 from scrimmage.client import ControlClient
@@ -247,3 +258,172 @@ def test_the_result_is_byte_for_byte_the_same_with_and_without_the_observer(
         cast(Any, SimpleNamespace(HTTPConnection=http.client.HTTPConnection)), observer
     )
     assert call() == without and len(run.lines) == 1
+
+
+def guarded(code: str) -> str:
+    """The code, with a failed request let go: the request was still sent."""
+    body = "".join(f"    {line}\n" for line in code.splitlines())
+    return f"try:\n{body}except Exception:\n    pass\n"
+
+
+KEY_LIKE = "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX0123456789abcd"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("library", sorted(CLIENTS))
+def test_a_login_in_the_url_never_reaches_the_record(
+    control: ControlServer, web: str, library: str
+) -> None:
+    code, _ = CLIENTS[library]
+    url = web.replace("http://", "http://usr9:pw5ecret@")
+    # urllib.request cannot connect to a login in its host, and still names the request.
+    [notice] = run_agent(control, ENV + guarded(code), U=url, Q="/p")
+    assert notice["host"] == "127.0.0.1"
+    record = json.dumps(control.store.lines("run-1"))
+    assert "pw5ecret" not in record and "usr9" not in record
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("library", sorted(CLIENTS))
+def test_a_host_that_looks_like_a_key_is_removed_from_the_record(
+    control: ControlServer, library: str
+) -> None:
+    code, _ = CLIENTS[library]
+    run_agent(control, ENV + guarded(code), U=f"http://{KEY_LIKE}.invalid", Q="/p")
+    record = json.dumps(control.store.lines("run-1"))
+    assert KEY_LIKE not in record
+    assert [x for x in notices(control) if x["library"] == library]
+
+
+class Proxy(socketserver.ThreadingTCPServer):
+    """A forwarding proxy: an absolute-URL request, and CONNECT for a tunnel."""
+
+    allow_reuse_address = True
+    daemon_threads = True
+    seen: list[tuple[str, str]]
+
+
+class ProxyHandler(socketserver.StreamRequestHandler):
+    def handle(self) -> None:
+        server = cast(Proxy, self.server)
+        method, target, _ = self.rfile.readline().decode().split()
+        headers = b""
+        while (line := self.rfile.readline()) not in (b"\r\n", b"\n", b""):
+            headers += line
+        server.seen.append((method, target))
+        if method == "CONNECT":
+            host, port = target.rsplit(":", 1)
+            with socket.create_connection((host, int(port))) as upstream:
+                self.wfile.write(b"HTTP/1.1 200 OK\r\n\r\n")
+                self.wfile.flush()
+                self.tunnel(upstream)
+            return
+        parts = urlsplit(target)
+        with socket.create_connection((parts.hostname or "", parts.port or 80)) as upstream:
+            self.forward(upstream, method, parts.path or "/", headers)
+
+    def tunnel(self, upstream: socket.socket) -> None:
+        while True:
+            ready, _, _ = select.select([self.connection, upstream], [], [], 5)
+            if not ready:
+                return
+            for sock in ready:
+                data = sock.recv(65536)
+                if not data:
+                    return
+                (upstream if sock is self.connection else self.connection).sendall(data)
+
+    def forward(self, upstream: socket.socket, method: str, path: str, headers: bytes) -> None:
+        upstream.sendall(f"{method} {path} HTTP/1.0\r\n".encode() + headers + b"\r\n")
+        found = re.search(rb"(?i)content-length: *(\d+)", headers)
+        if found:
+            upstream.sendall(self.rfile.read(int(found.group(1))))
+        while data := upstream.recv(65536):
+            self.wfile.write(data)
+
+
+@pytest.fixture
+def proxy() -> Iterator[Proxy]:
+    server = Proxy(("127.0.0.2", 0), ProxyHandler)
+    server.seen = []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def tls_web(tmp_path: Path) -> Iterator[str]:
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .sign(key, hashes.SHA256())
+    )
+    pem, key_pem = tmp_path / "web.pem", tmp_path / "web.key"
+    pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_pem.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Echo)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(pem, key_pem)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"https://localhost:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def through(proxy: Proxy, *names: str) -> dict[str, str]:
+    url = f"http://127.0.0.2:{proxy.server_address[1]}"
+    return {**{name: url for name in names}, "NO_PROXY": "", "no_proxy": ""}
+
+
+@pytest.mark.slow
+def test_behind_a_forwarding_proxy_the_notice_names_the_target(
+    control: ControlServer, web: str, proxy: Proxy
+) -> None:
+    target = web.replace("127.0.0.1", "localhost")
+    code = f"import requests; requests.post({target!r} + '/x', data='y')"
+    env = through(proxy, "HTTP_PROXY", "http_proxy")
+    [notice] = run_agent(control, code, **env)
+    assert (notice["host"], notice["method"]) == ("localhost", "POST")
+    assert proxy.seen and proxy.seen[0][0] == "POST"
+
+
+@pytest.mark.slow
+def test_through_a_connect_tunnel_the_notice_names_the_target_for_requests(
+    control: ControlServer, tls_web: str, proxy: Proxy
+) -> None:
+    code = (
+        "import requests, urllib3; urllib3.disable_warnings()\n"
+        f"requests.post({tls_web!r} + '/x', data='y', verify=False)"
+    )
+    [notice] = run_agent(control, code, **through(proxy, "HTTPS_PROXY", "https_proxy"))
+    assert (notice["host"], notice["method"]) == ("localhost", "POST")
+    assert [m for m, _ in proxy.seen] == ["CONNECT"]
+
+
+@pytest.mark.slow
+def test_through_a_connect_tunnel_the_notice_names_the_target_for_urllib(
+    control: ControlServer, tls_web: str, proxy: Proxy
+) -> None:
+    code = (
+        "import ssl, urllib.request as u\n"
+        "c = ssl._create_unverified_context()\n"
+        f"u.urlopen(u.Request({tls_web!r} + '/x', data=b'y'), context=c).read()"
+    )
+    [notice] = run_agent(control, code, **through(proxy, "HTTPS_PROXY", "https_proxy"))
+    assert (notice["host"], notice["method"]) == ("localhost", "POST")
