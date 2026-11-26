@@ -117,7 +117,9 @@ With a budget on, a model with no price stops the test at its first call, becaus
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
 A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
-On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Scrimmage leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
+On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`.
+Scrimmage leaves your request as it is, so without that setting those costs are rough ones.
+The Responses API always sends counts in its last event.
 
 ### Cache writes
 
@@ -199,7 +201,8 @@ Its record line then has `unpriced_tier` set and `cost_estimated` true.
 The hold stays at the tier the request names, else `[agent] service_tier`, else the default tier.
 
 A price here replaces the shipped row whole, its tiers and its `long` table too.
-If you price a model the file ships, such as `gpt-5.6-luna`, give its `long` table and the tiers you use as well. See [Long-context prices](#long-context-prices).
+If you price a model the file ships, such as `gpt-5.6-luna`, give its `long` table and the tiers you use as well.
+See [Long-context prices](#long-context-prices).
 
 ## Long-context prices
 

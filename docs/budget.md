@@ -5,7 +5,8 @@ The prices a call is held and settled at are on the [Prices](prices.md) page.
 
 ## Keep a budget
 
-Every test has a budget for the whole run of `scrimmage test`. It is $5 unless you change it:
+Every test has a budget for the whole run of `scrimmage test`.
+It is $5 unless you change it:
 
 ```toml
 [agent]
