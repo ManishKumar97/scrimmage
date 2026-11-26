@@ -65,3 +65,28 @@ def test_a_request_with_no_run_open_is_told_once_to_the_process(
     context: Callable[..., None] = contextvars.Context().run  # type: ignore[assignment]
     context(send, observer, times)
     assert [x["notice"] for x in service.report] == ["ungated"]
+
+
+def test_a_lost_thread_of_a_closed_run_prints_the_request_and_no_refusal(
+    service: state.ProcessState,  # noqa: F811
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run = a_run(service, "run-a")
+    observer = ungated.Observer(service)
+    run.refused = state.CLOSED
+
+    def lost() -> None:
+        thread = threading.Thread(
+            target=lambda: contextvars.Context().run(
+                observer.observe, "requests", "api.acme.com", "POST"
+            )
+        )
+        thread.start()
+        thread.join()
+
+    joined(run).run(lost)
+    err = capsys.readouterr().err
+    assert "requests sent a POST request to api.acme.com around the gate" in err
+    assert "a write there is not stopped by Scrimmage" in err
+    assert "is refused" not in err
+    assert [x["notice"] for x in service.report] == ["ungated"]

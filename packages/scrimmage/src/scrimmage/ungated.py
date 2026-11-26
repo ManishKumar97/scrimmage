@@ -91,6 +91,14 @@ def targets(run: "RunState") -> "list[RunState]":
 class Observer:
     """Writes one notice for each distinct (library, host, method) of a run."""
 
+    def tell_process(self, library: str, text: str) -> None:
+        """The startup report and stderr. Not ProcessState.notice, which asks for the current
+        run again and, for a lost thread of a closed run, would print a refusal that did not
+        happen."""
+        with self.process.lock:
+            self.process.report.append({"notice": KIND, "library": library, "message": text})
+        print(f"scrimmage: {library}: {text}", file=sys.stderr)
+
     def __init__(self, process: "ProcessState") -> None:
         self.process = process
         self.lock = threading.Lock()
@@ -112,7 +120,7 @@ class Observer:
                     new = key not in self.outside
                     self.outside.add(key)
                 if new:
-                    self.process.notice(KIND, library, text)
+                    self.tell_process(library, text)
                 return
             now = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             extra: dict[str, object] = {"host": host, "method": method, "start": now}
