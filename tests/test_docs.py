@@ -836,6 +836,17 @@ def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_for
         assert f"`{trigger}`" in text.split("## Before this works")[0], trigger
     assert "Any trigger that checks out a pull request's head while the job holds secrets" in text
     (sample,) = re.findall(r"```yaml\n(.*?)```", text, re.S)
+    assert_guards_the_fork(sample)
+
+
+def test_the_ci_example_runs_the_same_workflow_as_the_ci_page() -> None:
+    (sample,) = re.findall(r"```yaml\n(.*?)```", page("ci.md"), re.S)
+    (shown,) = re.findall(r"```yaml title=\"[^\"]+\"\n(.*?)```", page("examples/ci.md"), re.S)
+    assert shown == sample  # one workflow: the one the example runs is the one the page vouches for
+    assert_guards_the_fork(shown)
+
+
+def assert_guards_the_fork(sample: str) -> None:
     assert "pull_request_target" not in sample
     assert "|| true" not in sample
     workflow = yaml.safe_load(sample)

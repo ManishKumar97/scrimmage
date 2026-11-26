@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.anthropic_server import FakeAnthropic
@@ -436,13 +438,82 @@ def test_the_gateway_page_runs_on_its_own_model_hosts_line(
     assert normal(refusal)[0] in normal(out), "the refusal the page quotes is not what ran"
 
 
+# The CI page: each Output is a `run:` step of the page's own workflow file, run in a shell in the
+# project as the runner would. `uv run X` runs as X in this environment, and `uv sync` is the
+# step left out, as it installs an environment this test cannot stand in for.
+CI = "examples/ci.md"
+CI_CODES = [OK, OK, ROW_FAILED]
+SECRET = re.compile(r"\$\{\{ secrets\.\w+ \}\}")
+WORKFLOW = Path(".github") / "workflows" / "scrimmage.yml"
+
+
+def workflow_steps(root: Path) -> dict[str, dict[str, Any]]:
+    workflow = yaml.safe_load((root / WORKFLOW).read_text())
+    (job,) = workflow["jobs"].values()
+    return {step["run"]: step for step in job["steps"] if "run" in step}
+
+
+def run_step(root: Path, step: dict[str, Any], base_url: str) -> subprocess.CompletedProcess[str]:
+    """One `run:` step, with the step's own env and the job's secret, and no key but that."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("SCRIMMAGE_", "OPENAI_", "ANTHROPIC_"))
+    }
+    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
+    env["OPENAI_BASE_URL"] = base_url  # the stand-in for the model, where a job has the real one
+    for key, value in step.get("env", {}).items():
+        env[key] = SECRET.sub("test-key", str(value))
+    line = step["run"]
+    assert line.startswith("uv run "), line
+    return subprocess.run(
+        line.removeprefix("uv run "),
+        shell=True,
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+@pytest.mark.slow
+def test_the_ci_page_runs_its_workflow_steps_and_a_failed_row_fails_the_job(
+    tmp_path: Path, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    fake = fake_openai(ONE_TOOL)
+    root = tmp_path / "project"
+    root.mkdir()
+    for block in blocks("examples/function-agent.md"):
+        if block.title != OUTPUT:
+            apply(root, block)
+    command, ran, codes = "", set[str](), list[int]()
+    for lang, title, body in FENCE.findall((DOCS / CI).read_text()):
+        if lang == "bash":
+            command = body.strip()
+            continue
+        if not title:
+            continue
+        if title != OUTPUT:
+            apply(root, Block(lang, title, body))
+            continue
+        with_fake_host(root / "scrimmage.toml")
+        done = run_step(root, workflow_steps(root)[command], fake.base_url)
+        assert normal(done.stdout) == normal(body), f"{command}:\n{done.stdout}{done.stderr}"
+        ran.add(command)
+        codes.append(done.returncode)
+    assert codes == CI_CODES
+    # Every step that runs a command ran, but the one that installs the environment.
+    assert set(workflow_steps(root)) - ran == {"uv sync"}
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:
