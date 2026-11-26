@@ -82,6 +82,7 @@ nav:
       - examples/index.md
       - "Example: a function agent": examples/function-agent.md
       - "Example: an agent written with the anthropic library": examples/anthropic-agent.md
+      - "Example: an agent behind a model gateway": examples/gateway.md
       - "Example: a script and its child process": examples/script-agent.md
       - "Example: LangGraph tools": examples/langgraph.md
       - "Example: MCP tools": examples/mcp.md

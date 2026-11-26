@@ -26,6 +26,8 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_check_inventory.json` | Functions | calls `check_inventory` with `{"sku": "SKU-42"}` |
 | `acme_obeys.json` | Default | the answer text, for a conversation where a tool result held a note to the assistant that the model obeyed |
 | `acme_declines.json` | Default | the answer text, for a conversation where a tool result asked for a refund and the model declined by itself |
+| `gateway_get_order.json` | `acme_get_order.json` | the same call, with `usage.cost` 0.005 added, as an OpenRouter reply states what the call cost |
+| `gateway_answer.json` | `acme_answer.json` | the same answer, with `usage.cost` 0.005 added |
 | `guard_safe.json` | Default | the model name `llama-guard-test`, and the answer `safe`, Llama Guard's reply to allowed content |
 | `guard_unsafe.json` | Default | the model name `llama-guard-test`, and the answer `unsafe` then `S14`, Llama Guard's reply to blocked content |
 | `rail_allows.json` | Default | the model name `gpt-4.1-mini`, and the answer `No`, a NeMo self check rail's reply to allowed content |

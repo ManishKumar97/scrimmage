@@ -45,6 +45,8 @@ class Example:
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
     logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
     provider: str = "openai"  # the API the agent speaks, so the fake server that answers it
+    own_host: bool = False  # the page names its model host itself, so the test adds no line
+    port: int = 0  # the port the page's address names, or 0 for any free one
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,9 @@ def apply(root: Path, block: Block) -> None:
     path.write_text(text.replace(old, new))
 
 
-def with_fake_host(toml: Path, provider: str = "openai") -> None:
+def with_fake_host(toml: Path, provider: str | None = "openai") -> None:
+    if provider is None:  # the page's own line does this work
+        return
     text = toml.read_text()
     if not re.search(r"^model_hosts", text, re.M):  # a commented line names nothing
         host = FAKE_HOST.format(provider=provider)
@@ -193,7 +197,7 @@ def check_page(
         monkeypatch.setenv("ANTHROPIC_BASE_URL", claude.base_url)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     else:
-        fake = fake_openai(example.replies, by_model=example.by_model)
+        fake = fake_openai(example.replies, by_model=example.by_model, port=example.port)
         monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
         monkeypatch.setenv("OPENAI_API_KEY", "test")
     # A page runs `python`: the venv's, whatever else PATH holds.
@@ -202,7 +206,14 @@ def check_page(
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    run_blocks(name, root, codes, capsys, example.logs or {}, example.provider)
+    run_blocks(
+        name,
+        root,
+        codes,
+        capsys,
+        example.logs or {},
+        None if example.own_host else example.provider,
+    )
     assert codes == example.codes
     for rule in (example.by_model or {}).values():
         assert not isinstance(rule, ByTools) or not rule.unused, (
@@ -216,7 +227,7 @@ def run_blocks(
     codes: list[int],
     capsys: pytest.CaptureFixture[str],
     logs: dict[int, str],
-    provider: str = "openai",
+    provider: str | None = "openai",
 ) -> None:
     """Each block of the page in order: a file is written, an Output is the command run.
 
@@ -380,13 +391,58 @@ def test_the_guardrails_page_runs_and_prints_its_table(
     check_page(GUARDRAILS, GUARDRAILS_RUN, tmp_path, fake_openai, capsys, monkeypatch)
 
 
+# The gateway page names its own model host, so the test adds no line. The fake listens where
+# the page's address says, on port 4000, so this one test holds the port: it runs the page, and
+# then runs it again with the `model_hosts` line cut out, which must not give the same result.
+GATEWAY = "examples/gateway.md"
+GATEWAY_RUN = Example(
+    ["gateway_get_order", "gateway_answer"],
+    [OK],
+    base="examples/function-agent.md",
+    own_host=True,
+    port=4000,
+)
+HOST_LINE = re.compile(r"^model_hosts.*\n", re.M)
+
+
+@pytest.mark.slow
+def test_the_gateway_page_runs_on_its_own_model_hosts_line(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(GATEWAY, GATEWAY_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+    page = (DOCS / GATEWAY).read_text()
+    assert len(HOST_LINE.findall(re.search(r"```toml.*?```", page, re.S).group(0))) == 1  # type: ignore[union-attr]
+    # The same page without that line: its calls are no model calls to Scrimmage.
+    root = tmp_path / "without"
+    root.mkdir()
+    for block in blocks(GATEWAY_RUN.base or ""):
+        if block.title != OUTPUT:
+            apply(root, block)
+    for block in blocks(GATEWAY):
+        if block.title != OUTPUT:
+            apply(root, block)
+    toml = root / "scrimmage.toml"
+    toml.write_text(HOST_LINE.sub("", toml.read_text()))
+    monkeypatch.chdir(root)
+    capsys.readouterr()
+    code = main(["test"])
+    out = capsys.readouterr().out
+    shown = next(b.body for b in blocks(GATEWAY) if b.title == OUTPUT)
+    assert code == MISTAKE and normal(out) != normal(shown), out
+    refusal = next(b for lang, title, b in FENCE.findall(page) if lang == "text" and not title)
+    assert normal(refusal)[0] in normal(out), "the refusal the page quotes is not what ran"
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:
