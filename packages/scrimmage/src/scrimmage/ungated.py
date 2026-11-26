@@ -1,9 +1,10 @@
 """Say when a web request goes around the gate.
 
-Scrimmage gates httpx and httpx2. A request sent with requests, urllib3, urllib.request or
-aiohttp runs for real and leaves no line. This module watches the one send path those clients
-share and writes a notice for each distinct request, naming the library, the host and the
-method. It never changes a call, and it never raises into the agent.
+Scrimmage gates httpx and httpx2. A request sent with requests, urllib3, urllib.request,
+aiohttp or http.client is not gated: it is sent for real, and nothing mocks, faults or refuses
+it. This module watches the one send path those clients share and writes a notice for each
+distinct request, naming the library, the host and the method. It never changes a call, and it
+never raises into the agent.
 
 A client is watched when it sends, not when it is imported: importing openai or langsmith
 loads these libraries without sending anything through them.
