@@ -118,12 +118,12 @@ nav:
       - Schemas: schemas.md
       - How it works: how-it-works.md
   - Limits:
-      - Will Scrimmage work for your agent: limits.md
-      - How your agent runs: limits/agents.md
-      - Tools, MCP and web requests: limits/calls.md
-      - Faults and model calls: limits/model.md
-      - The budget and prices: limits/budget.md
-      - Judging and records: limits/judging.md
+      - Limits of this version: limits.md
+      - "Limits: how your agent runs": limits/agents.md
+      - "Limits: tools, MCP and web requests": limits/calls.md
+      - "Limits: faults and model calls": limits/model.md
+      - "Limits: the budget and prices": limits/budget.md
+      - "Limits: judging and records": limits/judging.md
   - Safety and security:
       - Safety: safety.md
       - Security: security.md
