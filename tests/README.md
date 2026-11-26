@@ -78,7 +78,9 @@ The first run downloads `python:3.12-slim` and the wheels the service needs, the
 Later runs reuse them.
 Everything stays on this machine.
 Each test brings up a project of its own and takes it down, volumes included, in a `finally`.
-To remove what the tests leave, run `docker rmi $(docker images -q 'scrimmage-compose-*')`.
+Each run tags its images with its own id and labels them `scrimmage.test-run`.
+The run removes them when it ends, also after a failure or an interrupt.
+A run killed with SIGKILL leaves them; remove those with `docker rmi $(docker images -q --filter label=scrimmage.test-run)`.
 
 ## The Kubernetes tests
 

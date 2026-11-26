@@ -216,3 +216,12 @@ def test_an_unused_hand_written_mock_on_an_uncalled_mcp_label_is_a_mistake() -> 
     notes, mistakes, _ = unused_mocks(cfg, [a_run(row, 0, mocked=set())])
     assert any("no call matched the mock on mcp:docs/search" in m for m in mistakes)
     assert not any("mcp:docs/search" in n for n in notes)
+
+
+@pytest.mark.design("record.marker_unused_is_note")
+def test_a_test_whose_runs_all_hit_an_infrastructure_error_reports_no_unused_mock() -> None:
+    mock = '\n[[test.mock]]\ncall    = "mcp:docs/search"\nargs    = {q = "a"}\nreturns = "x"\n'
+    cfg = load(AGENT + TEST + mock)
+    row = plan.rows(cfg)[0]
+    runs = [a_run(row, 0, "infrastructure error", None, mocked=set())]
+    assert unused_mocks(cfg, runs) == ([], [], [])

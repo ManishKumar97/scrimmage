@@ -1707,3 +1707,32 @@ def test_stop_group_returns_when_the_program_left_its_group() -> None:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+@pytest.mark.design("cli.run_help")
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_scrimmage_run_help_prints_usage_and_exits_zero(flag: str) -> None:
+    done = subprocess.run(
+        [sys.executable, "-m", "scrimmage.run_command", flag],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert (done.returncode, done.stderr) == (0, "")
+    assert done.stdout == "usage: scrimmage-run command [args...]\n"
+    # A flag after the command belongs to the command.
+    later = subprocess.run(
+        [sys.executable, "-m", "scrimmage.run_command", sys.executable, "-c", "print('hi')", "-h"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert later.stdout == "hi\n"
+
+
+@pytest.mark.design("cli.run_help")
+def test_scrimmage_run_drops_one_leading_double_dash() -> None:
+    run = [sys.executable, "-m", "scrimmage.run_command"]
+    ran = subprocess.run(
+        [*run, "--", sys.executable, "-c", "print('hi')"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert (ran.returncode, ran.stdout) == (0, "hi\n")
+    alone = subprocess.run([*run, "--"], capture_output=True, text=True, timeout=60, check=False)
+    assert alone.returncode == 2 and alone.stderr.startswith("usage: scrimmage-run")

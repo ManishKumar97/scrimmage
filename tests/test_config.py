@@ -466,14 +466,20 @@ def test_model_on_another_kind_of_fault_is_unknown_with_a_pointer(
     tmp_path: Path, call: str
 ) -> None:
     text = f'[[test.fault]]\ncall = "{call}"\nmodel = "gpt-4.1"\ndo = "timeout"\nwhen = "first 1"\n'
-    with pytest.raises(ConfigError, match=r"model: unknown setting; see docs/configuration.md"):
+    with pytest.raises(
+        ConfigError,
+        match=r"model: unknown setting; see https://manishkumar97.github.io/scrimmage/configuration/",
+    ):
         with_fault(tmp_path, text)
 
 
 @pytest.mark.design("config.model_not_on_mocks")
 def test_model_on_a_mock_is_unknown_with_a_pointer(tmp_path: Path) -> None:
     text = '[[test.mock]]\ncall = "tool:get_stock"\nreturns = 1\nmodel = "gpt-4.1"\n'
-    with pytest.raises(ConfigError, match=r"model: unknown setting; see docs/configuration.md"):
+    with pytest.raises(
+        ConfigError,
+        match=r"model: unknown setting; see https://manishkumar97.github.io/scrimmage/configuration/",
+    ):
         with_fault(tmp_path, text)
 
 
@@ -482,7 +488,7 @@ def test_model_on_a_mock_is_unknown_with_a_pointer(tmp_path: Path) -> None:
 def test_a_model_that_is_not_text_is_rejected_by_table_and_key(tmp_path: Path, value: str) -> None:
     with pytest.raises(
         ConfigError,
-        match=r"\[\[test\.fault\]\] 2 of .* model: .* is not a model name.*docs/model-faults.md",
+        match=r"\[\[test\.fault\]\] 2 of .* model: .* is not a model name.*/model-faults/",
     ):
         with_fault(tmp_path, MODEL_FAULT.format(call="model", model=value))
 
@@ -494,7 +500,7 @@ def test_a_model_that_is_not_text_is_rejected_by_table_and_key(tmp_path: Path, v
 def test_a_name_that_could_never_match_stops_before_any_model_call(
     tmp_path: Path, value: str
 ) -> None:
-    with pytest.raises(ConfigError, match=r"is not a model name.*docs/model-faults.md"):
+    with pytest.raises(ConfigError, match=r"is not a model name.*/scrimmage/model-faults/"):
         with_fault(tmp_path, MODEL_FAULT.format(call="model", model=value))
 
 
@@ -1273,3 +1279,50 @@ def test_a_tool_name_that_looks_like_a_key_is_redacted_in_json() -> None:
     assert shown is not None and shown["tool"] == "[secret removed]"
     plain = runner.fault_json(dataclasses.replace(fault, tool="delete_account"))
     assert plain is not None and plain["tool"] == "delete_account"
+
+
+@pytest.mark.design("config.fault_word_hint")
+def test_a_misspelt_fault_word_gets_a_did_you_mean_and_a_docs_site_link(tmp_path: Path) -> None:
+    text = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timout"\n'
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, text)
+    message = str(caught.value)
+    assert "did you mean 'timeout'?" in message
+    assert "https://manishkumar97.github.io/scrimmage/configuration/" in message
+    assert "docs/" not in message
+
+
+@pytest.mark.design("config.fault_word_hint")
+def test_a_fault_word_with_no_close_match_lists_the_valid_words(tmp_path: Path) -> None:
+    text = '[[test.fault]]\ncall = "tool:get_order"\ndo = "zzzzzzz"\n'
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, text)
+    message = str(caught.value)
+    assert "the faults are timeout, error, empty" in message
+    assert "status <400 to 599>" in message
+    assert "slow <seconds>s" in message
+
+
+@pytest.mark.design("config.fault_word_hint")
+def test_a_bad_label_names_the_server_form_and_the_docs_site(tmp_path: Path) -> None:
+    text = '[[test.fault]]\ncall = "tol:get_order"\ndo = "timeout"\n'
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, text)
+    message = str(caught.value)
+    assert "'mcp:<server>/<tool>'" in message
+    assert "did you mean 'tool'?" in message
+    assert "https://manishkumar97.github.io/scrimmage/configuration/" in message
+
+
+@pytest.mark.design("config.fault_word_hint")
+@pytest.mark.parametrize(
+    ("do", "hint"),
+    [("stauts 500", "'status <400 to 599>'"), ("slwo 2s", "'slow <seconds>s'")],
+)
+def test_a_misspelt_word_with_an_argument_is_compared_by_its_first_word(
+    tmp_path: Path, do: str, hint: str
+) -> None:
+    text = f'[[test.fault]]\ncall = "model"\ndo = "{do}"\n'
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, text)
+    assert f"did you mean {hint}?" in str(caught.value)

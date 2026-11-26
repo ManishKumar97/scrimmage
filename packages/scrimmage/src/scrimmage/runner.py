@@ -10,6 +10,7 @@ import dataclasses
 import errno
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -28,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage import judge, labels, protocol, service_client
+from scrimmage import judge, labels, protocol, render, service_client
 from scrimmage import plan as planner
 from scrimmage.budget import Ledger
 from scrimmage.config import (
@@ -51,6 +53,7 @@ from scrimmage.decide import MISTAKE_REFUSAL
 from scrimmage.managed import START_TRIES, CopyFailed, Managed, free_port
 from scrimmage.outcomes import (  # the runner's names for them
     INFRA,
+    INFRA_ERROR,
     INFRA_ERRORS,
     MISTAKE,
     MISTAKES,
@@ -98,8 +101,12 @@ NOT_A_FAILURE = (
 # The agent chose this call. Under a fault that is what it did about the failure.
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 PROCESS_LABEL = "process:python"
-# A baseline whose every run ended so cannot be compared with, so its faults are skipped.
+# Outcomes of a run that ended with no answer to judge: a test whose runs all ended so shows
+# nothing, so its unused mocks are not reported.
 FAILED = ("crashed", "timed out", "refused call", "budget reached", "not reserved")
+# A baseline whose every run ended so cannot be compared with, so its fault rows are not run: a
+# provider's 400 or 404 would only be paid for again, as a refused call would be.
+BASELINE_FAILED_OUTCOMES = (*FAILED, INFRA_ERROR)
 BUDGET_REASONS = ("budget", "budget_held")  # refusals for the budget
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
@@ -108,7 +115,7 @@ PREFIXES = {
     MISTAKES: "test mistake",
     NOTES: "note",
     WARNINGS: "warning",
-    INFRA_ERRORS: "infrastructure error",
+    INFRA_ERRORS: INFRA_ERROR,
 }
 TOOL_STAR_LINE = 'every tool that is not mocked runs for real (real = ["tool:*"])'
 # Said in the text and in --json alike, so it names a field both can show.
@@ -350,6 +357,7 @@ class Runner:
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
         self.sent = 0  # service requests sent: the setup request and every run
+        self.setup_spent = 0.0  # what the setup request's model call cost: in no row, in the total
         self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
@@ -568,7 +576,9 @@ class Runner:
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
         # The provider failing by itself says nothing about the agent.
-        real_errors = [e for e in (real_error(x, model) for x in model) if e is not None]
+        real_errors = [
+            e for e in (real_error(x, model, self.scrub) for x in model) if e is not None
+        ]
         broken = any(n.get("notice") == "structure" for n in notices)
         # No plan, or a call made outside the run's context: says nothing about the agent.
         no_plan = "no_plan" in state.refusals or context_lost(lines)
@@ -588,7 +598,7 @@ class Runner:
             or ended.infra
             or changed
         ):
-            outcome = "infrastructure error"
+            outcome = INFRA_ERROR
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
         elif chosen or kept_out:
@@ -791,9 +801,9 @@ class Runner:
 
     def conclude_setup(
         self, run: str, row: planner.Row, state: Any, reply: service_client.Reply
-    ) -> None:
-        """The setup request's summary, in the same shape as a run's. Its labels are not
-        checked here: the first run does that, as before."""
+    ) -> float:
+        """The setup request's summary, in the same shape as a run's, and what its model
+        calls cost. Its labels are not checked here: the first run does that, as before."""
         agent = self.config.agent
         ok = reply.status is not None and 200 <= reply.status < 300
         answer = None
@@ -801,7 +811,7 @@ class Runner:
             answer = service_client.answer_of(reply, agent)[0]
         infra = reply.failed is not None or reply.gate_refused is not None
         ended = Ended(answer, reply.timed_out, answer is not None, [], [], infra)
-        self.concluded(run, row, state, ended)
+        return self.concluded(run, row, state, ended).cost_usd
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
@@ -1031,7 +1041,7 @@ class Runner:
         reply = self.send(header, test.question)
         state = self.wait_record(name, time.monotonic())
         lines = self.store.lines(name)
-        self.conclude_setup(name, row, state, reply)
+        self.setup_spent = self.conclude_setup(name, row, state, reply)
         if self.stop_flag:  # Ctrl-C or SIGTERM ended the request, not the service
             raise Interrupted(self.stop_flag[0])
         gate = reply.gate_refused
@@ -1207,7 +1217,11 @@ class Runner:
                 results += settled(pool.map(self.one, base))
                 for test in self.config.tests:
                     mine = [r for r in results if r is not None and r.row.test == test]
-                    if test.faults and mine and all(r.outcome in FAILED for r in mine):
+                    if (
+                        test.faults
+                        and mine
+                        and all(r.outcome in BASELINE_FAILED_OUTCOMES for r in mine)
+                    ):
                         self.skipped.append(test.name)
                 faulted = [
                     r for r in rows if r.fault is not None and r.test.name not in self.skipped
@@ -1357,9 +1371,14 @@ def nothing() -> None:
     """The release of a signal setup that set nothing."""
 
 
-def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ()) -> str | None:
+def real_error(
+    line: dict[str, object],
+    model: Sequence[dict[str, object]] = (),
+    scrub: Sequence[str] = (),
+) -> str | None:
     """How a model call the gate let through failed by itself, if it did. model: the run's
-    model lines, which a 400 the gate marked as after a reply fault is checked against."""
+    model lines, which a 400 the gate marked as after a reply fault is checked against.
+    scrub: the run's secrets, taken out of the provider's words again after they are decoded."""
     if line.get("action") != "real":
         return None
     error = str(line.get("error") or "")
@@ -1369,7 +1388,82 @@ def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ())
     # The provider's answer to a request the agent built from a faulted reply: its result.
     if status == 400 and line.get("after_reply_fault") is True and reply_fault_before(line, model):
         return None
-    return f"{line.get('call')} returned {status}" if status >= 400 else None
+    if status < 400:
+        return None
+    said = provider_message(line, scrub)
+    return f"{line.get('call')} returned {status}" + (f" ({said})" if said else "")
+
+
+ERROR_MESSAGE = re.compile(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)')
+ERROR_SHOWN = 200  # characters of a provider's error message the report line keeps
+
+
+def provider_message(line: dict[str, object], scrub: Sequence[str] = ()) -> str:
+    """The provider's own words for a failed call, from the line's reply preview, which was
+    redacted when it was kept. The JSON error's message when there is one, else the text."""
+    result = line.get("result")
+    preview = cast(dict[str, object], result).get("preview") if isinstance(result, dict) else None
+    if not isinstance(preview, str):
+        return ""
+    text = preview
+    doc: object = None
+    try:
+        doc = json.loads(preview)
+    except ValueError:  # the preview is cut, so look for the message inside the cut JSON
+        cut = ERROR_MESSAGE.search(preview)
+        if cut is not None:
+            text = cut.group(1)
+            with contextlib.suppress(ValueError):
+                text = str(json.loads(f'"{text}"'))
+    found: object = None
+    if isinstance(doc, dict):
+        body = cast(dict[str, object], doc)
+        found = body.get("error", body)
+    if isinstance(found, dict):
+        message = cast(dict[str, object], found).get("message")
+        if isinstance(message, str):
+            text = message
+    elif isinstance(found, str):
+        text = found
+    # The preview was redacted as JSON text, where a secret can still sit behind an escape
+    # (\/ or \u0026). Decoding made it plain, so redact it again as the plain text it is, and
+    # show what a terminal would act on as escapes.
+    text = render.plain(" ".join(redact_decoded(text, scrub).split()))
+    text = "".join(
+        f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cf", "Zl", "Zp") else c for c in text
+    )
+    return text if len(text) <= ERROR_SHOWN else text[: ERROR_SHOWN - 3] + "..."
+
+
+# What each provider's library says when it is given no key, as a run's log ends with it. The
+# OpenAI library names the variable; the Anthropic one does not, so it is named here.
+MISSING_KEY = (
+    # The library's own sentence: "Missing credentials. ... set the `OPENAI_API_KEY` or ...".
+    # AzureOpenAI names AZURE_OPENAI_API_KEY in the same words, and a log line may only mention
+    # the variable, so the name must stand alone and follow the sentence.
+    (re.compile(r"Missing credentials\.[^\n]*(?<![A-Z_])OPENAI_API_KEY"), "OPENAI_API_KEY"),
+    (re.compile(r"Could not resolve authentication method"), "ANTHROPIC_API_KEY"),
+)
+LOG_TAIL = 16 * 1024
+
+
+def missing_key(folder: Path, runs: Sequence[RunResult]) -> str | None:
+    """The environment variable a provider's library asked for, when every one of these runs
+    ended in its error for a missing key; None when any did not, or no log says it."""
+    found: set[str] = set()
+    for r in runs:
+        try:
+            with open(folder / f"{r.run}.log", "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - LOG_TAIL))
+                tail = handle.read().decode("utf-8", "replace")
+        except OSError:
+            return None
+        names = {name for pattern, name in MISSING_KEY if pattern.search(tail)}
+        if len(names) != 1:
+            return None
+        found |= names
+    return found.pop() if len(found) == 1 else None
 
 
 def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object]]) -> bool:
@@ -1442,7 +1536,7 @@ def unused_mocks(
     for test in config.tests:
         mine = [r for r in results if r.row.test == test]
         used = {index for r in mine for index in r.mocked}
-        if not mine or all(r.outcome in FAILED for r in mine):
+        if not mine or all(r.outcome in BASELINE_FAILED_OUTCOMES for r in mine):
             continue
         nearest = {
             int(str(cast(dict[str, object], m["nearest"])["mock"]))
@@ -1873,6 +1967,7 @@ def build_report(
     reports = row_reports(config, results, cut)
     table = [HEAD, *(row_cells(row_json(entry, config.agent)) for entry in reports)]
     mistakes: list[str] = []
+    infra_lines: list[str] = []  # what failed by itself, as exit 3 says: not the test's mistakes
     notes: list[str] = []
     failures: list[str] = []
     code = OK
@@ -1943,7 +2038,7 @@ def build_report(
                 for b in r.judgement.broken
             )
             mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes if shown]
-            if r.outcome == "infrastructure error":
+            if r.outcome == INFRA_ERROR:
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
     unused, wrong, recorded = (
@@ -1972,10 +2067,16 @@ def build_report(
             )
     skipped = runner.skipped if runner is not None else []
     for name in skipped:
-        mistakes.append(
-            f"{name}: baseline failed: every baseline run crashed, timed out, was refused or "
-            "reached the budget, so its fault rows did not run"
+        # A baseline that only the provider's failures stopped is not a mistake in the test.
+        mine = [r for r in results if r.row.test.name == name and r.row.fault is None]
+        said = (
+            f"{name}: baseline failed: every baseline run crashed, timed out, was refused, "
+            "reached the budget or hit an infrastructure error, so its fault rows did not run"
         )
+        if mine and all(r.outcome == INFRA_ERROR for r in mine):
+            infra_lines.append(said)
+        else:
+            mistakes.append(said)
     if stopped_by in BUDGET_REASONS:
         numbers = stop_numbers(results, stopped_by)
         line = (
@@ -1998,6 +2099,12 @@ def build_report(
                     "working; check for a cache in front of the model or a client Scrimmage "
                     "does not gate"
                 )
+            elif (variable := missing_key(folder, ran)) is not None:
+                mistakes.append(
+                    f"{test.name}: every baseline run stopped before its first model call "
+                    f"because {variable} is not set in the environment of the test; set it "
+                    "and run again"
+                )
             else:  # the agent never got that far, which says nothing about the budget
                 mistakes.append(
                     f"{test.name}: every baseline run crashed or timed out before its first "
@@ -2011,7 +2118,7 @@ def build_report(
                 mistakes.append(f"{line.get('library')}: {line.get('message')}")
         for error in r.real_errors:
             code = INFRA
-            mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
+            infra_lines.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
     grouped = miss_groups(results)
     web_misses = sorted(
@@ -2021,7 +2128,9 @@ def build_report(
             if doc["reason"] == "request" and doc["action"] == "real"
         }
     )
-    spent = sum(r.cost_usd for r in results)
+    # The setup request is no row's run, but its model call was real spend, and the budget
+    # held it: the total counts it, so the total is what the provider bills.
+    spent = sum(r.cost_usd for r in results) + (runner.setup_spent if runner is not None else 0.0)
     warnings: list[str] = []
     if budget_on and spent > (config.agent.max_cost_usd or 0):
         warnings.append(
@@ -2078,6 +2187,7 @@ def build_report(
         *((MISTAKES, text) for text in dict.fromkeys(mistakes)),
     ]
     if code == INFRA:
+        messages += [(INFRA_ERRORS, text) for text in dict.fromkeys(infra_lines)]
         messages.append((INFRA_ERRORS, INFRA_LINE))
     elif mistakes:
         code = MISTAKE

@@ -60,6 +60,7 @@ class FakeRunner:
     tools_seen: list[str] | None = None
     skipped: list[str] = field(default_factory=list[str])
     ledger: FakeLedger = field(default_factory=FakeLedger)
+    setup_spent: float = 0.0
 
 
 @dataclass

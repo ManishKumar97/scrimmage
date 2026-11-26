@@ -1200,7 +1200,8 @@ def test_a_400_before_a_reply_fault_fires_is_not_marked(sink: Sink) -> None:
     answered, fired = lines = model_lines_of(sink)
     assert (answered["action"], answered["status"]) == ("real", 400)
     assert fired["action"] == "fault" and "after_reply_fault" not in answered
-    assert runner.real_error(answered, lines) == "model:openai returned 400"
+    said = runner.real_error(answered, lines)
+    assert said is not None and said.startswith("model:openai returned 400 (")
 
 
 REAL_ANSWER = json.loads(

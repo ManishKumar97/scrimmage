@@ -8,6 +8,7 @@ The model is the fake OpenAI server, scripted per page below, so no key is neede
 """
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -249,6 +250,37 @@ SERVICE_RUN = Example(ONE_TOOL, [OK, OK], base="examples/function-agent.md")
 
 @pytest.mark.slow
 def test_the_example_page_runs_with_a_managed_start(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_the_service_page(tmp_path, fake_openai, capsys, monkeypatch)
+
+
+@pytest.mark.design("docs.service_setup_cost")
+@pytest.mark.slow
+def test_the_total_counts_the_setup_requests_model_call(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_the_service_page(tmp_path, fake_openai, capsys, monkeypatch)
+    (folder,) = (tmp_path / "project" / "scrimmage-runs").glob("2*")
+
+    def model_cost(record: Path) -> float:
+        lines = [json.loads(text) for text in record.read_text().splitlines()]
+        return sum(float(x.get("cost_usd") or 0) for x in lines if x.get("kind") == "model")
+
+    (setup,) = folder.glob("setup-*.jsonl")
+    runs = sum(model_cost(path) for path in folder.glob("run-*.jsonl"))
+    assert model_cost(setup) > 0
+    total = json.loads((folder / "result.json").read_text())["cost_usd"]
+    assert total == pytest.approx(runs + model_cost(setup))
+
+
+def run_the_service_page(
     tmp_path: Path,
     fake_openai: Callable[..., FakeOpenAI],
     capsys: pytest.CaptureFixture[str],
