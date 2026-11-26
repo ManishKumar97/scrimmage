@@ -1,4 +1,4 @@
-# An agent inside a web service
+# Example: the function agent behind FastAPI
 
 Many agents run inside a web service, one request per question.
 This example puts the [function agent](function-agent.md) behind a FastAPI endpoint and tests it there, under uvicorn, with the same mock and fault.

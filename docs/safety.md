@@ -78,7 +78,7 @@ Each one leaves a line in the record with the action `real`, so you can see that
 If a stray one would do real harm, point the test at a server that cannot do it.
 
 If a label such as `mcp:search` could mean a tool on two servers, the test stops at the first call after both servers are known, so from then on a read on one server cannot be taken for a write on another.
-A call made before the second server was listed or called goes by that label. See [Limits](limits.md).
+A call made before the second server was listed or called goes by that label. See [Limits](limits/calls.md#mcp-tools).
 
 ## Child processes
 
@@ -87,14 +87,14 @@ A forked child's refusal reaches the runner before the error reaches your code, 
 A child that cannot get its plan refuses each call, and the run is an infrastructure error.
 
 A Python child that would not join, because it has its own environment or a flag such as `-I`, is refused where it starts, unless `real` lists `process:python`.
-Only a start made from Python is seen, so `sh -c 'python x'` is not. See [Limits](limits.md).
+Only a start made from Python is seen, so `sh -c 'python x'` is not. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 So a rerun never reaches a write through a child: the child joins and is refused, or never starts.
-The exceptions are all in [Limits](limits.md).
+The exceptions are all in [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 A program on another Python is not gated, and it may be something unrelated, such as `pip`, so it runs untouched.
 But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
-A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits.md).
+A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 ## An agent inside a web service
 
@@ -119,7 +119,7 @@ Their contents at pickling time are not checked: an item a run changes while it 
 A send made while an item is pickled, such as one a reducer makes, is decided as any other send.
 An item put in a queue's buffer some other way is refused when the feeder reaches it, even after the run closed, and every run open at that moment is told.
 
-Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
+Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits/agents.md#an-agent-inside-a-web-service).
 
 Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
 A Python that only inherits the service's settings and never serves starts no tracker.
@@ -139,14 +139,14 @@ Work outside any request, while a run is open, follows the outside rules on [An 
 
 ## A fault sends nothing
 
-Every fault but `append`, `replace` and `slow` is built by the gate, and the call it fails is never sent.
 The fault is decided before mocks and `real` are read, so a fault on a call the test would refuse, such as an unlisted web write, still runs nothing.
-A faulted model call reserves nothing and costs nothing.
+Which faults send nothing, and the tests that check it, are on [Security](security.md#a-fault-sends-nothing).
+A faulted model call holds nothing and costs nothing.
 
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
-See [Failing the model, and keeping a budget](model-faults.md).
+See [The budget](budget.md).
 
 The Scrimmage MCP server adds guards for a coding agent that runs tests: every `test` and `record` call names a `max_cost_usd` the person approves, the server checks the file before any spend, refuses a file with no budget, keeps a ceiling for the session, and runs one spend at a time.
 They stop accidents, not a coding agent with a shell; see [Driving Scrimmage from a coding agent](mcp-server.md#the-guards).
@@ -155,7 +155,7 @@ They stop accidents, not a coding agent with a shell; see [Driving Scrimmage fro
 
 The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.
 
-If `tools` names a function, a class, a method or a module that does not exist, or a name that is not a function or a method, the run stops as a mistake in the test.
+If `tools` names a function, a class, a method or a module that does not exist, or a name that is not a function or a method, the run stops as a test mistake.
 Otherwise a typo such as `refund_ordr` would leave the real `refund_order` running with no gate.
 
 ## What the gates assume
@@ -177,16 +177,15 @@ See [Drafting a test file](init.md#what-the-probe-can-do).
 
 ## Staying out of production
 
-- Installing or importing Scrimmage never switches anything on.
-- The startup file is never on Python's default path; only `scrimmage-run` puts it there.
-- The SDK switches on only when a test run gives it the run token, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
-
 In production you start your agent the usual way, and Scrimmage is never loaded.
+What switches the SDK on, and the tests that check it, are on [Security](security.md#staying-out-of-production).
+The SDK prints that it is active when a test run switches it on.
+A child process that joins prints nothing, and the record lists it.
 
 ## scrimmage.toml runs code
 
 `function` names code that runs, so treat `scrimmage.toml` like code.
-A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
+What that means for a pull request is on [Running Scrimmage in CI](ci.md#scrimmagetoml-runs-code).
 
 ## Records
 

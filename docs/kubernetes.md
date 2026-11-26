@@ -788,8 +788,8 @@ The message is the last line of the pod's log, since there is no result to read.
 A policy that cuts the agent off from the runner in the middle of a test does not stop it.
 Calico checks a policy against each new connection, and every control request is a new connection, so the cut takes effect at the next request.
 The run inside its request at that moment gets a reply from the service, but cannot send its last batch, so it ends `infrastructure error` with `incomplete` true in its summary.
-That reply holds no answer: the run's next model call needs a budget reservation from the runner, which cannot be reached, so the call is refused as `control_unreachable`.
-The reservation of the call that was in flight stays held, so the runner warns that the run ended still holding part of the budget.
+That reply holds no answer: the run's next model call needs a budget hold from the runner, which cannot be reached, so the call is refused as `control_unreachable`.
+The hold of the call that was in flight stays, so the runner warns that the run ended still holding part of the budget.
 Each later run's claim fails, its gate answers `503 plan-unavailable`, and it ends `infrastructure error` too, after up to 10 s of waiting for the claim.
 No run after the cut ends with a result.
 The test ends with exit 3, and `result.json` says how many runs were sent and how few were claimed, in `runs_sent` and `claims_received`.

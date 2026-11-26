@@ -27,6 +27,21 @@ def page(name: str) -> str:
     return (DOCS / name).read_text()
 
 
+LIMITS_PAGES = [
+    "limits.md",
+    "limits/agents.md",
+    "limits/calls.md",
+    "limits/model.md",
+    "limits/budget.md",
+    "limits/judging.md",
+]
+
+
+def limits_pages() -> str:
+    """The Limits section: the index with the fit list, then each area page."""
+    return "\n".join(page(name) for name in LIMITS_PAGES)
+
+
 def mentioned(text: str, word: str) -> bool:
     return f"`{word}`" in text or f'`"{word}"`' in text
 
@@ -69,7 +84,7 @@ def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None
     for word in ("{question}", "children", "SCRIMMAGE_ANSWER_FILE", "process", "other_python"):
         assert f"`{word}`" in text or f"`{word} = true`" in text, word
     assert "`command`" in page("configuration.md") and "`scrimmage-run" in page("cli.md")
-    assert "mcp 1.x, started with your environment" not in page("limits.md")
+    assert "mcp 1.x, started with your environment" not in limits_pages()
 
 
 @pytest.mark.design("docs.judging")
@@ -117,7 +132,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     guide = page("model-faults.md")
     for word in ("gpt-4.1", "gpt-4o-mini-2024-07-18", "unreadable_model"):
         assert word in guide, word
-    limits = page("limits.md")
+    limits = limits_pages()
     for text in (guide, limits):
         assert "the row can pass, and nothing warns" in text
         assert "not the name a reply or a dashboard shows" in text
@@ -127,7 +142,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
         assert "any model call with no name, such as a Responses call on a stored prompt" in text
         assert "streamed, multipart" not in text
     assert "a character that does not print" in guide
-    assert '"" = {input = 2.0, output = 8.0}' in guide
+    assert '"" = {input = 2.0, output = 8.0}' in page("prices.md")
     assert 'The key `""` prices a call that sends no model name.' in page("configuration.md")
     assert "with the reply streamed or not" in guide
     safety = page("safety.md")
@@ -140,7 +155,7 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
     text = page("configuration.md")
     assert all(mentioned(text, key) for key in prices.PRICE_KEYS)
     assert "cached tokens cost the full `input` price" in text
-    guide = page("model-faults.md")
+    guide = page("prices.md")
     for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
         assert word in guide, word
     assert "`tokens.cached`" in guide and "the safe overestimate" in guide
@@ -148,30 +163,31 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
 
 @pytest.mark.design("docs.cache_write")
 def test_cache_write_prices_and_the_current_table_are_documented() -> None:
-    guide = page("model-faults.md")
+    guide = page("prices.md")
     assert "### Cache writes" in guide
     for word in ("input_tokens_details.cache_write_tokens", "ttl_12h_tokens", "ttl_30m_tokens"):
         assert word in guide, word
     assert "checked against OpenAI's pricing page on 22 November 2026" in guide
     for model in ("gpt-5", "gpt-5-mini", "gpt-5-nano"):
-        assert f"`{model}`" in guide.split("### Prices")[1].split("### ")[0], model
+        shipped = guide.split("## The shipped OpenAI prices")[1].split("### ")[0]
+        assert f"`{model}`" in shipped, model
     assert "`cache_write_30m`" in page("json-output.md")
     assert "On Chat Completions, where writes last 30 minutes, it leaves out" in guide
 
 
 @pytest.mark.design("docs.hold_can_be_passed")
 def test_a_call_that_costs_more_than_its_hold_is_documented() -> None:
-    guide = page("model-faults.md")
-    assert "cannot together pass the limit while each costs no more than it reserved" in guide
-    assert "](limits.md#the-budget)" in guide
-    limits = page("limits.md").split("### The budget")[1].split("### ")[0]
+    guide = page("budget.md")
+    assert "cannot together pass the limit while each costs no more than it held" in guide
+    assert "](limits/budget.md#the-budget)" in guide
+    limits = page("limits/budget.md").split("## The budget")[1]
     assert "**A call can cost more than its hold.**" in limits
     assert "the test spends $0.1967" in limits
     assert "times `n` on Chat Completions" in limits and "times `n` on Chat Completions" in guide
     assert "when Scrimmage cannot read the request body" in limits
     security = page("security.md")
     assert "so one call can take the total over the limit" not in security
-    assert "can together pass the cap" in security and "](limits.md#the-budget)" in security
+    assert "can together pass the cap" in security and "](limits/budget.md#the-budget)" in security
 
 
 @pytest.mark.design("docs.method_tools")
@@ -186,7 +202,7 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
 
 @pytest.mark.design("docs.budget_wait")
 def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
-    guide = page("model-faults.md")
+    guide = page("budget.md")
     assert "### When calls in flight hold the budget" in guide
     assert (
         "even if every other run finished | 30 seconds, or half the time the run has left" in guide
@@ -201,7 +217,7 @@ def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
     assert "after a wait of 30s for calls in flight" in guide
     assert "#when-calls-in-flight-hold-the-budget" in page("configuration.md")
     assert "| not reserved | left out |" in page("judging.md")
-    limits = page("limits.md")
+    limits = limits_pages()
     for item in (
         "A killed run's holds stay",
         "The first in line waits",
@@ -216,7 +232,7 @@ def test_recorded_mocks_and_their_exact_arguments_are_documented() -> None:
     text = page("configuration.md").split("### Mocks that match arguments")[1]
     for words in ("exactly", "next mock", "normal rule", "note", "still a mistake", "exit code 2"):
         assert words in text, words
-    assert "Mocks with `args` match arguments exactly" in page("limits.md")
+    assert "Mocks with `args` match arguments exactly" in limits_pages()
     assert "without `recorded = true` is a mistake" not in text
 
 
@@ -320,7 +336,7 @@ def test_recording_its_codes_and_its_limits_are_documented() -> None:
         page("recording.md"),
         page("cli.md"),
         page("json-output.md"),
-        page("limits.md"),
+        limits_pages(),
     )
     assert "Recording replies: recording.md" in (DOCS.parent / "mkdocs.yml").read_text()
     assert (
@@ -341,7 +357,7 @@ def test_recording_its_codes_and_its_limits_are_documented() -> None:
 
 @pytest.mark.design("docs.init")
 def test_init_its_probe_and_the_probe_s_limits_are_documented() -> None:
-    guide, commands, limits = page("quickstart.md"), page("cli.md"), page("limits.md")
+    guide, commands, limits = page("quickstart.md"), page("cli.md"), limits_pages()
     assert guide.index("scrimmage init") < guide.index("## 1."), "the quickstart starts with init"
     assert "scrimmage init [folder] [--out PATH] [--probe MODULE:FUNCTION] [--json]" in commands
     section = commands.split("## scrimmage init")[1].split("## --json")[0]
@@ -381,7 +397,7 @@ def test_a_miss_and_its_warning_are_documented() -> None:
     assert "mock_misses" in page("json-output.md") and "Do not parse it" in page("json-output.md")
     assert "does not cover a call that misses a mock with `args`" in page("safety.md")
     assert "When a replay misses a mock" in page("recording.md")
-    for page_name in ("configuration.md", "recording.md", "limits.md", "safety.md"):
+    for page_name in ("configuration.md", "recording.md", "safety.md", *LIMITS_PAGES):
         assert "subset" not in page(page_name).replace("no subset", ""), page_name
 
 
@@ -405,7 +421,7 @@ def test_recording_more_than_one_run_is_documented() -> None:
         page("recording.md"),
         page("cli.md"),
         page("json-output.md"),
-        page("limits.md"),
+        limits_pages(),
     )
     assert "[--refresh LABEL]... [--runs N] [--json]" in cli_page and "[--runs N]" in guide
     section = guide.split("## Recording more than one run")[1].split("## What gets written")[0]
@@ -472,7 +488,7 @@ def test_the_changing_results_page_covers_the_faults_the_rules_and_the_lines() -
 
 @pytest.mark.design("docs.changing_results")
 def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
-    limits = page("limits.md")
+    limits = limits_pages()
     assert "runs a listed real write twice" in limits
     faults = page("model-faults.md")
     assert "`append` does not work on a model call" in faults
@@ -570,7 +586,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
 
     assert f"it asks again for up to {running.READY_S:g} seconds" in guide
     assert "--loop asyncio" in guide and "process:<command>" in guide
-    limits = page("limits.md")
+    limits = limits_pages()
     safety = page("safety.md")
     assert '"process:kubectl"' in safety and "`kubectl delete`" in safety
     assert "There is no matching on arguments" in safety
@@ -588,7 +604,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     # The threat model's scope: public APIs in, rewrites of private internals out.
     assert "## Who Scrimmage defends against" in security
     assert "rewrites the private parts of Python's objects or of Scrimmage's own" in security
-    assert "out of scope" in page("limits.md")
+    assert "out of scope" in limits_pages()
     assert "replayed once to each other worker within 60 seconds" in security
     assert "[An agent inside a web service](services.md)" in page("configuration.md")
     assert "service-agent.md" in page("examples/index.md")
@@ -842,14 +858,17 @@ def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_for
 
 @pytest.mark.design("docs.prices_as_data")
 def test_the_price_files_the_command_and_the_tier_overshoot_are_documented() -> None:
-    config_page, cli_page, limits = page("configuration.md"), page("cli.md"), page("limits.md")
-    for key in ("as_of", "url", "service_tier", "tiers"):
+    config_page, cli_page, limits = page("configuration.md"), page("cli.md"), limits_pages()
+    prices_page = page("prices.md")
+    for key in ("service_tier", "tiers"):
         assert mentioned(config_page, key), key
+    for key in ("as_of", "url"):
+        assert mentioned(prices_page, key), key
     assert "## scrimmage prices update" in cli_page
     assert "exit 2" in cli_page and "exit 3" in cli_page
     for place in ("`[agent.prices]` in `scrimmage.toml`", "`scrimmage-runs/prices.toml`"):
-        assert place in config_page, place
-    assert "x-litellm-response-cost" in config_page and "usage.cost" in config_page
+        assert place in prices_page, place
+    assert "x-litellm-response-cost" in prices_page and "usage.cost" in prices_page
     assert "A call served on a dearer tier than its hold" in limits
     assert "built-in price table" not in limits  # it is the shipped price file now
     # The one fetch is named where the page promises no other connection.

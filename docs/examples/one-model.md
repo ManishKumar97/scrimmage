@@ -96,4 +96,4 @@ A fault on the bare `model` label would have hit the fallback too, and the row w
 A name is compared whole: `gpt-4o-mini` does not name `gpt-4o-mini-2024-07-18`.
 If no call sends the name, the fault never fires, and the test stops with exit code 2 and lists the names the calls used.
 
-More: [Failing one model](../model-faults.md#failing-one-model), and its limits in [Limits](../limits.md).
+More: [Failing one model](../model-faults.md#failing-one-model), and its limits in [Limits](../limits/model.md).

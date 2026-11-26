@@ -27,9 +27,9 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". It counts from when Scrimmage starts the program, so start-up time counts too. | 120 |
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`, or `provider = "anthropic"` for a host that speaks the Messages API. A host name only, with no port. | empty |
-| `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
+| `reserve_output_tokens` | The output tokens a budget hold assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](budget.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
-| `service_tier` | The service tier OpenAI bills a model request that names none, such as `"priority"`. It is used only to hold the budget before the call, at that tier's rates. Scrimmage never adds it to the request. See [Service tiers](#service-tiers). | the default tier |
+| `service_tier` | The service tier OpenAI bills a model request that names none, such as `"priority"`. It is used only to hold the budget before the call, at that tier's rates. Scrimmage never adds it to the request. See [Service tiers](prices.md#service-tiers). | the default tier |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].text"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
 ### The function and its input
@@ -54,7 +54,7 @@ See [Agents on a framework](frameworks.md) for the whole example.
 ## [agent.prices]
 
 Prices for models the shipped price file does not know, or that you price differently, in dollars per million tokens.
-See [Where prices come from](#where-prices-come-from).
+See [Where prices come from](prices.md#where-prices-come-from).
 
 ```toml
 [agent.prices]
@@ -73,154 +73,8 @@ acme-cache = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_wr
 | `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. Anthropic's calls use it; OpenAI's do not. A row that leaves it out is settled at 1.25 times `input`, Anthropic's own multiple. |
 | `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. Anthropic's calls use it; OpenAI's do not. A row that leaves it out is settled at 2 times `input`. |
 | `web_search_request` | Dollars for each web search a reply counts, not for a million tokens. Optional. Anthropic charges $0.01, and a row's own beats the price file's `[anthropic.fees]`, which beats that. Only a model's row takes it, not a tier or a `long` table. |
-| `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
-| `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](#long-context-prices). |
-
-### Service tiers
-
-OpenAI bills a call at the tier it was served on, such as `default`, `flex` or `priority`.
-The reply names the tier, and Scrimmage settles the call at that tier's rates.
-Before the call it holds the budget at one tier's rates.
-That is the tier the request names, else `[agent] service_tier`, else the default tier.
-A request that names `auto` names no tier.
-
-```toml
-[agent]
-service_tier = "priority"
-
-[agent.prices."gpt-4.1"]
-input = 2.0
-output = 8.0
-
-[agent.prices."gpt-4.1".tiers.priority]
-input = 3.5
-output = 14.0
-```
-
-Scrimmage never adds a tier to the request: it would change what the model call does.
-
-`fast` and `priority` are one tier under two names, since OpenAI renamed priority processing to Fast mode.
-A price that holds only `tiers.fast` or only `tiers.priority` prices both names, in `[agent.prices]` as in a price file.
-If a reply names a tier that the price does not list, such as `scale`, the call is settled at the dearest rates the price does list, long rates included.
-Its record line then has `unpriced_tier` set and `cost_estimated` true.
-The hold stays at the tier the request names, else `[agent] service_tier`, else the default tier.
-
-A price here replaces the shipped row whole, its tiers and its `long` table too.
-If you price a model the file ships, such as `gpt-5.6-luna`, give its `long` table and the tiers you use as well. See [Long-context prices](#long-context-prices).
-
-### Long-context prices
-
-Some models cost more per token once the prompt is long.
-OpenAI charges `gpt-5.5` and `gpt-5.4` twice the input price and one and a half times the output price when a call has more than 272K input tokens.
-The whole call is charged at the higher rates, not only the tokens past the threshold.
-
-```toml
-[agent.prices."gpt-5.5"]
-input = 5.0
-cached_input = 0.5
-output = 30.0
-
-[agent.prices."gpt-5.5".long]
-above = 272000
-input = 10.0
-cached_input = 1.0
-output = 45.0
-```
-
-`above` is a whole number of input tokens, at least 1.
-A call whose input tokens are more than `above` is settled at the `long` rates, and a call held before it is sent is held at them when its estimated input is more than `above`.
-A call of exactly `above` tokens costs the normal rates.
-Each `long` rate must be at least the same rate of the model, so a long call never costs less per token.
-A rate that `long` leaves out costs its `input`, as it does for the model.
-A tier may have its own long rates, such as `[openai.models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
-`long` works the same in a price file and in `[agent.prices]`.
-
-### Anthropic prices
-
-The shipped file prices the current Claude models, from Anthropic's pricing page and fast mode page, with each model's cache reads, its 5 minute and 1 hour cache writes, and a `tiers.fast` row for the models that have fast mode.
-Claude Haiku 5.5 has a `long` table: Anthropic charges the whole request at the higher rates when its prompt is over 100,000 tokens.
-A web search is settled at $0.01, the page's $10 for 1,000 searches, from `[anthropic.fees]`.
-It leaves out the Batch API, US-only inference at 1.1 times, data residency multipliers and the retired models; the date of the prices is on the `scrimmage check` budget line.
-
-To override a shipped Anthropic price, name the model under `[agent.prices]`.
-Your row replaces the shipped one whole, so give the cache rates, the fast tier and the `long` table you use as well.
-
-```toml
-[agent.prices."claude-haiku-5-5"]
-input = 0.10
-cached_input = 0.01
-cache_write_5m = 0.125
-cache_write_1h = 0.20
-output = 0.50
-
-[agent.prices."claude-haiku-5-5".long]
-above = 100000
-input = 0.50
-cached_input = 0.05
-cache_write_5m = 0.625
-cache_write_1h = 1.0
-output = 2.50
-```
-
-A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
-
-### Where prices come from
-
-Scrimmage looks a model's price up in three places, in this order.
-The first place that names the model gives the whole price.
-
-1. `[agent.prices]` in `scrimmage.toml`.
-2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
-3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's and Anthropic's prices.
-
-A price file has one section for each provider, and a call is priced from the section of its own provider.
-A row of the same name in another provider's section is not used.
-`[agent.prices]` is flat, by model name, and speaks for a model whatever its provider.
-
-A dated name, such as `gpt-4o-mini-2024-07-18` or `claude-haiku-4-5-20251001`, uses its family's price when the place it is looking in does not name it exactly.
-OpenAI dates a snapshot `-YYYY-MM-DD` and Anthropic `-YYYYMMDD`.
-Eight digits at the end of a name that are not a date, such as `-12345678`, are part of the name, so the name has no family.
-A place higher in the list speaks first: your `[agent.prices]` row for `gpt-4.1` also prices `gpt-4.1-2025-04-14`, whatever a file holds for the dated name.
-A model that none of them names is refused before the call, with the line to paste under `[agent.prices]`.
-Scrimmage never guesses a price.
-
-A price file has a section for each provider.
-A section has the date of its prices, the page they came from, and a table for each model under `models`:
-
-```text
-[openai]
-url = "https://developers.openai.com/api/docs/pricing"
-as_of = "2026-11-22"
-
-[openai.models."gpt-4.1"]
-input = 2.00
-output = 8.00
-cached_input = 0.50
-
-[openai.models."gpt-4.1".tiers.flex]
-input = 1.00
-output = 4.00
-```
-
-`url` and `as_of` are required in each section, and a model takes the keys of `[agent.prices]`.
-A section may also have a `[provider.fees]` table, such as `[anthropic.fees]` with `web_search_request = 0.01`: dollars for each request of that kind, which every model of the provider pays unless its own row says otherwise.
-A fee is read like a rate, and may not be negative.
-A section's name is the provider's, such as `openai`.
-A section for a provider this version of Scrimmage does not gate is read and kept, and never used.
-`scrimmage check` warns of such a section in `scrimmage-runs/prices.toml`, which may be a typo in its name.
-A file in the old format, with `as_of`, `source` or `models` at the top, is refused with the line to run `scrimmage prices update`.
-A file may not make a model free, because that would turn the budget off for it.
-Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
-A `cached_input` or cache-write rate, if you give one, must be at least 0.001 too, even for an embedding model.
-That is far below any real price, the cheapest today being 0.01.
-A tier cannot be named `default` or `auto`, in any case.
-Only `[agent.prices]` may price a model at 0, as your own choice.
-A file that fails its checks is exit 2, and the message names the file and the line.
-`scrimmage check` prints the date of each provider's prices on its budget line, such as `OpenAI prices as of 2026-11-22, Anthropic prices as of 2026-11-25`, and, when you have prices of your own, the source of each.
-A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
-
-A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that cost and the cost of its tokens at your prices.
-Scrimmage adds nothing to the request to ask for it, and a model with no price is still refused before the call, because the hold needs one.
+| `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](prices.md#service-tiers). |
+| `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](prices.md#long-context-prices). |
 
 Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 
@@ -413,8 +267,8 @@ These are mistakes in the test, exit code 2:
 | `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
 | `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. On a model call, it is looked for in the text of each choice of the reply. Optional. |
 | `retry_after` | With `"status 429"` or `"status 503"` on a model call or a web request: the reply's `Retry-After` header, in whole seconds from 0. It must be under `run_timeout`. See [A rate limit that says how long to wait](model-faults.md#a-rate-limit-that-says-how-long-to-wait). Optional. |
-| `form` | With `"refuse"` on a model call: `"plain"`, the default, or `"classifier"`. On an Anthropic call `"plain"` is a decline in the model's own words with `stop_reason` `end_turn`, and `"classifier"` is a refusal with `stop_reason` `refusal` and `stop_details`. On an OpenAI call any `form` is a mistake in the test. See [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call). Optional. |
-| `tool` | With `"unknown tool"` on a model call: the name of the tool the made-up call asks for, such as `"delete_account"`. Letters, digits, `_`, `-` and `.`, up to 128, as the MCP specification allows. Left out, Scrimmage calls a tool the run offered in an earlier model request and no longer offers, or else the name of an offered tool with `_v2` added. A name the request offers is a mistake in the test, as the call would then not be unknown. See [`unknown tool`](model-faults.md#unknown-tool). Optional. |
+| `form` | With `"refuse"` on a model call: `"plain"`, the default, or `"classifier"`. On an Anthropic call `"plain"` is a decline in the model's own words with `stop_reason` `end_turn`, and `"classifier"` is a refusal with `stop_reason` `refusal` and `stop_details`. On an OpenAI call any `form` is a test mistake. See [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call). Optional. |
+| `tool` | With `"unknown tool"` on a model call: the name of the tool the made-up call asks for, such as `"delete_account"`. Letters, digits, `_`, `-` and `.`, up to 128, as the MCP specification allows. Left out, Scrimmage calls a tool the run offered in an earlier model request and no longer offers, or else the name of an offered tool with `_v2` added. A name the request offers is a test mistake, as the call would then not be unknown. See [`unknown tool`](model-faults.md#unknown-tool). Optional. |
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; `"call N"`, the Nth attempt alone; or on a model call `"requests N"`, the first N requests and every retry of each. `"once"` and a bare number are refused: write `"first 1"` or `"call N"`. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |

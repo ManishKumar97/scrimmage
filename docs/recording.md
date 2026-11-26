@@ -143,7 +143,8 @@ An argument that differs on a later run is a miss, which the report shows; see [
 Every string in a saved value, its keys and its arguments goes through the same patterns the records use, before it leaves the agent's process.
 Because a recording is meant for git, a tool's value, an MCP result and a JSON web reply also go through a key-name rule: a string under a key such as `password`, `token`, `api_key`, `secret` or `session` is replaced with `[secret removed]`. A plain text body is not parsed, so only the patterns apply there. A string that is JSON text, as a whole, is read too: if a key in that text names a secret, the call is `secret_changed_shape`, as exact text cannot be cleaned. Text around the JSON, as in `Result: {...}`, and doubly encoded JSON are not read.
 This is a heuristic, and it is labelled as one. It is whole word parts only, so `author` and `token_count` are kept, and only strings are replaced, as a number is never a secret.
-A word about the secret, as in `session_id` or `token_type`, is kept too. See `docs/limits.md` for what that costs.
+A word about the secret, as in `session_id` or `token_type`, is kept too.
+See [Limits: judging and records](limits/judging.md#records-and-secrets) for what that costs.
 Each removal is a `removed:` line and an entry in `removed`, so the reviewer sees it.
 A value can be listed twice: a Basic credential under a header key such as `Authorization` is removed by the pattern and again by the key-name rule, so it has a `pattern` and a `key_name` entry.
 A call whose arguments held a secret, or a request whose path did, is not written at all: a mock of it could never match the real call.

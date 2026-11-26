@@ -102,7 +102,7 @@ A tool built with `response_format = "content_and_artifact"` returns a pair, so 
 `do = "empty"` returns the empty value of the tool function's declared return type, such as `""` for `-> str`, and the tool never runs.
 LangChain then sends the model a tool message with that content, as it does for a real empty result.
 See [Faults](concepts.md#faults) for each type's value.
-`empty` on a tool built with `response_format = "content_and_artifact"` is a mistake in the test, because the pair's empty value cannot be told; mock it with an empty pair instead, such as `returns = ["", {}]`.
+`empty` on a tool built with `response_format = "content_and_artifact"` is a test mistake, because the pair's empty value cannot be told; mock it with an empty pair instead, such as `returns = ["", {}]`.
 
 ## Tools that cannot be gated
 
