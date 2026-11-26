@@ -21,7 +21,7 @@ def stage_runner() -> None:
 
 
 def runner_tag() -> str:
-    return f"scrimmage-runner:{harness.context_hash(RUNNER)}"
+    return harness.tag_for("scrimmage-runner", harness.context_hash(RUNNER))
 
 
 def ensure_runner_image() -> str:
@@ -60,7 +60,7 @@ def ensure_fake_model_image() -> str:
     """Build the fake model image if its tag is not there yet, and return the tag."""
     with harness.locked("build"):
         stage_fake_model()
-        tag = f"scrimmage-fake-model:{harness.context_hash(FAKE_MODEL)}"
+        tag = harness.tag_for("scrimmage-fake-model", harness.context_hash(FAKE_MODEL))
         if not harness.image_exists(tag):
             harness.build(FAKE_MODEL, tag)
     return tag

@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import warnings
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -240,8 +241,14 @@ def pytest_warning_recorded(warning_message: warnings.WarningMessage, nodeid: st
         strays.append(f"{first} during {nodeid}")
 
 
+# What the end-of-run image removal could not do, for the summary.
+image_problems: list[str] = []
+
+
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """A stray does not fail the run, so the run's end lists them where they are seen."""
+    for problem in image_problems:
+        terminalreporter.write_line(f"WARNING: test images left behind: {problem}", yellow=True)
     if strays:
         terminalreporter.write_line(f"{len(strays)} stray process start(s): {'; '.join(strays)}")
 
@@ -390,6 +397,11 @@ def pytest_configure(config: pytest.Config) -> None:
     # platform starts `uname -p` on its first use. Once here, no test's no-process teardown
     # meets it, whether the run is parallel or -n0.
     platform.platform()
+    if not hasattr(config, "workerinput"):
+        # A fresh id, never an inherited one: a pytest started by a test must not own its
+        # parent's images. Set before the workers start, so they inherit it and share it.
+        os.environ["SCRIMMAGE_TEST_RUN"] = uuid.uuid4().hex[:12]
+        os.environ["SCRIMMAGE_TEST_RUN_OWNER"] = str(os.getpid())
     if sys.version_info >= (3, 12) or hasattr(config, "workerinput"):
         return
     coverage = sys.modules.get("coverage")
@@ -454,6 +466,17 @@ def pytest_runtest_makereport(
     return report
 
 
+def remove_run_images(session: pytest.Session) -> None:
+    """Remove the Docker images this run built, also after a failure or an interrupt. Workers
+    leave it to the controller, which outlives them."""
+    owner = os.environ.get("SCRIMMAGE_TEST_RUN_OWNER") == str(os.getpid())
+    if not owner or hasattr(session.config, "workerinput") or shutil.which("docker") is None:
+        return
+    from compose import harness
+
+    image_problems.extend(harness.remove_run_images(harness.run_id())[1])
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """In CI an unexpected skip fails the run: a safety check that did not run proves nothing.
 
@@ -461,6 +484,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     what skip_is_expected names. Under xdist only the controller has a terminal reporter,
     and it gets every worker's skips, so the check runs there and a worker does nothing.
     """
+    remove_run_images(session)
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
     # A collection report, from a skip at module level, has no user_properties.
