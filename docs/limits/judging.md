@@ -13,6 +13,7 @@ Limits of judging an answer, and of what a record keeps and removes.
 
 - **A visible space or mark inside a word hides it.** A non-breaking space is read as a plain space, and a combining accent stays on its letter, so `forbid = ["secret"]` does not find "sec ret" or "secrét".
   Only characters that are not drawn are dropped.
+  The unseen separators `\x1c` to `\x1f` and `\x85` also split a word, because they count as spaces.
 
 - **No model judges an answer, and there is no built-in list for "admits the failure".** You write the words.
 
