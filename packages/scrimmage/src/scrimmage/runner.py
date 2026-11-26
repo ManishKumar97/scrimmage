@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage import judge, labels, protocol, render, service_client
+from scrimmage import judge, labels, protocol, render, service_client, ungated
 from scrimmage import plan as planner
 from scrimmage.budget import Ledger
 from scrimmage.config import (
@@ -1624,6 +1624,57 @@ def mock_type_lines(config: Config, results: list[RunResult]) -> tuple[list[str]
     return warnings, notes
 
 
+def ungated_requests(results: list[RunResult]) -> dict[tuple[str, str], tuple[set[str], set[str]]]:
+    """The web requests sent around the gate, by (library, host): their methods and the runs
+    that sent them. A fact the record holds, so it never changes a row's result."""
+    found: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
+    for r in results:
+        if r.outcome == "stopped":
+            continue
+        for line in r.notices:
+            if line.get("notice") == "ungated":
+                key = (str(line.get("library")), str(line.get("host")))
+                methods, runs = found.setdefault(key, (set(), set()))
+                methods.add(str(line.get("method")))
+                runs.add(r.run)
+    return found
+
+
+def ungated_lines(config: Config, results: list[RunResult]) -> list[str]:
+    """One warning per test whose runs sent a web request Scrimmage does not gate."""
+    lines: list[str] = []
+    for test in config.tests:
+        found = ungated_requests([r for r in results if r.row.test == test])
+        if not found:
+            continue
+        runs = {run for _, held in found.values() for run in held}
+        sent = ", ".join(
+            f"{library} to {host} ({', '.join(sorted(methods))})"
+            for (library, host), (methods, _) in sorted(found.items())
+        )
+        writes = any(m not in ("GET", "HEAD") for methods, _ in found.values() for m in methods)
+        said = "a write there ran for real" if writes else "those requests were not gated"
+        lines.append(
+            f"in test {test.name!r} {plural(len(runs), 'run')} sent web requests that Scrimmage "
+            f"does not gate: {sent}; {said}. See {ungated.WHERE}"
+        )
+    return lines
+
+
+def ungated_json(results: list[RunResult]) -> list[dict[str, object]]:
+    """The same requests for --json: one object per library and host."""
+    return [
+        {
+            "kind": "ungated",
+            "library": library,
+            "host": host,
+            "methods": sorted(methods),
+            "runs": len(runs),
+        }
+        for (library, host), (methods, runs) in sorted(ungated_requests(results).items())
+    ]
+
+
 def recorded_call(mock: Mock) -> str:
     """A recorded mock as a person finds it: its label, and its arguments or its request."""
     if labels.kind_of(mock.call) == "http":
@@ -2172,6 +2223,7 @@ def build_report(
     typed_warnings, typed_notes = mock_type_lines(config, results)
     warnings += typed_warnings
     notes += typed_notes
+    warnings += ungated_lines(config, results)
     newer = sorted(
         {
             str(line.get("message"))
@@ -2364,6 +2416,7 @@ def report_json(found: Report) -> dict[str, object]:
         "stopped_by": found.stopped_by,
         "mock_misses": found.misses,
         "mock_misses_left_out": found.misses_left_out,
+        "notices": ungated_json(found.results),
         **control_json(found.control),
     }
 

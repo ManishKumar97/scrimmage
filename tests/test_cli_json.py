@@ -1901,3 +1901,41 @@ def test_baseline_failed_is_a_row_verdict_in_json(
     fault = rows["fault 1"]
     assert (fault["result"], fault["passed"], fault["judged"]) == ("baseline failed", 1, 1)
     assert (fault["rate"], fault["range"]) == (None, None)
+
+
+def test_ungated_requests_are_in_notices_and_change_no_result() -> None:
+    def build(sent: bool) -> tuple[str, dict[str, object]]:
+        case = CASES["passing"]()
+        if sent:
+            for r in case.results[:2]:
+                r.notices = [
+                    {
+                        "notice": "ungated",
+                        "library": "requests",
+                        "host": "api.acme.com",
+                        "method": m,
+                    }
+                    for m in ("POST", "GET")
+                ]
+        text, doc, _ = render(case.config, case.results, FOLDER, case.runner)
+        return text, doc
+
+    _, quiet = build(False)
+    text, doc = build(True)
+    assert quiet["notices"] == []
+    assert doc["notices"] == [
+        {
+            "kind": "ungated",
+            "library": "requests",
+            "host": "api.acme.com",
+            "methods": ["GET", "POST"],
+            "runs": 2,
+        }
+    ]
+    assert (doc["exit"], doc["status"], doc["rows"]) == (
+        quiet["exit"],
+        quiet["status"],
+        quiet["rows"],
+    )
+    assert any("does not gate" in m for m in messages(doc, "warnings"))
+    assert "does not gate" in text

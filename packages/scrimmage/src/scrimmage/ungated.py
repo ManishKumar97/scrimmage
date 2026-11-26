@@ -34,6 +34,7 @@ LIBRARIES = ("requests", "urllib3", "urllib.request", "aiohttp")
 FALLBACK = "http.client"
 MAX_FRAMES = 200  # how far up the stack the library is looked for
 READS = ("GET", "HEAD")
+WHERE = docs_url("limits/calls") + "#web-requests-and-recorded-mocks"
 
 _own = threading.local()
 
@@ -71,7 +72,7 @@ def message(library: str, host: str, method: str) -> str:
     result = "it was not gated" if method in READS else "it ran for real"
     return (
         f"{library} sent a {method} request to {host}; Scrimmage does not gate {library}, so "
-        f"{result}. See {docs_url('limits/calls')}#web-requests"
+        f"{result}. See {WHERE}"
     )
 
 
