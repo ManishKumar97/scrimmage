@@ -22,6 +22,8 @@ Every run is a new Python program, so nothing leaks from one run to the next.
 
 A gate is the code Scrimmage puts in front of one kind of call, so that it can decide what the call gets.
 There is a gate on a tool function, on a web request, on an MCP call and on a model call.
+There is also a gate on each process your code starts, which refuses a start the test does not allow.
+A web service has one more, at its entry, where each request reaches the app.
 The gate decides fault, mock, real or refused, does it, and writes a line to the record.
 [How it works](how-it-works.md) follows one call through its gate.
 
