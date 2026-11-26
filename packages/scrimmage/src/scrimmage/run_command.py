@@ -9,7 +9,7 @@ from pathlib import Path
 
 BOOT = Path(__file__).parent / "_boot"
 
-
+USAGE = "usage: scrimmage-run command [args...]"
 PR_SET_PDEATHSIG = 1  # linux/prctl.h
 
 
@@ -48,8 +48,13 @@ def stop_with_parent(still_mine: Callable[[int], bool]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args[:1] == ["--"]:  # the usual end of options: the command follows, even if it is -h
+        args = args[1:]
+    elif args[:1] in (["--help"], ["-h"]):  # only first: later ones belong to the command
+        print(USAGE)
+        return 0
     if not args:
-        print("usage: scrimmage-run command [args...]", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     stop_with_the_runner()
     env = dict(os.environ)

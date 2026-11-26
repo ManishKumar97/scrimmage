@@ -11,4 +11,4 @@ note: order-status baseline: 3 crashed
 test mistake: order-status fault 1: no result: 0 of 3 runs were judged, and a result needs 2
 test mistake: [[test]] 'order-status': tool:get_ordr names no tool the agent has
 test mistake: no run reported the agent's tools, so the tool labels in this file were not checked; see the run logs
-test mistake: order-status: baseline failed: every baseline run crashed, timed out, was refused or reached the budget, so its fault rows did not run
+test mistake: order-status: baseline failed: every baseline run crashed, timed out, was refused, reached the budget or hit an infrastructure error, so its fault rows did not run

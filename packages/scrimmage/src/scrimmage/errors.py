@@ -1,5 +1,12 @@
 """Scrimmage's own errors. None of them subclasses a library's error."""
 
+DOCS_SITE = "https://manishkumar97.github.io/scrimmage/"
+
+
+def docs_url(page: str) -> str:
+    """The published page for a docs file, such as configuration. A wheel has no docs folder."""
+    return f"{DOCS_SITE}{page}/"
+
 
 class ScrimmageError(Exception):
     """The base of every error Scrimmage raises."""

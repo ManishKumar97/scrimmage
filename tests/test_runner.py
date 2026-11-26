@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import jsonschema
@@ -20,7 +21,7 @@ from fakes.openai_server import FakeOpenAI, ToolNames
 from scrimmage import config, state, tool_gate
 from scrimmage import runner as runner_module
 from scrimmage.plan import Plan
-from scrimmage.runner import INFRA_LINE, Runner, report
+from scrimmage.runner import INFRA_LINE, Runner, RunResult, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
 RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
@@ -718,21 +719,25 @@ def test_a_400_after_unknown_tool_is_the_runs_outcome_not_infrastructure(
 def test_a_400_with_no_reply_fault_before_it_is_still_infrastructure(
     project: Project, fake_openai: Fake
 ) -> None:
-    """The same 400 on the second call, with no reply fault fired before it: the baseline
-    has none, and the fault row's is on call 3, which the bot never reaches, as it crashes
-    on the 400. OpenAI failing by itself. A fault that fires after a caught 400 is in
-    test_record_lines.py."""
+    """The same 400 on the second call, with no reply fault fired before it: OpenAI failing by
+    itself. Its baseline is an infrastructure error, so the fault row is not run, as for a
+    refused baseline. A fault that fires after a caught 400 is in test_record_lines.py."""
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
-    result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
+    fake = fake_openai(["acme_get_order", "real_error_tool_name"])
+    result = project.test(fake)
     said = result.out + result.err
     assert result.code == 3, said
     assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}
-    assert "model:openai returned 400, not injected" in said, said
-    for row in ("baseline", "fault 1"):
-        model = model_lines(result, row)
-        assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
-        assert not any("after_reply_fault" in x for x in model), model
+    assert "model:openai returned 400 (Invalid 'messages[1].tool_calls[0].function.name'" in said
+    assert "), not injected" in said, said
+    model = model_lines(result, "baseline")
+    assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
+    assert not any("after_reply_fault" in x for x in model), model
+    # The baseline failed by infrastructure, so the fault row is not run and spends nothing.
+    assert [lines[-1]["row"] for lines in result.records()] == ["baseline"], said
+    assert len(fake.requests) == 2, fake.requests
+    assert "baseline failed" in said and "its fault rows did not run" in said, said
 
 
 @pytest.mark.design("runner.after_reply_fault")
@@ -747,7 +752,8 @@ def test_a_500_after_a_reply_fault_is_still_infrastructure(
     result = project.test(fake_openai([], by_model={"gpt-4o-mini": rule}))
     said = result.out + result.err
     assert result.code == 3, said
-    assert "model:openai returned 500, not injected" in said, said
+    assert "model:openai returned 500 (The server had an error while" in said, said
+    assert "Sorry about that!), not injected" in said, said
     model = model_lines(result, "fault 1")
     assert [(x["action"], x.get("status")) for x in model] == [("fault", 200), ("real", 500)]
     assert "after_reply_fault" not in model[1], model[1]
@@ -787,3 +793,142 @@ def test_a_marked_400_with_no_reply_fault_line_before_it_is_still_infrastructure
     assert runner_module.real_error(marked, lines) == "model:openai returned 400", why
     fired = [line_at(1, "fault", 200, "unknown tool"), marked]
     assert runner_module.real_error(marked, fired) is None
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    ("preview", "said"),
+    [
+        ('{"error": {"message": "No such model", "type": "x"}}', " (No such model)"),
+        ('{"error": {"message": "cut mid wor', " (cut mid wor)"),
+        ("plain\ntext  body", " (plain text body)"),
+        ('{"error": {"message": "' + "a" * 300 + '"}}', f" ({'a' * 197}...)"),
+        ("", ""),
+    ],
+)
+def test_a_failed_calls_line_carries_the_providers_message_cut_to_200_characters(
+    preview: str, said: str
+) -> None:
+    line: dict[str, object] = {
+        "action": "real",
+        "call": "model:openai",
+        "status": 404,
+        "result": {"preview": preview},
+    }
+    assert runner_module.real_error(line) == "model:openai returned 404" + said
+
+
+@pytest.mark.design("runner.missing_key")
+@pytest.mark.slow
+def test_a_run_with_no_openai_key_says_which_variable_is_missing(project: Project) -> None:
+    project.monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    project.monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
+    result = project.test()
+    said = result.out + result.err
+    assert result.code == 2, said
+    assert "because OPENAI_API_KEY is not set in the environment of the test" in said, said
+    assert "see the run logs" not in said, said
+
+
+@pytest.mark.design("runner.missing_key")
+@pytest.mark.parametrize(
+    ("log", "variable"),
+    [
+        (
+            "openai.OpenAIError: Missing credentials. Please pass an `api_key`, "
+            "or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.",
+            "OPENAI_API_KEY",
+        ),
+        (
+            "TypeError: Could not resolve authentication method. Expected either api_key",
+            "ANTHROPIC_API_KEY",
+        ),
+        ("ValueError: something else", None),
+        (
+            "openai.OpenAIError: Missing credentials. Please pass one of `api_key`, "
+            "`azure_ad_token`, or the `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AD_TOKEN` "
+            "environment variables.",
+            None,
+        ),
+        ("loaded OPENAI_API_KEY from .env\nKeyError: 'x'", None),
+    ],
+)
+def test_missing_key_reads_the_providers_own_error_from_every_run_log(
+    tmp_path: Path, log: str, variable: str | None
+) -> None:
+    (tmp_path / "run-a.log").write_text("noise\n" * 5000 + log + "\n")
+    (tmp_path / "run-b.log").write_text(log + "\n")
+    runs = [cast(RunResult, SimpleNamespace(run=name)) for name in ("run-a", "run-b")]
+    assert runner_module.missing_key(tmp_path, runs) == variable
+    gone = cast(RunResult, SimpleNamespace(run="run-gone"))
+    assert runner_module.missing_key(tmp_path, [*runs, gone]) is None
+
+
+SLASHED = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE"
+SIGNED = "Tr0ub4dor&3horse<staple>"
+SPACED = "abcd/efgh  ijklmnopqrst"
+TABBED = "tab/value\tsecretvalue12345"
+
+
+def go_escape(text: str) -> str:
+    return text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    ("secret", "escape"),
+    [
+        (SLASHED, lambda t: t.replace("/", "\\/")),
+        (SIGNED, go_escape),
+        (SLASHED, lambda t: t),
+        (SPACED, lambda t: t.replace("/", "\\/")),
+        (TABBED, lambda t: t.replace("/", "\\/")),
+    ],
+    ids=["php_slash", "go_html", "plain", "double_space", "tab"],
+)
+@pytest.mark.parametrize("long", [False, True], ids=["whole", "cut"])
+def test_a_secret_the_provider_echoes_in_an_escape_is_not_printed(
+    secret: str, escape: Callable[[str], str], long: bool
+) -> None:
+    pad = "x" * 150 if long else ""
+    body = escape(json.dumps({"error": {"message": f"{pad} bad key {secret}" + "y" * 300}}))
+    entry = state.blob(body.encode(), None, scrub=[secret])
+    line: dict[str, object] = {"action": "real", "call": "model:openai", "status": 401}
+    line["result"] = entry
+    said = runner_module.real_error(line, (), [secret]) or ""
+    assert secret not in said and "returned 401" in said, said
+    assert " ".join(secret.split()) not in said, said  # the line collapses whitespace
+
+
+@pytest.mark.design("runner.provider_message")
+@pytest.mark.parametrize(
+    "message",
+    [
+        "\\u001b[2J\\u001b]0;title\\u0007red",
+        "abc\\u202edcba",
+        "a\\r\\nfake: line\\u2028b\\u0085c",
+        "\\u001b[31m" + "y" * 300,
+    ],
+)
+def test_a_providers_control_characters_are_shown_as_escapes(message: str) -> None:
+    body = '{"error": {"message": "' + message + '"}}'
+    line: dict[str, object] = {"action": "real", "call": "model:openai", "status": 400}
+    line["result"] = state.blob(body.encode(), None)
+    said = runner_module.real_error(line) or ""
+    assert said.isprintable() and "\u202e" not in said, repr(said)
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.slow
+def test_a_providers_400_and_the_skipped_fault_rows_are_filed_as_infrastructure_errors(
+    project: Project, fake_openai: Fake
+) -> None:
+    """Exit 3 is not the test's mistake, so neither line is under `test mistake:`."""
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
+    result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
+    lines = (result.out + result.err).splitlines()
+    assert result.code == 3
+    for needle in ("returned 400 (", "its fault rows did not run"):
+        [line] = [x for x in lines if needle in x]
+        assert line.startswith("infrastructure error: "), line

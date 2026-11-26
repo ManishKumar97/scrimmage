@@ -28,7 +28,7 @@ from scrimmage import runner as running
 from scrimmage.control import proc_key
 from scrimmage.decide import READ_METHODS
 from scrimmage.errors import ConfigError
-from scrimmage.outcomes import PREVIEW
+from scrimmage.outcomes import INFRA_ERROR, PREVIEW
 from scrimmage.redact import REMOVED, URL_PART_REMOVED
 from scrimmage.state import BLOB_CAP, BLOB_WAIT_S
 
@@ -1295,7 +1295,7 @@ def record_test(
     record = recorder.record
     record.asked = asked
     outs = {r.outcome for r in results}
-    if "infrastructure error" in outs:
+    if INFRA_ERROR in outs:
         record.trouble = "its record is incomplete"
         return record
     if "stopped" in outs:
@@ -1333,7 +1333,7 @@ def test_code(found: TestRecord, messages: list[tuple[str, str]]) -> int:
     name = found.test.name
     outs = [r.outcome for r in found.results]
     if found.trouble is not None:
-        if "infrastructure error" not in outs and ("stopped" in outs or found.cut):
+        if INFRA_ERROR not in outs and ("stopped" in outs or found.cut):
             # a refusal or a stop elsewhere ended it, and the report says which
             messages.append(
                 (outcomes.NOTES, f"{name}: {found.trouble}, so nothing was written for it")
