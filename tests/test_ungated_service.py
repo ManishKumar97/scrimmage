@@ -92,16 +92,19 @@ def test_a_lost_thread_of_a_closed_run_prints_the_request_and_no_refusal(
     assert [x["notice"] for x in service.report] == ["ungated"]
 
 
-@pytest.mark.parametrize("closed", [True, False])
+@pytest.mark.parametrize("how", ["closed", "gone", "open"])
 def test_a_notice_from_a_lost_thread_of_a_closed_run_prints_no_refusal(
     service: state.ProcessState,  # noqa: F811
     capsys: pytest.CaptureFixture[str],
-    closed: bool,
+    how: str,
 ) -> None:
     """A library first imported in such a thread, as http_gate.py does, calls this directly."""
     run = a_run(service, "run-a")
-    if closed:
+    closed = how != "open"
+    if how == "closed":
         run.refused = state.CLOSED
+    if how == "gone":  # the thread is tagged, but its run is no longer registered
+        service.unregister(run)
 
     def lost() -> None:
         thread = threading.Thread(
@@ -125,3 +128,37 @@ def test_a_notice_from_a_lost_thread_of_a_closed_run_prints_no_refusal(
 
 def told_lines(run: state.RunState) -> list[dict[str, object]]:
     return [x for x in sink_of(run).lines if "notice" in x]
+
+
+def test_a_close_between_the_checks_does_not_print_a_refusal(
+    service: state.ProcessState,  # noqa: F811
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The run reads open once, then closed: as when a timer thread closes it mid-notice. The
+    open reading decides, so the line goes to the run and nothing is called refused."""
+    run = a_run(service, "run-a")
+    reads = iter([None])  # the first read sees the run open, every later one sees it closed
+
+    class Closing(type(run)):  # type: ignore[misc]
+        @property
+        def refused(self) -> str | None:
+            return None if next(reads, state.CLOSED) is None else state.CLOSED
+
+        @refused.setter
+        def refused(self, value: str | None) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
+            pass
+
+    object.__setattr__(run, "__class__", Closing)
+    got: list[str] = []
+    run.notice = lambda kind, library, message, **_: got.append(message)  # type: ignore[method-assign]
+
+    def lost() -> None:
+        thread = threading.Thread(
+            target=lambda: contextvars.Context().run(service.notice, "newer_version", "httpx", "m")
+        )
+        thread.start()
+        thread.join()
+
+    joined(run).run(lost)
+    assert "is refused" not in capsys.readouterr().err
+    assert got == ["m"]
