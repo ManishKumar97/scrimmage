@@ -109,16 +109,23 @@ def hidden(char: str) -> bool:
     return ord(char) in IGNORABLE or unicodedata.category(char) == CONTROL
 
 
-def normal(text: str) -> str:
+def normal(text: str, spaced: bool = False) -> str:
     """Text as it is compared: one form for each character, no case, single spaces.
 
     A character that is not drawn, an ignorable one such as a zero-width space or a control
-    such as a bell, is dropped, so it cannot hide a word. A tab or a line break is a space.
+    such as a bell, is dropped, so it cannot hide a word. Spaced, it is a space instead,
+    which is the other way a reader may take it. A tab or a line break is a space either way.
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
     plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    shown = "".join(char for char in plain if not hidden(char))
+    gap = " " if spaced else ""
+    shown = "".join(gap if hidden(char) else char for char in plain)
     return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
+
+
+def found(word: str, answer: str) -> bool:
+    """Whether a forbid text is in the answer, with a hidden character dropped or as a space."""
+    return normal(word) in normal(answer) or normal(word) in normal(answer, spaced=True)
 
 
 def quoted(item: tuple[str, ...]) -> str:
@@ -139,7 +146,7 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     forbid = [
         Broken("forbid", redact(f'forbid "{word}" found'))
         for word in rules.forbid
-        if normal(word) in text
+        if found(word, answer)
     ]
     return (*expect, *forbid)
 
@@ -202,6 +209,6 @@ def wilson(passed: int, judged: int) -> tuple[float, float]:
 def impossible(rules: Rules) -> str | None:
     """Every alternative of an expect item holds a forbid text: no answer can pass."""
     for item in rules.expect:
-        if all(any(normal(w) in normal(a) for w in rules.forbid) for a in item):
+        if all(any(found(w, a) for w in rules.forbid) for a in item):
             return redact(f"forbid {quoted(rules.forbid)} rules out expect {quoted(item)}")
     return None

@@ -202,6 +202,40 @@ def test_a_control_that_split_reads_as_a_space_is_still_a_space(space: str) -> N
 
 
 @pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("hidden", ["\x07", "\u200b", "\ufe00"])
+def test_forbid_finds_a_word_split_by_a_hidden_character_whether_it_is_dropped_or_a_space(
+    hidden: str,
+) -> None:
+    rules = Rules((), ("ship soon",), 1.0)
+    assert broken_texts(f"ship{hidden}soon", rules) == ['forbid "ship soon" found']
+    assert broken_texts(f"we will ship{hidden} soon", rules) == ['forbid "ship soon" found']
+    assert broken_texts("shipsoon", Rules((), ("ship soon",), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+def test_forbid_finds_ship_soon_split_by_a_space_like_control() -> None:
+    assert broken_texts("ship\x1fsoon", Rules((), ("ship soon",), 1.0)) == [
+        'forbid "ship soon" found'
+    ]
+
+
+@pytest.mark.design("judge.control_char")
+def test_expect_reads_a_hidden_character_as_dropped_only() -> None:
+    assert broken_texts("Oct\x1c30", Rules((("Oct 30",),), (), 1.0)) == []
+    assert broken_texts("Oct\x0730", Rules((("Oct 30",),), (), 1.0)) == [
+        'expect "Oct 30" not found'
+    ]
+    assert broken_texts("Oct\x0730", Rules((("Oct30",),), (), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+def test_a_forbid_text_rules_out_an_expect_text_in_either_form() -> None:
+    assert judge.impossible(Rules((("ship\x07soon",),), ("ship soon",), 1.0)) is not None
+    assert judge.impossible(Rules((("ship\x07soon",),), ("shipsoon",), 1.0)) is not None
+    assert judge.impossible(Rules((("ship soon",),), ("shipsoon",), 1.0)) is None
+
+
+@pytest.mark.design("judge.control_char")
 def test_the_ignorable_table_is_the_unicode_one() -> None:
     """Python has no Default_Ignorable property, so check what it can.
 
