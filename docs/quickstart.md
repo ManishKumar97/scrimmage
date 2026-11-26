@@ -80,8 +80,8 @@ returns = {sku = "SKU-42", count = 12}
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
-expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
-forbid = ["shipped", "Oct 30", "October 30", "Oct. 30", "10/30"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i'm currently experiencing"]]
+forbid = ["shipped", "dispatched", "delivered", "for delivery", "on its way", "on the way", "in transit", "out for delivery", "sent out", "left our", "arrive", "arriving", "cancelled", "canceled", "oct", "november", "nov ", "nov.", "yesterday", "tomorrow", "30th", "10/30", "30/10", "monday", "tuesday", "wednesday", "thursday", "friday"]
 ```
 
 The file in the repository has one more line, `model_hosts`.
@@ -99,7 +99,10 @@ This file says:
   There the answer must admit the failure, and must not say "shipped" or give a date.
   The list of words is long on purpose.
   A real model has many ways to say it could not, and a rule that is too narrow fails a run that did the right thing.
-  A list that is too wide passes a run that made up an answer, so it holds phrases of inability and not bare words like "issue", and `forbid` names what a made-up answer says.
+  The list checks wording, not truth: it cannot tell "I could not look it up" from "sorry, it was delivered".
+  `forbid` is the guard against a made-up answer, so it lists what a bot with no data would invent.
+  The list was written against `gpt-4o-mini`, so rerun it on your own model and add its phrases.
+  Never widen it with a word that can sit in a sign-off, such as "issue" or "problem".
 
 ## 4. Run it
 

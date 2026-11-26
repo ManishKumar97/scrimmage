@@ -58,8 +58,8 @@ json   = {status = "shipped", date = "Oct 30"}
 [[test.fault]]
 call   = "http:orders.acme.internal"
 do     = "status 503"
-expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
-forbid = ["shipped", "Oct 30", "October 30", "Oct. 30", "10/30"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i'm currently experiencing"]]
+forbid = ["shipped", "dispatched", "delivered", "for delivery", "on its way", "on the way", "in transit", "out for delivery", "sent out", "left our", "arrive", "arriving", "cancelled", "canceled", "oct", "november", "nov ", "nov.", "yesterday", "tomorrow", "30th", "10/30", "30/10", "monday", "tuesday", "wednesday", "thursday", "friday"]
 ```
 
 `real` lets `get_order` itself run.

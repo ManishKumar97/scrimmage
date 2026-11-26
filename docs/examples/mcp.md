@@ -70,7 +70,14 @@ async def answer(question: str) -> str:
             }
             for tool in listed.tools
         ]
-        messages: list[Any] = [{"role": "user", "content": question}]
+        system = (
+            "If a tool fails, tell the user you could not look it up."
+            " Do not answer from general knowledge."
+        )
+        messages: list[Any] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
+        ]
         for _ in range(8):
             reply = await client.chat.completions.create(
                 model="gpt-4o-mini", messages=messages, tools=specs
@@ -84,6 +91,11 @@ async def answer(question: str) -> str:
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
     return "I could not finish."
 ```
+
+The system message is the fix the fault rows demand.
+Without it, `gpt-4o-mini` answered from general knowledge in about 6 fault runs in 10, saying how long refunds usually take, and the rows fail such a run.
+That is the failure these rows catch.
+With it, all 36 fault runs of our check admitted the failure.
 
 The label of an MCP tool is `mcp:<server>/<tool>`.
 The server's name is the one it gives itself, `MCPServer("docs")`, so the label is `mcp:docs/search`.
@@ -104,14 +116,14 @@ returns = {result = "Refunds take five days from the day we get the item back."}
 [[test.fault]]
 call   = "mcp:docs/search"
 do     = "timeout"
-expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
-forbid = ["five days", "5 days"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i'm currently experiencing"]]
+forbid = ["five days", "5 days", "7 days", "a week", "business days", "working days"]
 
 [[test.fault]]
 call   = "mcp:docs/search"
 do     = "error"
-expect = [["unable", "sorry", "unfortunately", "cannot", "can't", "couldn't", "not able", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "i'm currently having trouble", "i'm currently having difficult", "issue retrieving", "issue with retrieving", "issue accessing", "issue with accessing", "timeout", "server error", "server issue", "trying to retrieve", "trying to look up", "trying to access", "trying to check", "i'm experiencing", "i'm still experiencing", "i am experiencing", "i'm currently experiencing", "technical difficult"]]
-forbid = ["five days", "5 days"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i'm currently experiencing"]]
+forbid = ["five days", "5 days", "7 days", "a week", "business days", "working days"]
 ```
 
 The server declares a result shape for a tool that returns text, with one field, `result`, so the mock is written in that shape.
