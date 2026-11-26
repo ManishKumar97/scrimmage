@@ -613,13 +613,34 @@ def test_the_recording_page_records_a_real_call_and_replays_it_without_the_servi
         service.stop()
 
 
+# The budget page: the model is scripted to ask for the order again after every failure, as a
+# bot with a retry loop does, so a failed row spends until the budget is reached. One parallel
+# run at a time makes the point where it stops the same on every run.
+BUDGET = "examples/budget.md"
+BUDGET_RUN = Example(
+    ["budget_get_order", *["acme_answer|budget_get_order"] * 7],
+    [MISTAKE, MISTAKE],
+    base="examples/function-agent.md",
+)
+
+
+@pytest.mark.slow
+def test_the_budget_page_stops_the_loop_at_its_budget_and_refuses_an_unpriced_model(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(BUDGET, BUDGET_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI, RECORDING}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI, RECORDING, BUDGET}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:

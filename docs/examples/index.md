@@ -10,6 +10,7 @@ Several start from the [function agent](function-agent.md) and change one thing.
 | [An agent behind a model gateway](gateway.md) | `model_hosts` for a LiteLLM or OpenRouter host, a fault on a gateway alias, and a reply that states its cost settling the budget |
 | [Scrimmage in CI](ci.md) | A repository with a GitHub Actions workflow that runs `scrimmage check` and `scrimmage test --max-cost-usd 1`, and a failed row that fails the job |
 | [Recording what your service answers](recording.md) | `scrimmage record` on a tool under `real`, the recorded file, and a test that runs from it without the service |
+| [A budget that stops a looping agent](budget.md) | `max_cost_usd`, a price of your own, "budget reached" on a fault row that retries, and a model with no price that is refused |
 | [A script and its child process](script-agent.md) | `command`, and a write in a child process that is refused, then mocked |
 | [LangGraph tools](langgraph.md) | A graph with no `tools` list, a tool error that crashes it, and the fix |
 | [MCP tools](mcp.md) | A tool on an MCP server over stdio, mocked, timed out and failed |

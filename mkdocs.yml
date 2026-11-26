@@ -85,6 +85,7 @@ nav:
       - "Example: an agent behind a model gateway": examples/gateway.md
       - "Example: Scrimmage in CI": examples/ci.md
       - "Example: recording what a service answers": examples/recording.md
+      - "Example: a budget that stops a looping agent": examples/budget.md
       - "Example: a script and its child process": examples/script-agent.md
       - "Example: LangGraph tools": examples/langgraph.md
       - "Example: MCP tools": examples/mcp.md
