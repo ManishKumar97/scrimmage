@@ -62,6 +62,7 @@ ALL_TITLES = [
     "A live session cookie under `session_id` is kept.",
     "A long plain request keeps the threads it started plain until it ends.",
     "A long prompt costed from an estimate.",
+    "A look-alike letter is a different letter.",
     "A mock on a closed MCP session still answers.",
     "A mock's value is capped at 64 KiB of TOML.",
     "A model call from a thread is frozen inside a tool mock, with exit 0.",

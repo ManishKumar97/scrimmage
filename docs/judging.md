@@ -28,7 +28,7 @@ The rule and the answer go through the same steps first:
 
 - case is ignored;
 - a non-breaking space, a full-width letter and other Unicode variants become the plain character;
-- characters that do not show, such as a zero-width space or a soft hyphen, are dropped, so they cannot hide a word from `forbid`;
+- characters that do not show, such as a zero-width space, a soft hyphen, or a control character like a bell or a null, are dropped, so they cannot hide a word from `forbid`; a tab or a line break is not dropped, it is a space;
 - curly quotes become straight, and the dash and non-breaking hyphen forms become `-`;
 - a run of spaces or new lines becomes one space.
 
