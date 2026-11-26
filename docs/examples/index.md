@@ -6,6 +6,7 @@ Several start from the [function agent](function-agent.md) and change one thing.
 | Example | What it shows |
 |---|---|
 | [A function agent](function-agent.md) | The smallest project: a loop, two tools, a mock and an `error` fault |
+| [An agent written with the anthropic library](anthropic-agent.md) | The function agent over `messages.create`, with a mock, a tool `error` and a `status 529` model row |
 | [A script and its child process](script-agent.md) | `command`, and a write in a child process that is refused, then mocked |
 | [LangGraph tools](langgraph.md) | A graph with no `tools` list, a tool error that crashes it, and the fix |
 | [MCP tools](mcp.md) | A tool on an MCP server over stdio, mocked, timed out and failed |

@@ -124,8 +124,9 @@ def total_spend() -> Iterator[None]:
 def test_the_page_passes_on_a_real_model(name: str, tmp_path: Path) -> None:
     if os.environ.get("PYTEST_XDIST_WORKER"):
         pytest.fail("run the real check with -n 0: parallel pages would share one spend cap")
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.fail("OPENAI_API_KEY is not set; the real check needs the provider key")
+    key = f"{PAGES[name].provider.upper()}_API_KEY"
+    if not os.environ.get(key):
+        pytest.fail(f"{key} is not set; the real check needs the provider key")
     cost = run_page(name, PAGES[name], tmp_path / "project")
     spent[name] = cost
     print(f"\nREAL SPEND {name}: ${cost:.4f}")

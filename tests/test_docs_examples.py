@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
+from fakes.anthropic_server import FakeAnthropic
 from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, text_of, tool_failed
 from scrimmage.cli import main
 from scrimmage.managed import Managed
@@ -32,7 +33,7 @@ DOCS = Path(__file__).parents[1] / "docs"
 OUTPUT = "Output"
 FENCE = re.compile(r'^```(\w+)(?: title="([^"]+)")?\n(.*?)^```\n', re.M | re.S)
 # The fake model server listens on 127.0.0.1, which a team would name as its gateway.
-FAKE_HOST = 'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
+FAKE_HOST = 'model_hosts = [{{host = "127.0.0.1", provider = "{provider}"}}]\n'
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class Example:
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
     logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
+    provider: str = "openai"  # the API the agent speaks, so the fake server that answers it
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,13 @@ EXAMPLES = {
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
+    # The same bot over the anthropic library, on the fake Anthropic server.
+    "examples/anthropic-agent.md": Example(
+        ["made_order_tool_use", "made_order_answer|made_order_admits"],
+        [OK],
+        base="examples/function-agent.md",
+        provider="anthropic",
+    ),
 }
 
 
@@ -155,10 +164,11 @@ def apply(root: Path, block: Block) -> None:
     path.write_text(text.replace(old, new))
 
 
-def with_fake_host(toml: Path) -> None:
+def with_fake_host(toml: Path, provider: str = "openai") -> None:
     text = toml.read_text()
     if not re.search(r"^model_hosts", text, re.M):  # a commented line names nothing
-        toml.write_text(text.replace("[agent]\n", "[agent]\n" + FAKE_HOST, 1))
+        host = FAKE_HOST.format(provider=provider)
+        toml.write_text(text.replace("[agent]\n", "[agent]\n" + host, 1))
 
 
 def check_page(
@@ -168,6 +178,7 @@ def check_page(
     fake_openai: Callable[..., FakeOpenAI],
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    fake_anthropic: Callable[..., FakeAnthropic] | None = None,
 ) -> None:
     root = tmp_path / "project"
     if example.start:
@@ -176,16 +187,22 @@ def check_page(
     for block in blocks(example.base) if example.base else []:
         if block.title != OUTPUT:
             apply(root, block)
-    fake = fake_openai(example.replies, by_model=example.by_model)
-    monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    if example.provider == "anthropic":
+        assert fake_anthropic is not None, "an Anthropic page needs the fake Anthropic server"
+        claude = fake_anthropic(example.replies)
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", claude.base_url)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    else:
+        fake = fake_openai(example.replies, by_model=example.by_model)
+        monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
     # A page runs `python`: the venv's, whatever else PATH holds.
     monkeypatch.setenv(
         "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    run_blocks(name, root, codes, capsys, example.logs or {})
+    run_blocks(name, root, codes, capsys, example.logs or {}, example.provider)
     assert codes == example.codes
     for rule in (example.by_model or {}).values():
         assert not isinstance(rule, ByTools) or not rule.unused, (
@@ -199,6 +216,7 @@ def run_blocks(
     codes: list[int],
     capsys: pytest.CaptureFixture[str],
     logs: dict[int, str],
+    provider: str = "openai",
 ) -> None:
     """Each block of the page in order: a file is written, an Output is the command run.
 
@@ -216,7 +234,7 @@ def run_blocks(
         if block.title != OUTPUT:
             apply(root, block)
             continue
-        with_fake_host(root / "scrimmage.toml")
+        with_fake_host(root / "scrimmage.toml", provider)
         capsys.readouterr()
         codes.append(main(command))
         out = capsys.readouterr().out
@@ -236,10 +254,11 @@ def test_the_page_runs_and_prints_what_it_shows(
     name: str,
     tmp_path: Path,
     fake_openai: Callable[..., FakeOpenAI],
+    fake_anthropic: Callable[..., FakeAnthropic],
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch)
+    check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch, fake_anthropic)
 
 
 # The service page: Scrimmage starts the service with [agent] start, so the page has no line
