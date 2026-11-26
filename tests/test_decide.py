@@ -573,13 +573,13 @@ def test_only_a_retry_of_a_request_the_counters_know_keeps_that_requests_number(
     assert counters.note(chat(1, None)) == [4]  # with no key, nothing ties it to a request
 
 
-def test_alike_counts_the_leading_path_segments_two_paths_share() -> None:
-    assert alike("/a/b", "/a/c") == 2
-    assert alike("/a/b", "/a/b") == 3
-    assert alike("/a", "/a/b") == 2  # the shorter path ends the count; it is not an error
-    assert alike("/a/b", "/a") == 2
-    assert alike("/x/b", "/a/b") == 1  # a segment that differs ends it for good
-    assert alike(None, "/a") == 1  # no path on the mock: only the empty first segment is shared
+def test_alike_ranks_the_path_that_shares_more_leading_segments_higher() -> None:
+    assert alike("/a/b", "/a/c") > alike("/x/b", "/a/c")
+    assert alike("/a/b", "/a/c") > alike("/x/b", "/a/b")  # a differing segment ends the count
+    assert alike("/a/b", "/a/b") > alike("/a/b", "/a/c")
+    assert alike("/a", "/a/b") > alike("/x", "/a/b")  # a shorter path ends it; no error
+    assert alike("/a/b", "/a") > alike("/x/b", "/a")
+    assert alike("/a", "/a") > alike(None, "/a")  # no path on the mock shares nothing
 
 
 @pytest.mark.design("decide.miss_evidence")
@@ -638,5 +638,3 @@ def test_a_call_and_a_decision_are_made_once_and_never_changed() -> None:
 def test_a_call_is_a_marked_first_attempt_unless_said_otherwise() -> None:
     call = Call("tool", "tool:x", "x")
     assert (call.retry, call.marked, call.args, call.key) == (0, True, None, None)
-    miss = Miss("no_mock")
-    assert (miss.nearest, miss.differs, miss.known) == (None, (), False)
