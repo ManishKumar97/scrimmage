@@ -245,7 +245,7 @@ def test_a_timed_out_run_in_a_row_is_counted_by_the_rate_and_is_not_a_refusal() 
 
 def test_a_new_line_is_one_space_and_a_zero_width_space_is_nothing() -> None:
     assert normal("Oct\n30") == "oct 30"
-    assert normal("a​b") == "ab"
+    assert normal("a\u200bb") == "ab"
 
 
 @pytest.mark.design("judge.wilson_range")
