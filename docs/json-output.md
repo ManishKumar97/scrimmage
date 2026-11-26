@@ -100,6 +100,7 @@ The text of a message can change in any release.
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. `interrupted` when SIGINT or SIGTERM stopped it after some runs had ended: the rows count only those runs, and `result.json` is written. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
 | `mock_misses_left_out` | How many more misses than the 200 listed. |
+| `notices` | Web requests the runs sent through a client Scrimmage does not gate, one object per library and host: `kind` (`ungated`), `library`, `host`, `methods` and `runs`. A request that went this way was sent around the gate. It never changes a row's result or the exit code. It is a different shape from `service.notices` in `scrimmage check --service --json`, which holds the service's startup notices. See [Limits](limits/calls.md#web-requests-and-recorded-mocks). |
 | `runs_sent` | With a service: the requests the runner sent to it, the setup request and every run. Absent for a function or a script. |
 | `claims_received` | With a service: the claims the control server answered. Far below `runs_sent` means no service reached the control server. |
 | `control_cut` | With a service: the control server's connections that the read or whole-request timeouts cut. Near zero in a healthy test. |

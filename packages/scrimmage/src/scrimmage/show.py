@@ -359,6 +359,25 @@ def gate_of(action: str, missed: bool) -> str:
     return GATES.get(action, action)
 
 
+def ungated_line(notice: Doc) -> Doc:
+    """A web request that went around the gate, as a line of the timeline: what was sent
+    through which library, and that no gate decided it."""
+    method = str(notice.get("method") or "")
+    return {
+        "call": redact(f"{notice.get('library')} {method} {notice.get('host')}"),
+        "kind": "web",
+        "action": "ungated",
+        "start": notice.get("start"),
+        "seq": notice.get("seq"),
+        "proc": notice.get("proc"),
+        "test": notice.get("test"),
+        "row": notice.get("row"),
+        "result": "sent around the gate"
+        if method in ("GET", "HEAD")
+        else "not stopped by Scrimmage",
+    }
+
+
 def timeline(path: Path) -> tuple[list[Doc], int, int, bool]:
     """(call lines in order, lines left out, lines skipped, a bad version seen) of one record.
 
@@ -388,6 +407,9 @@ def timeline(path: Path) -> tuple[list[Doc], int, int, bool]:
             doc = cast(Doc, line)
             if not known(doc):
                 bad_version = True
+                continue
+            if doc.get("notice") == "ungated":
+                kept.append(ungated_line(doc))
                 continue
             if "summary" in doc or "action" not in doc:
                 continue
@@ -482,7 +504,8 @@ def run_doc(folder: Path, run: str, path: Path, row: Doc | None) -> tuple[Doc, l
         "log_tail": log_tail(folder, run) if outcome in BAD_ENDS else None,
         "suggestions": [],
     }
-    doc["suggestions"] = [s.doc for s in suggest.for_run(doc, kept, row)]
+    decided = [x for x in kept if x.get("action") != "ungated"]  # no gate decided those
+    doc["suggestions"] = [s.doc for s in suggest.for_run(doc, decided, row)]
     return doc, notes
 
 

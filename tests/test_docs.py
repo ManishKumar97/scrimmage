@@ -146,7 +146,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     assert 'The key `""` prices a call that sends no model name.' in page("configuration.md")
     assert "with the reply streamed or not" in guide
     safety = page("safety.md")
-    assert "`unreadable_model`" in safety and "- A chat request body" in safety
+    assert "`unreadable_model`" in safety and "- A gated chat request whose body" in safety
     assert "- A request body Scrimmage cannot read" not in safety
 
 
@@ -918,3 +918,74 @@ def test_the_setup_requests_cost_is_said_to_be_in_the_total_everywhere() -> None
     text = page("json-output.md")
     assert "no run total and no `result.json`" not in text
     assert "only its cost is in the test's `cost_usd`" in text
+
+
+CLAIM_PAGES = [
+    "README.md",
+    "packages/scrimmage/README.md",
+    "docs/index.md",
+    "docs/safety.md",
+    "docs/security.md",
+    "docs/concepts.md",
+    "docs/quickstart.md",
+]
+CLAIM_WORDS = ("never runs", "is refused", "is held", "never reaches")
+GATE_LINK = re.compile(r"concepts(\.md|/)#gate\b")
+# A sentence that says one of the words about something that is not a gated call, found by
+# a piece of its text and the reason it is not one.
+NOT_A_GATED_CALL = {
+    "A request whose time is more than 60 seconds": "the control channel's clock check",
+    "A nonce used before is refused": "the control channel's replay check",
+    "address that is not loopback with no `control_tls` is refused": "a settings mistake",
+    "A pod that breaks the standard is refused": "Kubernetes admission, not a call",
+    "refused with `401 clock`": "the control channel's clock check",
+    "A header the token made is good for 60 seconds": "the control channel's clock check",
+    "last batch with no digest is refused": "the control channel's digest check",
+    "A claim for a run's plan carries": "the control channel's version check",
+    "An edit to a string that holds a removed secret": "the redaction rule for edits",
+    "the SDK refuses a certificate": "the TLS check of the control channel",
+    "`control_tls` without `control` is refused too": "a settings mistake",
+    "a flood of forged headers costs one HMAC each": "the service's header check",
+}
+
+
+def claim_sentences(name: str) -> list[str]:
+    """The sentences of a page, one per line as the docs are written, split again at a full
+    stop followed by a space."""
+    text = (Path(__file__).parents[1] / name).read_text()
+    out: list[str] = []
+    for line in text.splitlines():
+        out += [part for part in re.split(r"(?<=\.) ", line) if part.strip()]
+    return out
+
+
+def says_gated(sentence: str) -> bool:
+    """The word gated, not ungated, not gated, aggregated or delegated."""
+    return bool(re.search(r"\bgated\b", re.sub(r"\b(un|not )gated\b", "", sentence.lower())))
+
+
+@pytest.mark.parametrize("name", CLAIM_PAGES)
+def test_every_refusal_claim_says_gated(name: str) -> None:
+    """A page may say a call never runs, is refused or never reaches the system only of a gated
+    call: a call Scrimmage does not gate runs for real."""
+    bad = [
+        s.strip()
+        for s in claim_sentences(name)
+        if any(word in s.lower() for word in CLAIM_WORDS)
+        and not says_gated(s)
+        and not GATE_LINK.search(s)
+        and not any(piece in s for piece in NOT_A_GATED_CALL)
+    ]
+    assert not bad, f"{name}: say which calls are gated, or allow the sentence: {bad}"
+
+
+def test_the_allowed_sentences_are_each_still_on_a_page() -> None:
+    text = "\n".join((Path(__file__).parents[1] / n).read_text() for n in CLAIM_PAGES)
+    assert [piece for piece in NOT_A_GATED_CALL if piece not in text] == []
+
+
+@pytest.mark.parametrize("name", [n for n in CLAIM_PAGES if n != "docs/concepts.md"])
+def test_the_first_use_of_gated_on_a_page_links_to_its_definition(name: str) -> None:
+    body = [s for s in claim_sentences(name) if not s.startswith("#")]  # a heading has no link
+    first = next((s for s in body if says_gated(s)), None)
+    assert first is None or GATE_LINK.search(first), f"{name}: link the first 'gated': {first}"

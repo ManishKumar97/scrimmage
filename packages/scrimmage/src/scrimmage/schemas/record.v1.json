@@ -832,7 +832,8 @@
             "plan_changed",
             "mock_type",
             "background",
-            "lost_context"
+            "lost_context",
+            "ungated"
           ]
         },
         "call": {
@@ -842,6 +843,19 @@
         "background_entry": {
           "type": "string",
           "description": "On a background or lost_context notice: the background_real entry that lets the call through (background) or would let it through (lost_context)."
+        },
+        "host": {
+          "type": "string",
+          "description": "On an ungated notice: the host the request went to. Never a path, query, header or body."
+        },
+        "method": {
+          "type": "string",
+          "description": "On an ungated notice: the request's method, such as POST."
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "On an ungated notice: when the request was sent, so show can place it on the timeline."
         },
         "mock": {
           "type": "integer",
