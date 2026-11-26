@@ -221,7 +221,7 @@ def test_a_thread_started_in_a_plain_request_finds_none(service: state.ProcessSt
 def test_a_worker_a_long_plain_request_started_is_plain_until_that_request_ends(
     service: state.ProcessState,
 ) -> None:
-    """A known gap, in docs/limits.md: work a run hands to a thread that a plain request,
+    """A known gap, in docs/limits/agents.md: work a run hands to a thread that a plain request,
     still open, started runs as that plain request, for real. Once the request ends, the
     same work meets the outside rules."""
     import queue

@@ -812,3 +812,26 @@ def test_a_row_is_equal_to_the_row_a_provider_made_of_it() -> None:
     for name in ("openai", "anthropic"):
         made = built_in().get(name).price("m", {"m": row})
         assert made == row
+
+
+PRICES_PAGE = "https://manishkumar97.github.io/scrimmage/prices/"
+CONFIG_PAGE = "https://manishkumar97.github.io/scrimmage/configuration/"
+
+
+def test_a_bad_provider_section_points_at_the_prices_page() -> None:
+    with pytest.raises(ConfigError, match="expected a provider's section") as caught:
+        prices.parse("top = 1\n", "the file")
+    assert PRICES_PAGE in caught.value.problems[0]
+
+
+def test_an_unknown_key_in_a_provider_section_points_at_the_prices_page() -> None:
+    with pytest.raises(ConfigError, match="colour: unknown setting") as caught:
+        prices.parse(HEAD + "colour = 1\n", "the file")
+    assert PRICES_PAGE in caught.value.problems[0]
+
+
+def test_an_unknown_key_in_a_price_row_points_at_the_configuration_page() -> None:
+    body = '[openai.models."gpt-4.1"]\ninput = 2\noutput = 8\ncolour = 1\n'
+    with pytest.raises(ConfigError, match="colour: unknown setting") as caught:
+        prices.parse(HEAD + body, "the file")
+    assert CONFIG_PAGE in caught.value.problems[0]

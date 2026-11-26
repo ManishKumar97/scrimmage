@@ -231,8 +231,26 @@ ALL_TITLES = [
 ]
 
 
+PAGES = [
+    "limits/agents.md",
+    "limits/calls.md",
+    "limits/model.md",
+    "limits/budget.md",
+    "limits/judging.md",
+]
+
+
 def lines() -> list[str]:
+    """The index page, with the fit list."""
     return (DOCS / "limits.md").read_text().split("\n")
+
+
+def area_lines(name: str) -> list[str]:
+    return (DOCS / name).read_text().split("\n")
+
+
+def all_lines() -> list[str]:
+    return lines() + [line for name in PAGES for line in area_lines(name)]
 
 
 def fit_section() -> list[str]:
@@ -266,15 +284,54 @@ def test_every_limit_is_under_a_use_case_heading() -> None:
             if above and title.group(1) not in SIX:
                 outside.append(line[:60])
     assert not outside, f"a limit is above the first use case heading: {outside}"
-    wanted = [
-        "## A function or a script agent",
-        "## An agent inside a web service",
-        "## In Docker Compose",
-        "## In a Kubernetes cluster",
-        "## General",
-    ]
-    present = [line for line in lines() if line in wanted]
-    assert present == wanted
+    wanted = {
+        "limits/agents.md": [
+            "## Writing and checking a test",
+            "## A function or a script agent",
+            "## An agent inside a web service",
+            "## In Docker Compose",
+            "## In a Kubernetes cluster",
+            "## Programs and processes",
+        ],
+        "limits/calls.md": [
+            "## Tools and frameworks",
+            "## MCP tools",
+            "## Web requests and recorded mocks",
+        ],
+        "limits/model.md": [
+            "## Providers and gateways",
+            "## Faults on tools, MCP and web requests",
+            "## Faults on a model reply",
+            "## Bodies, retries and guardrails",
+            "## Naming a model",
+            "## Refusals",
+        ],
+        "limits/budget.md": ["## The budget"],
+        "limits/judging.md": ["## Judging an answer", "## Records and secrets"],
+    }
+    for name, headings in wanted.items():
+        present = [line for line in area_lines(name) if line in headings]
+        assert present == headings, name
+    # Every area page is linked from the index, and no limit sits above its first `##` heading.
+    index = "\n".join(lines())
+    for name in PAGES:
+        assert f"]({name})" in index, name
+        page_lines = area_lines(name)
+        assert page_lines[0].startswith("# Limits: "), name
+        first = next(i for i, line in enumerate(page_lines) if line.startswith("## "))
+        above = [line[:60] for line in page_lines[:first] if line.startswith("- **")]
+        assert not above, f"{name}: a limit is above the first section heading: {above}"
+
+
+def test_the_two_refuse_limits_sit_with_the_faults_not_the_budget() -> None:
+    model = "\n".join(area_lines("limits/model.md"))
+    budget = "\n".join(area_lines("limits/budget.md"))
+    for title in (
+        '`refuse` with `form = "classifier"` names no category.',
+        "A plain `refuse` on a forced tool call or JSON is a mistake in the test.",
+    ):
+        assert f"**{title}**" in model
+        assert f"**{title}**" not in budget
 
 
 def test_each_of_the_six_links_to_its_detail() -> None:
@@ -296,6 +353,6 @@ def test_each_of_the_six_links_to_its_detail() -> None:
 
 
 def test_no_limit_is_dropped() -> None:
-    text = "\n".join(lines())
+    text = "\n".join(all_lines())
     titles = re.findall(r"^- \*\*([^*]*)\*\*", text, re.M)
     assert sorted(titles) == ALL_TITLES

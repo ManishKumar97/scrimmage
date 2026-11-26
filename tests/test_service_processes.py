@@ -1173,7 +1173,7 @@ class StartsWhenPickled:
 def test_a_reduce_that_starts_a_program_while_a_decided_send_pickles_is_not_decided_again(
     service: state.ProcessState, tmp_path: Path
 ) -> None:
-    """A known gap, in docs/limits.md: outside any request, a send background_real lists is
+    """A known gap, in docs/limits/agents.md: outside any request, a send background_real lists is
     decided once; the team's __reduce__ that the call itself pickles runs inside it and is
     not decided again. Under a run the send is refused before anything is pickled. A queue's
     feeder, which pickles later on its own thread, decides what the __reduce__ starts."""

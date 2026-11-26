@@ -30,7 +30,11 @@ It parses the code and imports nothing, so none of your code runs.
 It skips `.venv`, `venv`, `site-packages`, `node_modules`, `scrimmage-runs` and hidden folders, and it says which files it could not read as Python.
 A file over 5 MB is treated as generated: it is skipped, and reported as too large.
 A `.py` symlink that points outside the folder is not read, and a note names it, as its target is not part of the code in the folder.
-The read stops after 5000 `.py` files, in a fixed order, and a note says so, with `skipped N .py files` for the files it walked past and did not parse. That count is by name alone, with no stat, and stops at 100000 names, then says `at least`; counting 100000 names took about 1.2 seconds on a busy 4-core machine; reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
+The read stops after 5000 `.py` files, in a fixed order, and a note says so.
+The note has `skipped N .py files` for the files it walked past and did not parse.
+That count is by name alone, with no stat, and stops at 100000 names, then says `at least`.
+Counting 100000 names took about 1.2 seconds on a busy 4-core machine.
+Reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.
@@ -84,7 +88,7 @@ Each client's host gets its own provider's line, and one gateway that both clien
 The draft plus one `[[test]]` passes `scrimmage check`.
 The budget is on by default, at $5, and the shipped price file prices the current Claude models.
 A drafted Anthropic file runs as it is, unless its model is one the file does not list: then every call is refused until you set a price for the model under `[agent.prices]`, or set `max_cost_usd = "none"` to turn the budget off on purpose.
-See [Where prices come from](configuration.md#where-prices-come-from).
+See [Where prices come from](prices.md#where-prices-come-from).
 
 ## What it writes
 

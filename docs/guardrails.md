@@ -218,7 +218,7 @@ A guard that reads only the question never meets an attack in a tool result; tha
 
 Write the attack as a fault, never as a mock.
 A mock answers in the baseline row too, so a guard that misses it makes the baseline call `refund_order`.
-A refusal on the baseline is read as a mistake in the test, and the fault rows learn nothing.
+A refusal on the baseline is read as a test mistake, and the fault rows learn nothing.
 
 ## What counts as caught
 
@@ -344,7 +344,7 @@ expect = [["I'm sorry, I can't respond to that.", "Sorry, the safety check is un
 - **A fallback guard under an attack.** "Guard A is down; does guard B still catch it" needs two faults in one run.
   One fault per row keeps every rate traceable to one cause.
 - **A guard called through `requests`, `aiohttp` or `urllib`.** Not gated: a fault on it never fires, and the row says so.
-- **`replace` on a streamed reply, the Responses API, a provider that is neither OpenAI's nor Anthropic's format, or a moderation result.** See [Limits](limits.md).
+- **`replace` on a streamed reply, the Responses API, a provider that is neither OpenAI's nor Anthropic's format, or a moderation result.** See [Limits](limits/model.md).
 - **An attack whose success is only a read**, such as a request that leaks data.
   Reads run for real and no rule judges calls.
 - **A guard that reads only the question.** Attacking it is direct jailbreaking, which promptfoo, garak and PyRIT do.

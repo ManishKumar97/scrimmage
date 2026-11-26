@@ -48,13 +48,13 @@ The gate sits at the client's single attempt.
 Retries, redirects, cookies and response hooks all sit above it, so they treat an injected reply as a real one.
 `raise_for_status` in a response hook raises the same error on an injected 503 as on a real one.
 
-Other HTTP libraries, such as requests, urllib and aiohttp, are not gated. See [Limits](limits.md).
+Other HTTP libraries, such as requests, urllib and aiohttp, are not gated. See [Limits](limits/calls.md#web-requests-and-recorded-mocks).
 A write through one of them reaches the real system, and a test does not record or refuse it.
 To make the call safe, move it to httpx.
 Or list the tool that makes it under `tools`: a listed tool that is neither mocked nor under `real` never runs, so the write inside it never happens.
 
 A POST you did not write yourself goes through the same rule.
-An OAuth token request, a telemetry exporter, an MCP server over HTTP and another provider's SDK are all refused until mocked or listed, and a listed provider call is not budgeted. See [Limits](limits.md).
+An OAuth token request, a telemetry exporter, an MCP server over HTTP and another provider's SDK are all refused until mocked or listed, and a listed provider call is not budgeted. See [Limits](limits/model.md).
 
 ## The label
 

@@ -162,7 +162,7 @@ Each run in `run_details`:
 | `outcome` | How the run ended. |
 | `fault_fired` | Whether the fault fired. `null` on a baseline. |
 | `judged` | How the run counts. |
-| `left_out` | Why a run was left out of the rate, such as `the fault did not fire`, or `null`. |
+| `left_out` | Why a run was left out of the rate, such as `the fault did not fire` or `a mistake in the test`, or `null`. |
 | `cost_usd` | What this run's model calls cost. |
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
 | `mock_miss_count` | This run's calls that had a mock on their label and matched none. |

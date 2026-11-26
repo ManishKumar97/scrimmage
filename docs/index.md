@@ -9,7 +9,7 @@ It needs no change to the agent's code, as long as the agent looks each tool up 
 See [A function agent](examples/function-agent.md).
 Then it checks the answer against rules you write.
 
-For each call your agent makes through a gate, a test decides what it gets:
+For each call your agent makes through a [gate](concepts.md#gate), a test decides what it gets:
 
 - **real**: the call runs as normal, if the test allows it;
 - **mock**: a fixed answer, and the real call never happens;
@@ -30,8 +30,7 @@ It makes three kinds of connection, and no others: to its own control server, to
 That command sends a GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
 If `HTTPS_PROXY` is set, the request goes to that proxy, which sees the connection, and not straight to GitHub.
 No test run makes that connection, and nothing else in Scrimmage does.
-The control server listens on `127.0.0.1`, or, for a service in a container or a cluster, on the `control` address you set, over TLS.
-Your agent's own calls, such as model calls to your provider, go where your agent sends them, or nowhere when a test mocks, faults or refuses them.
+Where the control server listens, and what your agent's own calls do, are on [Security](security.md#your-data-stays-on-your-machine).
 Each of these statements is checked by a test; see [Security](security.md).
 
 ## Install

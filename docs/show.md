@@ -91,7 +91,7 @@ A rule that needs `X` does not fire in a run with no such line.
 
 | Code | Fits when | Says |
 |---|---|---|
-| `test_mistake` | The run was left out as a mistake in the test | The test has a mistake, which it names. Fix the test before reading the run. |
+| `test_mistake` | The run was left out as `a mistake in the test` | The test has a mistake, which it names. Fix the test before reading the run. |
 | `not_agent` | The run ended `budget reached`, `not reserved`, `infrastructure error` or `stopped` | The outcome says nothing about the agent. |
 | `fault_not_fired` | A fault row, and the fault did not fire | The agent never called the faulted call, so the row tested nothing. |
 | `fault_not_changed` | A fault row that did not fire, and a call line carries `unchanged` | The agent made the call, but the fault could not change it. The text quotes the gate's reason word for word. |
@@ -116,7 +116,7 @@ The second kind comes after the main one, and only when the run has a line for a
 
 A run that passed gets no suggestion.
 `show` picks the first run judged `fail` of each failing row, so a run that was left out of the rate never appears without `--run`.
-These rules therefore appear only with `--run RUN`: `test_mistake` when the judge left the run out as a mistake in the test, `not_agent`, `fault_not_fired`, `fault_not_changed`, and `refused_on_baseline`.
+These rules therefore appear only with `--run RUN`: `test_mistake` when the judge left the run out as `a mistake in the test`, `not_agent`, `fault_not_fired`, `fault_not_changed`, and `refused_on_baseline`.
 A refusal that is the test's own mistake, such as a tool no gate can reach or a hosted tool the test did not allow, reads `test_mistake` and not a refused call.
 A `retry_loop` counts only calls to `X` with the same arguments as the faulted one; a loop over other arguments is `timeout_after_fault`.
 Evidence lists only what a rule read: record lines by `seq` and `proc`, and `{"summary": true}` for a rule that read the run's summary line, such as `not_agent` or `rule_on_baseline`.

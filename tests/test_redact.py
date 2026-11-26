@@ -682,7 +682,7 @@ PATH_TEMPLATE = "password=C:\\new{v}"
 # The one skip in the seeded fuzz, kept narrow: a secret of PATH_TEMPLATE in a string that
 # is one whole JSON string literal. Such a string is read as JSON, so its \\n is a line break
 # and ends the value there, as on main: see "one whole JSON string literal" in
-# docs/limits.md. test_a_whole_json_string_literal_is_read_as_json pins it.
+# docs/security.md. test_a_whole_json_string_literal_is_read_as_json pins it.
 LITERAL_PATH_SECRETS: set[str] = set()
 
 
@@ -1177,7 +1177,7 @@ def test_a_kept_value_alone_is_kept_word_for_word() -> None:
 
 
 def test_a_field_name_begins_in_a_kept_value_as_it_does_anywhere_else() -> None:
-    """As in docs/limits.md: after any character that is not a letter, a digit, _ or a
+    """As in docs/security.md: after any character that is not a letter, a digit, _ or a
     backslash, and right after the =, where a NAME_ prefix takes the kept value in."""
     assert redact("next_page_token=a/token=b") == "next_page_token=a/[secret removed]"
     assert redact("next_page_token=a_token=b") == "next_page_token=[secret removed]"
@@ -1571,7 +1571,7 @@ def test_a_name_begins_after_a_url_encoded_separator(text: str, expected: str) -
 
 def test_a_name_after_a_bare_comma_in_a_named_call_is_not_code() -> None:
     """After ", " in a named call a bare name is code; after a bare comma it is removed, the
-    safe side, as docs/limits.md says."""
+    safe side, as docs/security.md says."""
     assert redact("f(token=tok,secret=sec)") == "f(token=tok,[secret removed]"
     assert redact("f(token=tok, secret=sec)") == "f(token=tok, secret=sec)"
     assert redact("f(token=tok,secret=sec!)") == "f(token=tok,[secret removed]"
@@ -1580,7 +1580,7 @@ def test_a_name_after_a_bare_comma_in_a_named_call_is_not_code() -> None:
 
 def test_an_escaped_letter_inside_a_name_is_read_only_once_the_json_is_read() -> None:
     """No JSON writer escapes an ASCII letter, so plain text keeps p\\u0061ssword= as it is,
-    as docs/limits.md says. Read out of JSON it is password=, and goes."""
+    as docs/security.md says. Read out of JSON it is password=, and goes."""
     text = "p\\u0061ssword=HUNTER2"
     assert redact(text) == text
     assert redact('{"l": "' + text + '"}') == '{"l": "[secret removed]"}'
@@ -1614,7 +1614,7 @@ def test_a_backslash_n_in_a_string_read_out_of_json_is_in_the_value() -> None:
 
 @pytest.mark.design("security.redaction_shapes")
 def test_a_whole_json_string_literal_is_read_as_json() -> None:
-    """Today's behaviour, as on main, and disclosed in docs/limits.md: a text that is one whole
+    """Today's behaviour, as on main, and disclosed in docs/security.md: a text that is one whole
     JSON string literal is read as JSON, so its \\n is a line break and ends the value."""
     text = '"password=C:\\newhunt1"'
     assert json.loads(text) == "password=C:\newhunt1"

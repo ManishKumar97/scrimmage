@@ -230,4 +230,4 @@ See [Judging an answer](judging.md) for the rules, and [Concepts](concepts.md) f
 | 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, a row with no result, or a test the budget stopped |
 | 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Scrimmage itself |
 
-Next: the [examples](examples/index.md), [Failing the model, and keeping a budget](model-faults.md), or [An agent run as a script](scripts.md) if your agent is a program and not a function.
+Next: the [examples](examples/index.md), [Failing the model](model-faults.md), [The budget](budget.md), or [An agent run as a script](scripts.md) if your agent is a program and not a function.

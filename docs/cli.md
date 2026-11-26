@@ -140,7 +140,7 @@ A provider's section that only the new file has is listed as added, whole, and o
 A file that fails its checks is exit 2, and a fetch that fails is exit 3.
 In both nothing is written.
 The folder is made mode `0700` with a `.gitignore` inside it, as `scrimmage test` makes it.
-See [Where prices come from](configuration.md#where-prices-come-from).
+See [Where prices come from](prices.md#where-prices-come-from).
 
 ## scrimmage record
 

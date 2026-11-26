@@ -1,6 +1,7 @@
-# Failing the model, and keeping a budget
+# Failing the model
 
-This guide adds two things to the [quickstart](quickstart.md) test: the model itself fails, and the test has a spending limit.
+This guide adds one thing to the [quickstart](quickstart.md) test: the model itself fails.
+The spending limit of a test is on [The budget](budget.md), and the prices it uses are on [Prices](prices.md).
 
 ## Make the model fail
 
@@ -50,7 +51,7 @@ Any status from 400 to 599 works.
 On OpenAI, `bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
 On Anthropic, a chat call gets the start of a Messages reply and a token count gets the start of a token count reply.
 The library does not retry a 200, so `bad body` meets one attempt.
-On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.
+On a streamed request it is a test mistake, and the call fails at once: a broken stream is a later fault.
 The openai library retries a connection error twice by default, and each attempt meets the fault again, so `when = "first 1"` is absorbed by the first retry.
 
 The table above names the openai library's classes.
@@ -69,7 +70,7 @@ Two more let the call happen, on a chat call only:
 | `replace`, with `text` and a `model` | the real reply, with the text of each choice replaced by `text`, or each `find` in it |
 | `slow 8s` | the real reply, eight seconds late; or the library's own timeout, if the client's is shorter |
 
-Both make the real call, so it is reserved and billed as in the baseline row.
+Both make the real call, so it is held and billed as in the baseline row.
 `replace` needs `model`, or it would rewrite every model's answer, the main model's too.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
@@ -97,7 +98,7 @@ A faulted attempt sends nothing to Anthropic and costs nothing.
 With the budget on, a call runs only if its model has a price.
 Scrimmage ships the prices of the current Claude models, read from Anthropic's pricing page, with Claude Haiku 5.5's higher rates for a prompt over 100,000 tokens and the fast mode rates.
 A model it does not list, such as a retired one, is refused with the line to paste until you set a price for it under `[agent.prices]`.
-To price a model differently from the shipped file, set it there too: see [Anthropic prices](configuration.md#anthropic-prices).
+To price a model differently from the shipped file, set it there too: see [Anthropic prices](prices.md#anthropic-prices).
 The test suite runs such an agent against a fake of the Messages API, plain and streamed, and checks that no record, blob or log holds the API key.
 
 ## A bad API key, and a prompt that is too long
@@ -121,7 +122,7 @@ An agent that shortens its prompt when it reads that code can be tested this way
 The body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
 They are not your model's context or your prompt's length.
 It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
-On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
+On a Responses call it is a test mistake, and the call fails at once: the Responses API's reply is not this one.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
 It works on `model` or `model:anthropic`, and not on a call that only counts tokens, such as `model:anthropic/input_tokens`.
@@ -158,10 +159,10 @@ What each costs:
 
 | Fault | The real call | Billed |
 |---|---|---|
-| `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is reserved |
-| `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, reserved first |
+| `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is held |
+| `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, held first |
 
-`garble`, `truncate` and `bad tool args` send the real request, so the call is reserved and costs what the baseline's does.
+`garble`, `truncate` and `bad tool args` send the real request, so the call is held and costs what the baseline's does.
 The reply's `usage` stays the model's own counts, so the line's cost is what was billed.
 The record keeps both replies: `result` is the real one, and `changed.reply` the one your agent got.
 When your agent got another status than the real reply's, as after `truncate` on tool calls alone, `changed.status` holds it.
@@ -209,7 +210,7 @@ A request that carries neither, such as a Responses request that continues by `p
 In the third case a name the request already offers gets `_v2` added again until it is not one, and after nine of them `_v10`, `_v11` and on.
 The name is cut at 64 characters, the limit of OpenAI's function names, so a long tool name loses its end and keeps the suffix.
 A label keeps its newest 64 conversations and forgets the oldest, and a tool dropped in a forgotten one gets the third form.
-A row whose `tool` is a tool the request offers is a mistake in the test, and nothing is sent: a call to an offered tool is not an unknown tool.
+A row whose `tool` is a tool the request offers is a test mistake, and nothing is sent: a call to an offered tool is not an unknown tool.
 The `_v2` name is arbitrary, not a name any model sent.
 Name the tool in the row when your test is about one name, such as `tool = "multi_tool_use.parallel"`, the dotted name OpenAI's models were seen to call in forum reports from November 2023 to July 2024.
 
@@ -233,7 +234,7 @@ The call has no arguments, and its layout is the one of a real tool call:
 | Responses | one `function_call` output item with `name`, `arguments` `"{}"`, a `call_id` and an `fc_` id, `status` `completed` | a real `gpt-4o-mini` reply, `real_response_function_call_truncated.json` |
 | Anthropic Messages | one `tool_use` block with an `id` of the form `toolu_01...`, `name`, an `input` of `{}` and `caller` `direct`, and `stop_reason` `tool_use` | a real `claude-haiku-5-5` reply, `real_tool_use.json` |
 
-Nothing is sent: the line costs 0 and nothing is reserved.
+Nothing is sent: the line costs 0 and nothing is held.
 A request where the model could not pick a tool of its own is left as it is, and the call goes on as in the baseline: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or on OpenAI offers tools in the old `functions` field only.
 The line says why.
 If your agent answers the call, the provider may refuse that request: OpenAI refuses a name that holds a dot, so `multi_tool_use.parallel` gets a 400 on the next request.
@@ -264,7 +265,7 @@ What your agent's code meets is what it meets on a real reply of that kind:
 To `garble`, a word is what lies between spaces or line breaks, and those stay as they were.
 Text in a script that puts no spaces between words, such as Thai or Japanese, is one word to it.
 
-A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits.md).
+A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits/model.md).
 
 ### Reply faults on an Anthropic call
 
@@ -292,7 +293,7 @@ Anthropic signs them, and your agent sends them back as they came, so a changed 
 A real request with a changed text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
 The request and the reply are saved as `real_thinking_resent_request.json` and `real_thinking_resent_reply.json` in the test fixtures.
 
-`refuse` and `unknown tool` are built, not sent: nothing is reserved and the line costs 0.
+`refuse` and `unknown tool` are built, not sent: nothing is held and the line costs 0.
 They are made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
 Its `usage` holds a rough count of your request's tokens and, for the plain form, 10 output tokens.
 
@@ -314,19 +315,19 @@ expect = [["cannot", "declined"]]
 ```
 
 `form` works only with `do = "refuse"`, and is `"plain"` or `"classifier"`.
-It is a mistake in the test on an OpenAI call, whose refusal has one form chosen by the request.
+It is a test mistake on an OpenAI call, whose refusal has one form chosen by the request.
 A row that writes `call = "model:openai"` is stopped by `scrimmage check` and `scrimmage test` with exit code 2 before any run.
 A row that writes `call = "model"` is stopped at the call instead, and nothing is sent.
 A plain `refuse` is also a mistake on a request that forces a tool call, with `tool_choice` of type `any` or `tool`, or that asks for JSON, with `output_config.format`: a real model answers those with the call or the JSON, so write `form = "classifier"` there.
 The row's `form` shows in `scrimmage test --json` under the row's `fault`, and on the line of the call, so two `refuse` rows that differ only by form are told apart.
 
 Reply faults need a reply that is not streamed.
-On a stream, `garble`, `truncate` and `refuse` are a mistake in the test and nothing is sent.
+On a stream, `garble`, `truncate` and `refuse` are a test mistake and nothing is sent.
 `replace` runs the real call, the agent gets its stream whole, and the line records the mistake: `replace on a model call needs a reply that is not streamed`.
 
 ### `bad tool args` on an Anthropic call
 
-It is a mistake in the test, and it is found before any run.
+It is a test mistake, and it is found before any run.
 In an Anthropic reply that is not streamed, a tool call's `input` is a JSON object, not JSON text, so it cannot fail to parse the way an OpenAI call's `arguments` can.
 A streamed reply sends the input as text, but Scrimmage changes no streamed reply.
 `scrimmage check` and `scrimmage test` stop with exit code 2 on a row that writes `call = "model:anthropic"` with `do = "bad tool args"`, and say why, before any run starts.
@@ -382,8 +383,8 @@ A request that sends the conversation in `input` and answers the call with a `fu
 
 A Responses request can ask OpenAI to look up an earlier reply, with `previous_response_id`, or an earlier item, with an `item_reference` in `input`.
 OpenAI then builds the next turn from what it stored, and it stored nothing under a faulted reply's made-up ids.
-So a request in the same run that looks up a reply or an item a fault changed or built is a mistake in the test, and it is not sent.
-A reply fault on a request in a `conversation` OpenAI keeps is a mistake in the test too, and nothing is sent: OpenAI would add the real reply to it, or none.
+So a request in the same run that looks up a reply or an item a fault changed or built is a test mistake, and it is not sent.
+A reply fault on a request in a `conversation` OpenAI keeps is a test mistake too, and nothing is sent: OpenAI would add the real reply to it, or none.
 Send the conversation in `input` instead, as the OpenAI Agents SDK does by default.
 A request that looks up a real reply goes on as in the baseline.
 
@@ -392,7 +393,7 @@ Two real requests showed OpenAI takes an assistant message and a function call u
 
 ### Where they do not work
 
-A streamed request is a mistake in the test, found from the request's `stream`, so the call fails at once and nothing is sent.
+A streamed request is a test mistake, found from the request's `stream`, so the call fails at once and nothing is sent.
 
 ## A rate limit that says how long to wait
 
@@ -462,11 +463,11 @@ How `replace` meets a reply:
 |---|---|
 | a chat completion with text | its text is changed; the line keeps the real reply, and the injected text beside it |
 | tool calls and no text, a refusal with no text, a `find` that is not in it, a status other than 200 | the agent gets it as it is; the call is not counted as fired |
-| a streamed reply | a mistake in the test: turn streaming off for that model, or fault it another way |
-| a Responses API call | a mistake in the test: `replace` works on Chat Completions only |
+| a streamed reply | a test mistake: turn streaming off for that model, or fault it another way |
+| a Responses API call | a test mistake: `replace` works on Chat Completions only |
 
 A call left as it is still uses its number in `first N`: under `first 1`, a first reply with only tool calls means no call of that run is changed.
-`slow` waits before it reserves, so a slowed call holds no budget while it waits.
+`slow` waits before it takes its hold, so a slowed call holds no budget while it waits.
 If the request's read timeout is shorter than the delay, the call ends at that timeout with the library's own error, and nothing is sent or billed.
 The openai library retries a timeout twice by default, so under `when = "always"` a guard behind it waits about three times the client timeout before the agent sees an error.
 See [Testing your guardrails](guardrails.md) for the rows that use these.
@@ -590,166 +591,6 @@ And with a budget on, any model call with no name, such as a Responses call on a
 Give calls with no name a price, as the key `""` under `[agent.prices]`, or set `max_cost_usd = "none"`.
 
 Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
-
-## Keep a budget
-
-Every test has a budget for the whole run of `scrimmage test`. It is $5 unless you change it:
-
-```toml
-[agent]
-max_cost_usd = 0.50
-```
-
-A fault row can cost far more than the baseline, such as an agent that retries a failing write in a loop.
-`run_timeout` ends a looping run, and `max_cost_usd` caps the whole test.
-
-Before each model call, Scrimmage reserves an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price, times `n` on Chat Completions, which bills the output of every choice.
-After the call, the real cost from the reply replaces the reservation.
-Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
-So calls at once cannot together pass the limit while each costs no more than it reserved.
-A call can cost more: a reply with no output limit that writes more than `reserve_output_tokens`, or an input with more tokens than the estimate, such as an image.
-Then the limit can be passed by what the calls cost above their reservations, added together; see [A call can cost more than its hold](limits.md#the-budget).
-The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
-
-To turn the budget off on purpose:
-
-```toml
-max_cost_usd = "none"
-```
-
-### When calls in flight hold the budget
-
-A hold can be much larger than what the call costs.
-On `gpt-4.1`, 4096 output tokens at $8 a million hold about $0.033, so three calls in flight hold all of a $0.10 budget while almost nothing is spent.
-A call that needs room then waits for the others to finish and give back what they did not use:
-
-| Money spent plus this call | Spent, held and this call | What happens |
-|---|---|---|
-| over the limit | any | refused at once: waiting cannot help, as spent money never comes back |
-| within the limit | within the limit | the call goes ahead |
-| within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
-
-A waiting call takes a ticket and asks again when the runner says to.
-The first in line asks again within a quarter of a second, and each call ahead adds a twentieth of a second, up to 2 seconds, with some random spread so calls that started together do not ask together.
-So 100 waiting calls ask about 100 times a second, not 400, and the runner stays quick to answer the calls that finish.
-Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
-A call is granted when it fits along with every call ahead of it in line, so many calls that all fit go ahead together.
-An async call waits on its event loop, not on a thread, so asyncio's threads stay free for other work, such as looking up host names.
-How long a call waits depends on whose calls hold the room:
-
-| The holds in the way | The longest wait | Why |
-|---|---|---|
-| this run's own calls would keep it out even if every other run finished | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
-| other runs' calls | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
-| a run that has ended | no wait: refused at once | that hold can never be given back |
-
-If the call is still held out then, it is refused and the test stops with exit code 2.
-The time a run has left counts from when Scrimmage started its program, as `run_timeout` does.
-A slow start-up before the SDK loads, such as `uv run` on a cold cache or a setup script, uses up part of that time, so the wait still ends before the run is stopped.
-A run waits on itself when a hold cannot end until the waiting call returns.
-A stream the agent keeps open across a second call does that, and so does a stream it stopped reading without closing: each keeps its hold until it is closed, or the run ends.
-Close a stream, or read it to its end, before the next call.
-
-The refusal says what the call could cost, what was spent, which calls held the rest, with their run, their label and what each held, and how long it waited.
-When spent money cannot cover a call, the call is refused at once.
-
-| How a run ends | When |
-|---|---|
-| "budget reached" | money spent reached the limit |
-| "not reserved" | the call could not fit, though money spent had not reached the limit: the money left was too little, or calls in flight held it |
-
-The table's last line says what the test spent, and a `test mistake:` line says why the test stopped:
-
-| What stopped the test | The line |
-|---|---|
-| money spent reached the limit | `the budget of $0.1 was reached: $0.1003 was spent, so the test stopped` |
-| a call could not fit, though spent money had not reached the limit | `a model call could not be reserved: it could cost up to $0.0331, $0.0800 was spent and $0.0000 was held by calls in flight, of a budget of $0.1, so the test stopped; ...` |
-| a call waited for calls in flight and still could not fit | the same, with the holds named, such as `(model:openai in run-3f2a $0.0331)`, and `after a wait of 30s for calls in flight` |
-
-A run killed while one of its calls holds money, such as one that ignored SIGTERM, leaves that hold in place, as the call may have been sent.
-It counts as spent from then on: a call it keeps out is refused at once, and the refusal names it as `left by run-3f2a, which ended while still holding`.
-The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
-
-To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
-
-### Prices
-
-Scrimmage ships prices for OpenAI models, cached input included, checked against OpenAI's pricing page on 22 November 2026.
-They cover `gpt-4o`, `gpt-4o-mini`, the `gpt-4.1` family, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna`, the `gpt-6` family, `o3`, `o3-pro`, `chat-latest`, `gpt-5-search-api` and the `text-embedding` models.
-`gpt-4o-2024-05-13` and `gpt-4.1-nano` are no longer on that page, so their prices are the ones listed on 7 November 2026.
-A model with a higher price above 272K input tokens has a `long` table with the price of a call over that size, charged on the whole call.
-Those are `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna` and every `gpt-6` model.
-The page lists these service tiers, and the file holds each for these models only:
-
-| Tier | Models |
-|---|---|
-| `flex` | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` |
-| `fast`, also found as `priority` | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3` and every `gpt-6` model |
-| `ultrafast` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.2-astra` and `gpt-6.2-sol` |
-
-`fast` and `priority` are one tier under two names, so a price that holds one of them prices both.
-`gpt-6.2-astra` and `gpt-6.2-sol` list a promotional Ultrafast rate, 3 times Standard, until 28 February 2027, and 6 times Standard after.
-The file holds the 6 times rate, so those two tiers cost twice the bill until that date.
-A reply that names a tier a model's row does not list is settled at the dearest rates the row does list, and its record line has `unpriced_tier` set and `cost_estimated` true.
-See [Long-context prices](configuration.md#long-context-prices) and [Service tiers](configuration.md#service-tiers).
-`gpt-5.6-sol` is not in the table: the page lists only a promotional price, which ends on 30 November 2026.
-Give it under `[agent.prices]`.
-A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
-For any other model, give the price in dollars per million tokens:
-
-```toml
-[agent.prices]
-llama-70b = {input = 0.6, output = 0.6}
-acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
-```
-
-### Cached input
-
-OpenAI caches a prompt over 1024 tokens that repeats, and bills the cached part at a lower price.
-Scrimmage reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
-The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost column matches the bill.
-
-| Reply | Price of each input token |
-|---|---|
-| 2048 input tokens, 1536 of them cached, on `gpt-4o-mini` | 512 at $0.15 and 1536 at $0.075 per million |
-| a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
-| a cached count above the input count, or not a whole number | every input token at `input` |
-
-The reservation before a call still counts every input token at the full price, since Scrimmage cannot know what the provider will serve from its cache.
-
-A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
-
-```toml
-[agent.prices]
-"" = {input = 2.0, output = 8.0}
-```
-
-With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
-With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
-
-A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
-On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Scrimmage leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
-
-### Cache writes
-
-On newer OpenAI models, such as `gpt-5.6-luna`, a token written to the prompt cache costs more than a plain input token: 1.25 times the input price for 30 minutes, 2.5 times for 12 hours.
-OpenAI bills each input token once, as plain input, as cached or as written, so the cached and written counts are parts of the input count.
-Scrimmage reads the written count from `input_tokens_details.cache_write_tokens` on Responses, split by `cache_write_tokens_details.ttl_30m_tokens` and `ttl_12h_tokens`, and from `prompt_tokens_details.cache_write_tokens` on Chat Completions, where writes last 30 minutes.
-OpenAI states that the counts are parts of the input count for Responses only.
-On Chat Completions, Scrimmage reads the field the openai library names in the same way, and no real Chat Completions reply with writes has confirmed it yet.
-
-| Reply | Price of each input token |
-|---|---|
-| 12000 input tokens: 4000 cached, 3000 written for 30 minutes, 4000 for 12 hours, on `"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}` | 1000 at $0.20, 4000 at $0.02, 3000 at $0.25 and 4000 at $0.50 per million |
-| a price with no `cache_write_30m` or `cache_write_12h` | written tokens at `input`, as on a model that charges nothing extra to write |
-| a written count above the input tokens not cached, or not a whole number | every input token not cached as written for 12 hours |
-| a split by lifetime with no written count | every input token not cached as written for 12 hours |
-| no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and, on Responses, `cache_write_12h` |
-
-The written counts are not on the record line; `cost_usd` includes them.
-The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
-On Chat Completions, where writes last 30 minutes, it leaves out `cache_write_12h`.
-On `gpt-5.6-luna`, 100K input tokens and 4096 output tokens reserve $0.0549 on Responses and $0.0299 on Chat Completions.
 
 ## Use a gateway
 
