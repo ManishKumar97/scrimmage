@@ -23,11 +23,32 @@ NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
-FORMAT = "Cf"  # the Unicode category of characters that do not show
 CONTROL = "Cc"  # the Unicode category of control characters, such as a bell or a null
-LINE_SPACE = "\t\n\r\x0b\x0c"  # the controls that are a space on a page
+# The controls Python's str.split() treats as a space, which they stay.
+SPLIT_SPACE = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f\x85"
+# Default_Ignorable_Code_Point, from DerivedCoreProperties.txt of Unicode 15.1.0. Such a
+# character is not drawn, so it can sit inside a word without a reader seeing it.
+IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+IGNORABLE = frozenset(code for low, high in IGNORABLE_RANGES for code in range(low, high + 1))
 COMBINING_DOT = "\u0307"
-BLANK = dict.fromkeys(map(ord, "\u034f\ufe0e\ufe0f\u1160"))  # blank, yet not of that category
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
 ENDED_BADLY = ("crashed", "timed out")
@@ -81,21 +102,22 @@ class RowResult:
     floor: int  # the judged runs this row needs for any verdict
 
 
-def leaves_mark(char: str) -> bool:
-    """False for a character that must be dropped, so it cannot sit inside a word."""
-    kind = unicodedata.category(char)
-    return kind != FORMAT and (kind != CONTROL or char in LINE_SPACE)
+def hidden(char: str) -> bool:
+    """A character that is not drawn and is not a space: it can sit inside a word."""
+    if char in SPLIT_SPACE:
+        return False
+    return ord(char) in IGNORABLE or unicodedata.category(char) == CONTROL
 
 
 def normal(text: str) -> str:
     """Text as it is compared: one form for each character, no case, single spaces.
 
-    Format characters such as a zero-width space leave no mark, so they cannot hide a word.
-    Nor can a control character such as a bell or a null; a tab or a line break is a space.
+    A character that is not drawn, an ignorable one such as a zero-width space or a control
+    such as a bell, is dropped, so it cannot hide a word. A tab or a line break is a space.
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
     plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    shown = "".join(char for char in plain.translate(BLANK) if leaves_mark(char))
+    shown = "".join(char for char in plain if not hidden(char))
     return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
 
 

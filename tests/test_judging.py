@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -171,19 +172,51 @@ def test_case_spaces_and_unicode_forms_do_not_decide_a_match(answer: str, rule: 
     assert broken_texts(answer, Rules(((rule,),), (), 1.0)) == []
 
 
+# The Default_Ignorable_Code_Point ranges, as Unicode 15.1.0 lists them. Each one is checked
+# at both ends, so a range cut short is seen.
+IGNORABLE_CASES = [
+    "\u00ad", "\u034f", "\u061c", "\u115f", "\u1160", "\u17b4", "\u17b5", "\u180b",
+    "\u180f", "\u200b", "\u200f", "\u202a", "\u202e", "\u2060", "\u2065", "\u206f",
+    "\u3164", "\ufe00", "\ufe0d", "\ufe0f", "\ufeff", "\uffa0", "\ufff0", "\ufff8",
+    "\U0001bca0", "\U0001bca3", "\U0001d173", "\U0001d17a", "\U000e0000", "\U000e0080",
+    "\U000e0100", "\U000e01ef", "\U000e0fff",
+]  # fmt: skip
+HIDDEN_NOT_IGNORABLE = ["\x00", "\x07", "\x1b", "\x7f", "\x9b"]
+SPLIT_WHITESPACE = ["\t", "\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x1f", "\x85"]
+
+
 @pytest.mark.design("judge.control_char")
-@pytest.mark.parametrize("control", ["\x00", "\x07", "\x1b", "\x7f", "\x85", "\x9b"])
-def test_a_control_character_inside_a_word_leaves_no_mark(control: str) -> None:
-    assert normal(f"sec{control}ret") == "secret"
-    assert broken_texts(f"the sec{control}ret", Rules((), ("secret",), 1.0)) == [
+@pytest.mark.parametrize("hidden", [*HIDDEN_NOT_IGNORABLE, *IGNORABLE_CASES])
+def test_a_character_that_is_not_drawn_inside_a_word_hides_nothing(hidden: str) -> None:
+    assert normal(f"sec{hidden}ret") == "secret"
+    assert broken_texts(f"the sec{hidden}ret", Rules((), ("secret",), 1.0)) == [
         'forbid "secret" found'
     ]
 
 
 @pytest.mark.design("judge.control_char")
-@pytest.mark.parametrize("space", ["\t", "\n", "\r", "\x0b", "\x0c"])
-def test_a_tab_or_a_line_break_is_still_a_space(space: str) -> None:
+@pytest.mark.parametrize("space", SPLIT_WHITESPACE)
+def test_a_control_that_split_reads_as_a_space_is_still_a_space(space: str) -> None:
     assert normal(f"Oct{space}30") == "oct 30"
+    assert broken_texts(f"Oct{space}30", Rules((("Oct 30",),), (), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+def test_the_ignorable_table_is_the_unicode_one() -> None:
+    """Python has no Default_Ignorable property, so check what it can.
+
+    Every such character is a format character, a mark, a letter or unassigned. Every format
+    character of the running Python is in the table, bar the ones Unicode draws.
+    """
+    drawn = {  # Cf characters that are not Default_Ignorable_Code_Point, as of Unicode 15.1
+        *range(0x600, 0x606), 0x6DD, 0x70F, 0x890, 0x891, 0x8E2, *range(0xFFF9, 0xFFFC),
+        0x110BD, 0x110CD, *range(0x13430, 0x13440),
+    }  # fmt: skip
+    for code in judge.IGNORABLE:
+        assert unicodedata.category(chr(code)) in {"Cf", "Mn", "Lo", "Cn"}, hex(code)
+    formats = {c for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf"}
+    assert formats - judge.IGNORABLE - drawn == set()
+    assert len(judge.IGNORABLE) == 4174
 
 
 def test_normal_touches_nothing_else() -> None:
