@@ -243,8 +243,8 @@ def test_a_timed_out_run_in_a_row_is_counted_by_the_rate_and_is_not_a_refusal() 
     assert judge_row([PASSED] * 3 + [timed_out], 4, 1.0, False).verdict == "fail"
 
 
-def test_a_control_character_is_not_a_format_character_and_stays_in_the_text() -> None:
-    assert normal("a\x07b") == "a\x07b"  # only the characters that do not show are dropped
+def test_a_new_line_is_one_space_and_a_zero_width_space_is_nothing() -> None:
+    assert normal("Oct\n30") == "oct 30"
     assert normal("a​b") == "ab"
 
 
