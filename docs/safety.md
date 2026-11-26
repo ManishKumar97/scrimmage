@@ -90,7 +90,7 @@ A Python child that would not join, because it has its own environment or a flag
 Only a start made from Python is seen, so `sh -c 'python x'` is not. See [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 So a rerun never reaches a write through a child: the child joins and is refused, or never starts.
-The exceptions are all in [Limits](limits.md).
+The exceptions are all in [Limits](limits/agents.md#a-function-or-a-script-agent).
 
 A program on another Python is not gated, and it may be something unrelated, such as `pip`, so it runs untouched.
 But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
@@ -119,7 +119,7 @@ Their contents at pickling time are not checked: an item a run changes while it 
 A send made while an item is pickled, such as one a reducer makes, is decided as any other send.
 An item put in a queue's buffer some other way is refused when the feeder reaches it, even after the run closed, and every run open at that moment is told.
 
-Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits/agents.md#a-function-or-a-script-agent).
+Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits/agents.md#an-agent-inside-a-web-service).
 
 Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
 A Python that only inherits the service's settings and never serves starts no tracker.
