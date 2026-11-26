@@ -12,7 +12,8 @@ Limits of judging an answer, and of what a record keeps and removes.
   Scrimmage drops characters that do not show, but it does not fold letters that only look alike.
 
 - **A visible space or mark inside a word hides it.** A non-breaking space is read as a plain space, and a combining accent stays on its letter, so `forbid = ["secret"]` does not find "sec ret" or "secrét".
-  Only characters that are not drawn are dropped.
+  What is dropped is the format and control characters of Unicode 16.0 and the default-ignorable ones of Unicode 15.1, which includes a few drawn marks such as the Arabic number sign U+0600.
+  That makes `expect` more lenient and `forbid` stricter, never the other way.
   The unseen separators `\x1c` to `\x1f` and `\x85` also split a word, because they count as spaces.
 
 - **No model judges an answer, and there is no built-in list for "admits the failure".** You write the words.
