@@ -122,7 +122,7 @@ def test_a_request_through_an_ungated_client_writes_one_notice(
     code, method = CLIENTS[library]
     [notice] = run_agent(control, ENV + code, U=web, Q=f"/pay?token={SECRET}")
     assert (notice["library"], notice["host"], notice["method"]) == (library, "127.0.0.1", method)
-    assert "ran for real" in notice["message"]
+    assert "a write there is not stopped by Scrimmage" in notice["message"]
 
 
 @pytest.mark.slow
@@ -141,7 +141,7 @@ def test_a_get_says_it_was_not_gated(control: ControlServer, web: str) -> None:
     code = f"import requests; requests.get({web!r} + '/a')"
     [notice] = run_agent(control, code)
     assert notice["method"] == "GET"
-    assert "it was not gated" in notice["message"] and "ran for real" not in notice["message"]
+    assert "around the gate" in notice["message"] and "write" not in notice["message"]
 
 
 @pytest.mark.slow

@@ -552,10 +552,19 @@ def test_a_request_sent_around_the_gate_is_on_the_timeline_as_ungated(
     write_lines(folder, run, [lines[0], notice, *lines[1:]])
     done = shown(capsys, str(folder))
     row = next(x for x in done.out.splitlines() if "requests POST api.acme.com" in x)
-    assert row.split()[1:] == ["requests", "POST", "api.acme.com", "ungated", "ran", "for", "real"]
+    assert row.split()[1:] == [
+        "requests",
+        "POST",
+        "api.acme.com",
+        "ungated",
+        "not",
+        "stopped",
+        "by",
+        "Scrimmage",
+    ]
     as_json = shown(capsys, str(folder), "--json")
     first = cast("list[Doc]", as_json.doc["runs"])[0]
     web = [x for x in cast("list[Doc]", first["lines"]) if x["action"] == "ungated"]
     assert [(x["call"], x["kind"], x["came_back"]) for x in web] == [
-        ("requests POST api.acme.com", "web", "ran for real")
+        ("requests POST api.acme.com", "web", "not stopped by Scrimmage")
     ]

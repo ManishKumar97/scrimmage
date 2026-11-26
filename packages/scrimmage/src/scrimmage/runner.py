@@ -1639,7 +1639,7 @@ def ungated_requests(results: list[RunResult]) -> dict[tuple[str, str], tuple[se
 
 
 def ungated_lines(config: Config, results: list[RunResult]) -> list[str]:
-    """One warning per test whose runs sent a web request Scrimmage does not gate."""
+    """One warning per test whose runs sent a web request around the gate."""
     lines: list[str] = []
     for test in config.tests:
         found = ungated_requests([r for r in results if r.row.test == test])
@@ -1650,11 +1650,14 @@ def ungated_lines(config: Config, results: list[RunResult]) -> list[str]:
             f"{library} to {host} ({', '.join(sorted(methods))})"
             for (library, host), (methods, _) in sorted(found.items())
         )
-        writes = any(m not in ("GET", "HEAD") for methods, _ in found.values() for m in methods)
-        said = "a write there ran for real" if writes else "those requests were not gated"
+        every = {m for methods, _ in found.values() for m in methods}
+        if every <= set(ungated.READS):
+            what, said = "/".join(sorted(every)), ""
+        else:
+            what, said = "web", "; a write there is not stopped by Scrimmage"
         lines.append(
-            f"in test {test.name!r} {plural(len(runs), 'run')} sent web requests that Scrimmage "
-            f"does not gate: {sent}; {said}. See {ungated.WHERE}"
+            f"in test {test.name!r} {plural(len(runs), 'run')} sent {what} requests around the "
+            f"gate: {sent}{said}. See {ungated.WHERE}"
         )
     return lines
 

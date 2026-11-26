@@ -372,7 +372,9 @@ def ungated_line(notice: Doc) -> Doc:
         "proc": notice.get("proc"),
         "test": notice.get("test"),
         "row": notice.get("row"),
-        "result": "was not gated" if method in ("GET", "HEAD") else "ran for real",
+        "result": "sent around the gate"
+        if method in ("GET", "HEAD")
+        else "not stopped by Scrimmage",
     }
 
 

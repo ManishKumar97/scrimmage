@@ -70,11 +70,8 @@ def library_of() -> str:
 
 
 def message(library: str, host: str, method: str) -> str:
-    result = "it was not gated" if method in READS else "it ran for real"
-    return (
-        f"{library} sent a {method} request to {host}; Scrimmage does not gate {library}, so "
-        f"{result}. See {WHERE}"
-    )
+    said = "" if method in READS else "; a write there is not stopped by Scrimmage"
+    return f"{library} sent a {method} request to {host} around the gate{said}. See {WHERE}"
 
 
 def targets(run: "RunState") -> "list[RunState]":

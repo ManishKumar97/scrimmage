@@ -105,10 +105,12 @@ def test_a_test_whose_runs_sent_ungated_requests_gets_one_warning_line() -> None
         results[3].notices = [ungated("urllib3", "files.acme.com", "GET")]
 
     out = printed("passing", add)
-    [line] = [x for x in out.splitlines() if "does not gate" in x]
-    assert line.startswith("warning: in test 'order-status' 4 runs sent web requests that ")
+    [line] = [x for x in out.splitlines() if "around the gate" in x]
+    assert line.startswith(
+        "warning: in test 'order-status' 4 runs sent web requests around the gate"
+    )
     assert "requests to api.acme.com (POST), urllib3 to files.acme.com (GET)" in line
-    assert "a write there ran for real" in line
+    assert "a write there is not stopped by Scrimmage" in line
     assert line.endswith("/limits/calls/#web-requests-and-recorded-mocks")
 
 
@@ -116,9 +118,9 @@ def test_a_read_through_an_ungated_client_is_not_called_a_write() -> None:
     def add(results: list[RunResult]) -> None:
         results[0].notices = [ungated("aiohttp", "api.acme.com", "GET")]
 
-    [line] = [x for x in printed("passing", add).splitlines() if "does not gate" in x]
-    assert "1 run sent" in line and "those requests were not gated" in line
-    assert "ran for real" not in line
+    [line] = [x for x in printed("passing", add).splitlines() if "around the gate" in x]
+    assert "1 run sent GET requests around the gate: aiohttp to api.acme.com (GET)" in line
+    assert "write" not in line
 
 
 def test_the_ungated_line_changes_neither_the_table_nor_the_exit_code() -> None:
@@ -127,7 +129,7 @@ def test_the_ungated_line_changes_neither_the_table_nor_the_exit_code() -> None:
 
     with_notice = printed("failing", add)
     plain = printed("failing", lambda _: None)
-    assert [x for x in with_notice.splitlines() if "does not gate" not in x] == plain.splitlines()
+    assert [x for x in with_notice.splitlines() if "around the gate" not in x] == plain.splitlines()
 
 
 def test_a_stopped_run_that_sent_an_ungated_request_is_still_reported() -> None:

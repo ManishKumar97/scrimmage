@@ -1937,5 +1937,5 @@ def test_ungated_requests_are_in_notices_and_change_no_result() -> None:
         quiet["status"],
         quiet["rows"],
     )
-    assert any("does not gate" in m for m in messages(doc, "warnings"))
-    assert "does not gate" in text
+    assert any("around the gate" in m for m in messages(doc, "warnings"))
+    assert "around the gate" in text
