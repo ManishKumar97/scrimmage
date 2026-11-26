@@ -79,6 +79,7 @@ markers = [
     "with_inherit_context_flag: cannot run under -X thread_inherit_context=1; its skip there is expected",
     "stub_record_lines: posts hand-made record lines on purpose, so the record-line schema check skips the store",
     "kind: makes a kind cluster; runs only with SCRIMMAGE_KIND=1 and -n 0",
+    "real: calls a real model and costs money; runs only with SCRIMMAGE_REAL=1 and -n 0",
 ]
 
 [tool.ruff]

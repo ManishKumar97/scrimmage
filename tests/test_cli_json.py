@@ -21,7 +21,7 @@ import jsonschema
 import pytest
 
 import scrimmage as package
-from conftest import ACME, Project
+from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
 from scrimmage import (
@@ -1292,11 +1292,7 @@ def orders_system(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def missing(project: Project, real: str, fake: FakeOpenAI) -> tuple[str, dict[str, object]]:
-    project.edit(
-        '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
-        'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n',
-        "",
-    )
+    project.edit(EXAMPLE_FAULT, "")
     project.edit(ORDERS, HAND_ARGS)
     project.edit('real     = ["tool:check_inventory"]', f"real     = {real}")
     return e2e(project, fake)

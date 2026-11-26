@@ -80,8 +80,8 @@ returns = {sku = "SKU-42", count = 12}
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
-expect = [["unable", "sorry", "try again"]]
-forbid = ["Oct 30", "October 30"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i am experiencing", "i'm currently experiencing"]]
+forbid = ["shipped", "ships", "will ship", "ship soon", "ship today", "ship tomorrow", "dispatched", "delivered", "for delivery", "on its way", "on the way", "in transit", "out for delivery", "sent out", "left our", "arrive", "arriving", "cancelled", "canceled", "oct", "november", "nov ", "nov.", "yesterday", "tomorrow", "30th", "10/30", "30/10", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "april", "june", "july", "august", "september", "december"]
 ```
 
 The file in the repository has one more line, `model_hosts`.
@@ -96,7 +96,13 @@ This file says:
 - `refund_order` is neither mocked nor safe, so if the agent calls it, the call is refused;
 - the answer must say "shipped" and give the date, in either spelling;
 - then run the same test with `get_order` timing out.
-  There the answer must admit the failure and give no date.
+  There the answer must admit the failure, and must not say "shipped" or give a date.
+  The list of words is long on purpose.
+  A real model has many ways to say it could not, and a rule that is too narrow fails a run that did the right thing.
+  The list checks wording, not truth: it cannot tell "I could not look it up" from "sorry, it was delivered".
+  `forbid` is the guard against a made-up answer, so it lists what a bot with no data would invent.
+  The list was written against `gpt-4o-mini`, so rerun it on your own model and add its phrases.
+  Never widen it with a word that can sit in a sign-off, such as "issue" or "problem".
 
 ## 4. Run it
 

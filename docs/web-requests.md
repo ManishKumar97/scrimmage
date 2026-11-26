@@ -28,17 +28,19 @@ json = {count = 12}
 [[test.fault]]
 call = "http:inventory.acme.internal"
 do = "status 503"
-expect = [["sorry", "unable"]]
-forbid = ["12"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i am experiencing", "i'm currently experiencing"]]
+forbid = ["0", "1", "3", "5", "6", "7", "8", "9", "units left", "units in stock", "dozen"]
 
 [[test.fault]]
 call = "http:inventory.acme.internal"
 do = "timeout"
-expect = [["sorry", "unable"]]
-forbid = ["12"]
+expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot", "couldn't", "could not", "don't have access", "do not have access", "i don't have", "i don't know", "timed out", "ran into", "sorry", "unfortunately", "try again", "again later", "i encountered", "i'm having trouble", "i'm having difficult", "issue retrieving", "issue with retrieving", "timeout issue", "i'm experiencing", "i am experiencing", "i'm currently experiencing"]]
+forbid = ["0", "1", "3", "5", "6", "7", "8", "9", "units left", "units in stock", "dozen"]
 ```
 
 The baseline row gets the mocked reply.
+The fault rows forbid any digit but the 4 and 2 of `SKU-42`, so a made-up count fails them.
+Any digit other than those of `SKU-42` fails the row, a retry time included.
 One fault row gets a 503 and the other a `ReadTimeout`, and in both the code in the `except` runs.
 
 ## What is covered
