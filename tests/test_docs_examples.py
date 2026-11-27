@@ -666,8 +666,8 @@ def test_the_recording_page_records_a_real_call_and_replays_it_without_the_servi
 
 
 # The budget page: the model is scripted to ask for the order again after every failure, as a
-# bot with a retry loop does, so a failed row spends until the budget is reached. One parallel
-# run at a time makes the point where it stops the same on every run.
+# bot with a retry loop does, so a failed row spends until the budget is reached. The cap and
+# the holds are chosen so that one reply crosses the cap whether or not its settle has landed.
 BUDGET = "examples/budget.md"
 BUDGET_RUN = Example(
     ["budget_get_order", *["acme_answer|budget_get_order"] * 7],
