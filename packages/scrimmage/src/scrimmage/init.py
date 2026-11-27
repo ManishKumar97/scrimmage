@@ -120,6 +120,7 @@ class Reading:
     skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
     top_level: dict[str, str] = field(default_factory=dict[str, str])  # folder: a module under it
+    top_modules: dict[str, str] = field(default_factory=dict[str, str])  # module: its folder
     unimportable: list[str] = field(default_factory=list[str])  # files with defs and no name
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
@@ -378,6 +379,8 @@ def module_name(folder: Path, path: Path, reading: Reading) -> str:
             # No code can import this folder by name, so its children are the top level, as
             # they are when the team runs from inside it.
             name = ".".join([*packages, *parts])
+            if name:
+                reading.top_modules[name] = above.name
             shown = reading.top_level.get(above.name)
             if importable(name) and (shown is None or name.count(".") > shown.count(".")):
                 reading.top_level[above.name] = name  # the deepest is the best example
@@ -1073,6 +1076,7 @@ def render(found: Findings) -> str:
             lines.append(
                 f"# And {len(others) - SHOWN_ENTRIES} more; scrimmage init --json lists them."
             )
+    lines += top_level_comments(found)
     if tools.mapped:
         entries_of_tools = [
             {"path": t.path, "name": t.name} if t.renamed else t.path for t in tools.mapped
@@ -1100,6 +1104,21 @@ def render(found: Findings) -> str:
     text = "\n".join(lines) + "\n"
     read_back(text, tools)
     return text
+
+
+def top_level_comments(found: Findings) -> list[str]:
+    """One comment for each drafted path whose module was read as top-level, because the
+    folder it sits in has a name that cannot be imported."""
+    paths = [t.path for t in found.tools.mapped]
+    if found.chosen is not None and found.chosen.kind == "function":
+        paths.insert(0, found.chosen.value)
+    lines: list[str] = []
+    for path in paths:
+        folder = found.reading.top_modules.get(path.split(":")[0])
+        if folder is not None:
+            note = f"read as top-level: {path}; run scrimmage from inside {folder}"
+            lines.append(toml_write.comment(note))
+    return lines
 
 
 def real_lines(tools: Tools) -> list[str]:

@@ -392,6 +392,10 @@ def test_a_folder_whose_name_cannot_be_imported_is_read_as_top_level(
         "python-backend is not an importable package name, so its modules are read as "
         "top-level (airline.tools); run scrimmage from inside python-backend" in notes
     )
+    text = (tmp_path / "d.toml").read_text()
+    for path in ("airline.tools:cancel", "airline.tools:lookup"):
+        assert f"# read as top-level: {path}; run scrimmage from inside python-backend\n" in text
+    assert tomllib.loads(text)["agent"]["tools"] == ["airline.tools:cancel", "airline.tools:lookup"]
     # A file the read cannot name is counted, never dropped without a word.
     assert "skipped definitions in 1 files whose names cannot be imported: my-helpers.py" in notes
 
