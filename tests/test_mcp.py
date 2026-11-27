@@ -124,7 +124,17 @@ def fits_the_schema(result: Result) -> None:
 
 
 def row(result: Result, name: str) -> list[dict[str, Any]]:
-    return next(lines for lines in result.records() if lines[-1]["row"] == name)  # type: ignore[misc]
+    # A notice (such as newer_version) is not a call line; it must not shift the call lines.
+    return next(
+        [x for x in lines if "notice" not in x]
+        for lines in result.records()
+        if lines[-1]["row"] == name
+    )
+
+
+def first_line(result: Result) -> dict[str, Any]:
+    """The first line of the only record that is not a notice."""
+    return next(x for x in result.records()[0] if "notice" not in x)
 
 
 def answer_of(result: Result, name: str = "baseline") -> str:
@@ -320,7 +330,7 @@ def test_an_unlisted_tool_is_refused_and_never_reaches_the_server(
     assert result.code == 2, result.out
     assert docs.received() == []
     assert [s["outcome"] for s in result.summaries()] == ["refused call"]
-    line = result.records()[0][0]
+    line = first_line(result)
     assert (line["call"], line["action"], line["reason"]) == (
         "mcp:docs/delete_doc",
         "refused",
@@ -503,7 +513,7 @@ def test_a_label_two_servers_match_stops_the_test(docs: Docs) -> None:
     assert "mcp:docs/search or mcp:wiki/search" in result.out
     # The test stopped: neither the fault row nor the later test ran.
     assert len(result.records()) == 1
-    assert result.records()[0][0]["reason"] == "ambiguous_label"
+    assert first_line(result)["reason"] == "ambiguous_label"
     fits_the_schema(result)
 
 
@@ -561,7 +571,7 @@ def test_a_label_that_reads_two_ways_stops_the_test(docs: Docs, kind: str) -> No
     assert result.code == 2, result.out
     assert docs.received() == []
     assert "could mean any of the tools b/c, c" in result.out
-    assert result.records()[0][0]["reason"] == "ambiguous_label"
+    assert first_line(result)["reason"] == "ambiguous_label"
 
 
 @pytest.mark.design("mcp.unused_mock")
