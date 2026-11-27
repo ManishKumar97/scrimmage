@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     import asyncio
 
 # The minor versions this release was tested with, per library.
-TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
+TESTED = {"httpx": ((0, 28), (0, 29)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__scrimmage_gate__"
 # What the gate builds faults and mocks from, in the library itself.
 BUILT_FROM = ("Response", "ByteStream", "ReadTimeout", "ConnectError", "ReadError")
