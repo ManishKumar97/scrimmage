@@ -16,6 +16,7 @@ import shlex
 import sys
 import tomllib
 import warnings
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -147,6 +148,7 @@ class Tools:
     mapped: list[Tool] = field(default_factory=list[Tool])
     adapter: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])  # name, found_by
     unresolved: list[Unresolved] = field(default_factory=list[Unresolved])
+    gates: dict[str, str] = field(default_factory=dict[str, str])  # adapter tool: its adapter
 
 
 @dataclass
@@ -673,6 +675,7 @@ def probe_tools(result: Probe, reading: Reading) -> Tools:
         paths = cast(list[str], offered["paths"])
         if offered["adapter"]:
             tools.adapter.append((name, "probe"))
+            tools.gates[name] = str(offered.get("gate", "framework adapter"))
         elif len(paths) == 1:
             tools.mapped.append(Tool(paths[0], name, "probe"))
         elif paths:
@@ -924,16 +927,18 @@ def say_found(draft: Draft, found: Findings) -> None:
 
 def tools_line(mapped: int, offered: int, tools: Tools) -> str:
     """Tools mapped over tools offered. A framework adapter's tools reach a gate by themselves,
-    so they count as covered and are never said to be unmapped."""
+    so they count as covered and are never said to be unmapped. Each says which adapter."""
     gated = len(tools.adapter)
     if not gated:
         return f"tools: {mapped} of {offered} offered to the model mapped"
+    by_gate = Counter(tools.gates.get(name, "framework adapter") for name, _ in tools.adapter)
     if gated == offered:
-        return f"tools: {offered} offered to the model, all gated by the LangChain adapter"
+        each = ", ".join(f"{n} by the {gate}" for gate, n in by_gate.items())
+        return f"tools: {offered} offered to the model, all gated ({each})"
     parts = [f"{offered} offered"]
     if mapped:
         parts.append(f"{mapped} mapped")
-    parts.append(f"{gated} gated by the LangChain adapter")
+    parts += [f"{n} gated by the {gate}" for gate, n in by_gate.items()]
     if left := offered - mapped - gated:
         names = ", ".join(printable(u.name) for u in tools.unresolved)
         parts.append(f"{left} not mapped" + (f": {names}" if names else ""))

@@ -577,6 +577,7 @@ def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url
             "name": redact(name),
             "paths": probing.paths_of(name, ctx.root),
             "adapter": name in run.adapted,
+            **({"gate": run.gates[name]} if name in run.gates else {}),
         }
         for name in dict.fromkeys(names)
     ]

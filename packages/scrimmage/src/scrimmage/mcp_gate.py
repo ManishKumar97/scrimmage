@@ -105,6 +105,7 @@ class Gate:
             label = call_for(server, name).label
             self.note(name, label)
             process.adapted.add(name)
+            process.gates[name] = "MCP gate"
             self.listed.add(label)
             if "outputSchema" in tool:
                 self.shaped.add(label)

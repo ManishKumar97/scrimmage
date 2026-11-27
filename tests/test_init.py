@@ -620,10 +620,17 @@ def test_tools_mapped_over_tools_offered(
 
 
 def adapter_probe(
-    monkeypatch: pytest.MonkeyPatch, adapter: list[str], plain: list[str], missing: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: list[str],
+    plain: list[str],
+    missing: list[str],
+    mcp: tuple[str, ...] = (),
 ) -> None:
     """A probe that offered adapter tools, tools the read maps, and tools it cannot place."""
-    offered: list[dict[str, object]] = [{"name": n, "paths": [], "adapter": True} for n in adapter]
+    offered: list[dict[str, object]] = [
+        {"name": n, "paths": [], "adapter": True, "gate": "LangChain adapter"} for n in adapter
+    ]
+    offered += [{"name": n, "paths": [], "adapter": True, "gate": "MCP gate"} for n in mcp]
     offered += [{"name": n, "paths": [f"m:{n}"], "adapter": False} for n in plain]
     offered += [{"name": n, "paths": ["a:" + n, "b:" + n], "adapter": False} for n in missing]
     request = {"host": "api.openai.com", "method": "POST", "path": "/v1/chat/completions"}
@@ -645,8 +652,32 @@ def test_tools_all_gated_by_an_adapter_are_not_counted_as_unmapped(
     args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
     assert cli.main(args) == OK
     out = capsys.readouterr().out
-    assert "tools: 8 offered to the model, all gated by the LangChain adapter\n" in out
+    assert "tools: 8 offered to the model, all gated (8 by the LangChain adapter)\n" in out
     assert "mapped" not in out.split("tools:")[1].splitlines()[0]
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_each_adapter_tool_is_said_to_be_gated_by_its_own_adapter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(tmp_path, {"bot.py": ENTRY})
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(6)], [], [], mcp=("m1", "m2"))
+    capsys.readouterr()
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    expected = (
+        "tools: 8 offered to the model, all gated (6 by the LangChain adapter, 2 by the MCP gate)\n"
+    )
+    assert expected in out
+    adapter_probe(monkeypatch, ["t0", "t1"], [], ["x"], mcp=("m1",))
+    (tmp_path / "b.toml").unlink()
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert (
+        "tools: 4 offered, 2 gated by the LangChain adapter, 1 gated by the MCP gate, "
+        "1 not mapped: x\n" in out
+    )
 
 
 @pytest.mark.design("init.adapter_numbers")

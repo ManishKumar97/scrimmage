@@ -114,6 +114,7 @@ def patch(module: ModuleType, owner: ProcessState | RunState, stop: Callable[[st
         reason = skips_gate(tool, library)
         if reason is None:
             process.adapted.add(tool.name)  # offered to the model, it will reach a gate
+            process.gates[tool.name] = "LangChain adapter"
         else:
             process.blocked[tool.name] = reason
         return reason

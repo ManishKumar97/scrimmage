@@ -247,6 +247,7 @@ class ProcessState:
     def __init__(self, tools: Iterable[str] = (), *, service: bool = False) -> None:
         self.listed = set(tools)  # names gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
+        self.gates: dict[str, str] = {}  # each adapted name: the adapter that checked it
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
         self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.service = service
@@ -453,6 +454,10 @@ class RunState:
     @property
     def adapted(self) -> set[str]:
         return self.process.adapted
+
+    @property
+    def gates(self) -> dict[str, str]:
+        return self.process.gates
 
     @property
     def blocked(self) -> dict[str, str]:
