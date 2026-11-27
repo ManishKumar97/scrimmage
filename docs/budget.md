@@ -18,6 +18,7 @@ A fault row can cost far more than the baseline, such as an agent that retries a
 
 Before each model call, Scrimmage holds an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price, times `n` on Chat Completions, which bills the output of every choice.
 After the call, the real cost from the reply replaces the hold.
+The replacement reaches the runner before the same run's next call is checked, so a program that makes one call at a time is checked against what its calls cost.
 Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
 So calls at once cannot together pass the limit while each costs no more than it held.
 A call can cost more: a reply with no output limit that writes more than `reserve_output_tokens`, or an input with more tokens than the estimate, such as an image.
