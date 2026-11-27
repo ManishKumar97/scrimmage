@@ -7,6 +7,8 @@ A model fault is an Anthropic error, and a call is priced from the reply's own `
 
 Libraries this example needs: `anthropic`.
 This page was checked with anthropic 2.12.
+The repository's tests run it on a scripted model, and the release check runs it once on `claude-haiku-5-5`.
+Costs and the model's words differ from the page.
 
 ## The files
 

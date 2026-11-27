@@ -7,9 +7,11 @@ Every turn is a model call that costs money.
 
 Libraries this example needs: `openai`.
 This page was checked with openai 3.46.
-The repository's tests run it on a scripted model that asks again after every failure, as a bot with a retry loop does, and that reasons before each tool call.
+The repository's tests run it on a scripted model that asks again after every failure, as a bot with a retry loop does.
+Its scripted reply stands in for a long reply: it reports 400 output tokens, 383 of them reasoning, so a call costs more than it held.
+`gpt-4o-mini` does not reason, so a real model gives smaller costs.
 The release check runs it once on `gpt-4o-mini`, where the model may answer after the first failure and never reach the cap.
-Then the page's numbers differ, and the check asserts only that the test stops at or under its budget.
+Then the page's numbers differ, and the check asserts only that the test stays within its budget, or passes it with the `warning:` line that says the last calls cost more than their holds.
 
 ## The files
 
@@ -79,7 +81,8 @@ In the fault row the first run's first reply cost $0.0128, more than the call he
 That took the money spent, $0.0527, over the cap, and Scrimmage refused the bot's next call: "budget reached".
 The test stopped with exit code 2, and the fault row has no result, as only one run began.
 
-The cap is passed by what the last call cost above its hold.
+The cap is passed by what the last calls cost above their holds.
+On this page one call does it; with other settings several calls can, as [The budget](../limits/budget.md) says.
 Scrimmage cannot know how long a reply will be before it is sent, and the `warning:` line says so.
 The 7 turns left in the bot's 8 never ran.
 
