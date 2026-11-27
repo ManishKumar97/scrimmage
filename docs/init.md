@@ -162,6 +162,9 @@ A script entry point is never probed: its command can do anything before Python 
 | Crashed, or passed its 120 seconds | `crashed, see <log>` or `timed out, see <log>` |
 
 When no tools are known, the candidates from reading the code stand.
+The `tools:` line counts a framework adapter's tools as covered.
+When every tool the model was offered is an adapter tool it reads `tools: 8 offered to the model, all gated by the LangChain adapter`.
+With a mix it reads `tools: 8 offered, 6 gated by the LangChain adapter, 2 not mapped: x, y`, and names only the tools it could not map.
 The number to read is `numbers`: `tools_mapped` over `tools_offered`.
 
 | Exit code | Meaning |

@@ -619,6 +619,49 @@ def test_tools_mapped_over_tools_offered(
     assert "tools: 4 of 5 offered to the model mapped" in capsys.readouterr().out
 
 
+def adapter_probe(
+    monkeypatch: pytest.MonkeyPatch, adapter: list[str], plain: list[str], missing: list[str]
+) -> None:
+    """A probe that offered adapter tools, tools the read maps, and tools it cannot place."""
+    offered: list[dict[str, object]] = [{"name": n, "paths": [], "adapter": True} for n in adapter]
+    offered += [{"name": n, "paths": [f"m:{n}"], "adapter": False} for n in plain]
+    offered += [{"name": n, "paths": ["a:" + n, "b:" + n], "adapter": False} for n in missing]
+    request = {"host": "api.openai.com", "method": "POST", "path": "/v1/chat/completions"}
+    notice = {"tools": offered, "model_request": {**request, "provider": "openai"}}
+    monkeypatch.setattr(
+        drafting,
+        "run_probe",
+        lambda *a: drafting.Probe(True, "stopped at POST", cast(dict[str, object], notice)),
+    )
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_tools_all_gated_by_an_adapter_are_not_counted_as_unmapped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(8)], [], [])
+    write(tmp_path, {"bot.py": ENTRY})
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert "tools: 8 offered to the model, all gated by the LangChain adapter\n" in out
+    assert "mapped" not in out.split("tools:")[1].splitlines()[0]
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_a_mix_of_adapter_and_other_tools_says_each_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(6)], [], ["x", "y"])
+    write(tmp_path, {"bot.py": ENTRY})
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert "tools: 8 offered, 6 gated by the LangChain adapter, 2 not mapped: x, y\n" in out
+
+
 def test_a_probe_with_no_offer_keeps_the_static_tools_and_a_name_found_only_by_the_read(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

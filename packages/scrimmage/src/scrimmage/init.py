@@ -878,8 +878,7 @@ def say_found(draft: Draft, found: Findings) -> None:
     lines.append(probe_line(found))
     numbers = numbers_of(found)
     if numbers is not None:
-        mapped, offered = numbers["tools_mapped"], numbers["tools_offered"]
-        lines.append(f"tools: {mapped} of {offered} offered to the model mapped")
+        lines.append(tools_line(numbers["tools_mapped"], numbers["tools_offered"], tools))
     else:
         lines.append(f"tools: {len(tools.mapped)} found by reading the code")
     lines += [f"  {printable(t.path)}" for t in tools.mapped]
@@ -891,6 +890,24 @@ def say_found(draft: Draft, found: Findings) -> None:
     if found.hosts:
         hosts = ", ".join(f"{h['host']} ({h['provider']})" for h in found.hosts)
         lines.append(f"model hosts: {printable(hosts)}")
+
+
+def tools_line(mapped: int, offered: int, tools: Tools) -> str:
+    """Tools mapped over tools offered. A framework adapter's tools reach a gate by themselves,
+    so they count as covered and are never said to be unmapped."""
+    gated = len(tools.adapter)
+    if not gated:
+        return f"tools: {mapped} of {offered} offered to the model mapped"
+    if gated == offered:
+        return f"tools: {offered} offered to the model, all gated by the LangChain adapter"
+    parts = [f"{offered} offered"]
+    if mapped:
+        parts.append(f"{mapped} mapped")
+    parts.append(f"{gated} gated by the LangChain adapter")
+    if left := offered - mapped - gated:
+        names = ", ".join(printable(u.name) for u in tools.unresolved)
+        parts.append(f"{left} not mapped" + (f": {names}" if names else ""))
+    return "tools: " + ", ".join(parts)
 
 
 def probe_line(found: Findings) -> str:
