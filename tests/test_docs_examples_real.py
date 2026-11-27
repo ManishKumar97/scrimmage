@@ -236,7 +236,7 @@ def test_the_budget_page_stops_at_its_budget_on_a_real_model(tmp_path: Path) -> 
         runs.append(run)
     looping, unpriced = runs
     spent_usd, budget = (float(x) for x in BUDGET_LINE.findall(looping.stdout)[0])
-    # --max-cost-usd lowers the page's $0.06 to the $0.05 page cap, and the run says so.
+    # The page's budget is the $0.05 page cap, and --max-cost-usd 0.05 leaves it as it is.
     assert budget == CAP
     assert spent_usd <= budget or "warning: the test spent more than its budget" in looping.stdout
     assert looping.returncode in (0, 1, 2), looping.stdout + looping.stderr

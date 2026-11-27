@@ -21,8 +21,8 @@ Replace `scrimmage.toml` to set a budget, and a price of your own:
 [agent]
 function              = "shop.agent:answer"
 tools                 = ["shop.tools:get_order", "shop.tools:refund_order"]
-max_cost_usd          = 0.06
-reserve_output_tokens = 64
+max_cost_usd          = 0.05
+reserve_output_tokens = 192
 parallel              = 1
 
 [agent.prices]
@@ -45,15 +45,15 @@ expect = [["unable", "not able", "wasn't able", "was not able", "can't", "cannot
 forbid = ["shipped", "ships", "will ship", "ship soon", "ship today", "ship tomorrow", "dispatched", "delivered", "for delivery", "on its way", "on the way", "in transit", "out for delivery", "sent out", "left our", "arrive", "arriving", "cancelled", "canceled", "oct", "november", "nov ", "nov.", "yesterday", "tomorrow", "30th", "10/30", "30/10", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "april", "june", "july", "august", "september", "december"]
 ```
 
-- `max_cost_usd` is $0.06 for the whole `scrimmage test`, not for each run.
+- `max_cost_usd` is $0.05 for the whole `scrimmage test`, not for each run.
   The default is $5.
 - `[agent.prices]` gives `gpt-4o-mini` a price of your own, in dollars per million tokens: $10 for input and $30 for output.
   It is read before the shipped price, so it wins.
   The real price is far lower, so this short test spends enough to meet the cap.
 - `reserve_output_tokens` is what a call holds before it is sent, when it sets no `max_tokens`.
   At the default of 4096 and $30 a million, one call would hold $0.12 and the cap could never fit it.
-  Here it is 64, so a call holds far less.
-- `parallel = 1` runs one run at a time, so the point where the cap is reached does not depend on timing.
+  Here it is 192, so a call holds far less.
+- `parallel = 1` runs one run at a time.
 
 ## Run it
 
@@ -65,24 +65,23 @@ scrimmage test
 scrimmage test: 1 test, 2 rows, 4 runs; records in /home/me/shop/scrimmage-runs/20261126T085802Z-9ee666
 test          row       fault                 runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                     3     -      3     3/3     100%  44-100%  1.0    0.03993  pass
-order-status  fault 1   tool:get_order error  1     1      0     0/0     -     -        2.0    0.02564  no result
+order-status  fault 1   tool:get_order error  1     1      0     0/0     -     -        1.0    0.01282  no result
 range: a 95% Wilson interval, from these runs alone
-model calls cost $0.0656 of a budget of $0.06
-warning: the test spent more than its budget of $0.06, because the last calls cost more than was reserved for them
+model calls cost $0.0527 of a budget of $0.05
+warning: the test spent more than its budget of $0.05, because the last calls cost more than was reserved for them
 note: order-status fault 1: 1 budget reached
 test mistake: order-status fault 1: no result: 0 of 3 runs were judged, and a result needs 2
-test mistake: the budget of $0.06 was reached: $0.0656 was spent, so the test stopped; rows without runs have no result
+test mistake: the budget of $0.05 was reached: $0.0527 was spent, so the test stopped; rows without runs have no result
 ```
 
 The baseline passed, and its 3 runs cost $0.04.
-In the fault row the first run asked the model again after each failure.
-Each reply cost $0.0128, more than the call held, because the model reasoned before it called the tool.
-After 2 turns the money spent, $0.0656, was over the cap, and Scrimmage refused the next call: "budget reached".
+In the fault row the first run's first reply cost $0.0128, more than the call held, because the model reasoned before it called the tool.
+That took the money spent, $0.0527, over the cap, and Scrimmage refused the bot's next call: "budget reached".
 The test stopped with exit code 2, and the fault row has no result, as only one run began.
 
-The cap is passed by what the last calls cost above their holds, and by no more than that.
+The cap is passed by what the last call cost above its hold.
 Scrimmage cannot know how long a reply will be before it is sent, and the `warning:` line says so.
-The rest of the loop never ran: the 6 turns left in the bot's 8 cost nothing.
+The 7 turns left in the bot's 8 never ran.
 
 ## A model with no price
 
@@ -104,7 +103,7 @@ test          row       fault                 runs  fired  done  passed  rate  r
 order-status  baseline  -                     1     -      0     0/0     -     -      0.0    0.00000  no result
 order-status  fault 1   tool:get_order error  0     0      0     0/0     -     -      0.0    0.00000  baseline failed
 range: a 95% Wilson interval, from these runs alone
-model calls cost $0.0000 of a budget of $0.06
+model calls cost $0.0000 of a budget of $0.05
 note: order-status baseline: 0 of 1 runs judged; 3 were planned
 note: order-status baseline: 1 refused call
 test mistake: order-status baseline: run-aeaa4044c364 made a call the test does not allow; see its record
