@@ -258,6 +258,13 @@ class ControlServer:
             return 400, {"error": "bad_request"}
         if not usd >= 0:  # NaN too
             return 400, {"error": "bad_request"}
+        settles = self._settles(request)
+        if settles is None:
+            return 400, {"error": "bad_request"}
+        # The run's finished calls first: money spent is spent, so they count even if the run
+        # has closed, and the reservation below is checked against what they really cost.
+        for reservation, spent in settles:
+            self.ledger.settle(reservation, spent)
         # Answered at once, never held: a waiter asks again, and one that has gone stops
         # asking. Under the run lock, so a run that has closed is granted nothing.
         with self.lock:
@@ -268,6 +275,26 @@ class ControlServer:
         if isinstance(reservation, Shortfall):
             return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
+
+    @staticmethod
+    def _settles(request: dict[str, object]) -> list[tuple[int, float]] | None:
+        """The settles a reserve carries, or None if one is not valid, so none is applied."""
+        carried = request.get("settles")
+        if carried is None:
+            return []
+        if not isinstance(carried, list):
+            return None
+        settles: list[tuple[int, float]] = []
+        try:
+            for item in cast(list[object], carried):
+                line = obj(item)
+                spent = number(line, "usd")
+                if not spent >= 0:  # NaN too
+                    return None
+                settles.append((int(str(line["reservation"])), spent))
+        except (ValueError, KeyError):
+            return None
+        return settles
 
     def _release(self, body: bytes) -> tuple[int, dict[str, object]]:
         try:

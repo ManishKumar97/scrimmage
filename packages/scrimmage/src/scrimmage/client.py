@@ -30,6 +30,7 @@ from scrimmage.redact import redact
 QUEUE_SIZE = 10_000
 BATCH_LINES = 500
 BATCH_S = 0.1
+SETTLES_PER_RESERVE = 256  # about 20 KB; any more wait for the sender
 TIMEOUT_S = 10.0
 PING_TIMEOUT_S = 5.0  # the probe's ping must not hold the probe for a whole TIMEOUT_S
 BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
@@ -99,6 +100,8 @@ class ControlClient:
         self.busy: deque[float] = deque(maxlen=ROUND_TRIPS)  # when a request found no slot
         self._load = threading.Lock()
         self._held = threading.local()  # this thread runs work for a slot taken on a loop
+        # Each run's sender, whose queued settles a reserve of that run carries with it.
+        self.senders: dict[str, Sender] = {}
 
     def try_slot(self, *, count: bool = True) -> bool:
         """Take a slot if one is free; if not, count the request as turned away, unless the
@@ -268,10 +271,24 @@ class ControlClient:
         """Reserve what a model call could cost, or say why the budget cannot cover it now.
 
         The server answers at once. A caller that waits asks again with its ticket.
+
+        The run's own queued settles go in the same request, and the ledger applies them
+        before the reservation: it counts what the finished calls cost, not what they held,
+        so a caller that makes one call at a time cannot pass the limit, and it waits for no
+        second request. A request that does not get through gives them back to the queue.
         """
-        payload = {"run": run, "usd": usd, "label": label, "ticket": ticket}
-        status, reply = self.request("POST", "/v1/budget/reserve", payload)
+        sender = self.senders.get(run)
+        settles = [] if sender is None else sender.take_settles()
+        payload = {"run": run, "usd": usd, "label": label, "ticket": ticket, "settles": settles}
+        try:
+            status, reply = self.request("POST", "/v1/budget/reserve", payload)
+        except BaseException:
+            if sender is not None:
+                sender.give_back_settles(settles)
+            raise
         if status != 200:
+            if sender is not None:
+                sender.give_back_settles(settles)
             raise ControlError(f"the budget could not be checked: {reply.get('error')}")
         try:
             if reply.get("ok") is True:
@@ -326,6 +343,7 @@ class Sender:
         self.plan_of: Callable[[], dict[str, object]] | None = None
         self.since = time.monotonic()  # the control load in the last batch counts from here
         self._fresh()
+        client.senders[run] = self
 
     def _fresh(self) -> None:
         self.queue: queue.Queue[dict[str, object]] = queue.Queue(QUEUE_SIZE)
@@ -345,6 +363,10 @@ class Sender:
         self.after_drain: Callable[[], None] | None = None
         self._counts = threading.Lock()  # made and dropped; never held over the network
         self._sending = threading.Lock()  # one batch in flight at a time
+        # Held while one settle is sent, and while a reserve takes the queued ones: the reserve
+        # then never overtakes a settle in flight. Reentrant, as a signal handler that makes a
+        # call runs on a thread that may be inside either.
+        self._settling = threading.RLock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="scrimmage-sender", daemon=True)
 
@@ -396,6 +418,23 @@ class Sender:
         """Queue the real cost of a call. Never dropped."""
         self.settles.append({"run": self.run, "reservation": reservation, "usd": usd})
         self._send_now()
+
+    def take_settles(self) -> list[dict[str, object]]:
+        """Up to SETTLES_PER_RESERVE queued settles, taken off the queue to ride on a reserve.
+        A line is in the queue or in the caller's hands, never both, so this process sends
+        none twice. The ledger ignores one it has settled, for a reply that was lost."""
+        taken: list[dict[str, object]] = []
+        with self._settling:  # a settle the sender is sending is counted before this reserve
+            while len(taken) < SETTLES_PER_RESERVE:
+                try:
+                    taken.append(self.settles.popleft())
+                except IndexError:
+                    break
+        return taken
+
+    def give_back_settles(self, taken: list[dict[str, object]]) -> None:
+        """The reserve did not get through: the settles are queued again, in their order."""
+        self.settles.extendleft(reversed(taken))
 
     def flush(self) -> None:
         """Send everything queued now, then the closing batch. Called at exit.
@@ -509,14 +548,29 @@ class Sender:
         return False
 
     def _send_posts(self) -> None:
+        # A settle is off the queue while it is sent, as a reserve may take the rest, and is
+        # put back unless the runner accepted it, so an exception in the send loses none.
+        # The slot is taken before the lock: a reserve waits on the lock holding a slot of
+        # its own, so a holder that waited for a slot could wait on that reserve for good.
         while self.settles:
-            try:
-                status, _ = self.client.request("POST", "/v1/budget/settle", self.settles[0])
-            except ControlError:
+            self.client.slots.acquire()
+            with self._settling:
+                try:
+                    line = self.settles.popleft()
+                except IndexError:
+                    self.client.slots.release()
+                    return
+                sent = False
+                try:
+                    status, _ = self.client.request("POST", "/v1/budget/settle", line, held=True)
+                    sent = status == 200
+                except ControlError:
+                    pass
+                finally:
+                    if not sent:
+                        self.settles.appendleft(line)
+            if not sent:
                 break
-            if status != 200:
-                break
-            self.settles.popleft()
         pending = self.unsent_posts
         while True:
             try:
@@ -549,6 +603,7 @@ class RunSender(Sender):
         while self._send_batch(block=False):
             pass
         self._send_batch(block=False, final=True)
+        self.client.senders.pop(self.run, None)
 
 
 class Senders:
