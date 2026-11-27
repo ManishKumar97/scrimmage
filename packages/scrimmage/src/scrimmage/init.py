@@ -117,6 +117,8 @@ class Reading:
     cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
     skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
+    top_level: dict[str, str] = field(default_factory=dict[str, str])  # folder: a module under it
+    unimportable: list[str] = field(default_factory=list[str])  # files with defs and no name
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
     candidates: list[Candidate] = field(default_factory=list[Candidate])
@@ -369,6 +371,14 @@ def module_name(folder: Path, path: Path, reading: Reading) -> str:
     packages: list[str] = []
     above = folder
     while (above / "__init__.py").is_file():
+        if not above.name.isidentifier():
+            # No code can import this folder by name, so its children are the top level, as
+            # they are when the team runs from inside it.
+            name = ".".join([*packages, *parts])
+            shown = reading.top_level.get(above.name)
+            if importable(name) and (shown is None or name.count(".") > shown.count(".")):
+                reading.top_level[above.name] = name  # the deepest is the best example
+            break
         packages.insert(0, above.name)
         above = above.parent
     return ".".join([*packages, *parts])
@@ -393,6 +403,10 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
     if is_script(tree, imports):
         reading.candidates.append(script_candidate(relative))
     if not importable(module):
+        if any(
+            isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) for s in tree.body
+        ):
+            reading.unimportable.append(relative)
         return
     for statement in top_level(tree.body):
         if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -919,6 +933,17 @@ def add_notes(draft: Draft, found: Findings) -> None:
         shown = ", ".join(reading.outside[:5])
         notes.append(
             f"skipped {len(reading.outside)} .py symlinks that point outside the folder: {shown}"
+        )
+    for folder, example in reading.top_level.items():
+        notes.append(
+            f"{printable(folder)} is not an importable package name, so its modules are read as "
+            f"top-level ({printable(example)}); run scrimmage from inside {printable(folder)}"
+        )
+    if reading.unimportable:
+        shown = ", ".join(printable(n) for n in reading.unimportable[:5])
+        notes.append(
+            f"skipped definitions in {len(reading.unimportable)} files whose names cannot be "
+            f"imported: {shown}"
         )
     if reading.cut_off:
         more = "at least " if reading.skipped > SKIP_COUNT_LIMIT else ""

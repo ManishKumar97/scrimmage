@@ -36,6 +36,9 @@ That count is by name alone, with no stat, and stops at 100000 names, then says 
 Counting 100000 names took about 1.2 seconds on a busy 4-core machine.
 Reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
+A folder with an `__init__.py` whose name cannot be imported, such as `python-backend`, is read with its children as top-level modules, as they are when you run from inside it.
+A note says so, for example `python-backend is not an importable package name, so its modules are read as top-level (airline.tools); run scrimmage from inside python-backend`.
+A file with definitions whose own name cannot be imported, such as `my-helpers.py`, is not mapped, and a note counts it and names it.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.
 Names used by several parts then stop being ambiguous.

@@ -374,6 +374,28 @@ def test_decorated_methods_are_found_with_no_probe_and_the_package_name_is_kept(
     assert tool_paths(whole) == ["tau.air.tools:AirlineTools.book"]
 
 
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_whose_name_cannot_be_imported_is_read_as_top_level(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = (
+        "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n\n\n"
+        "@is_tool(1)\ndef cancel(x):\n    return x\n"
+    )
+    folder = tmp_path / "python-backend"
+    write(folder, {"__init__.py": "", "airline/__init__.py": "", "airline/tools.py": code})
+    write(folder, {"my-helpers.py": "def util():\n    return 1\n"})
+    _, doc = run(capsys, str(folder), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["airline.tools:cancel", "airline.tools:lookup"]
+    notes = messages(doc, "notes")
+    assert (
+        "python-backend is not an importable package name, so its modules are read as "
+        "top-level (airline.tools); run scrimmage from inside python-backend" in notes
+    )
+    # A file the read cannot name is counted, never dropped without a word.
+    assert "skipped definitions in 1 files whose names cannot be imported: my-helpers.py" in notes
+
+
 @pytest.mark.design("init.nested_listed")
 def test_a_nested_class_method_is_listed_and_not_written(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
