@@ -564,6 +564,15 @@
             "cancelled"
           ]
         },
+        "probe_pass": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "init --probe let this chat request, which offered no tools, through with a canned reply and sent nothing. Its number among those passed."
+        },
+        "host": {
+          "type": "string",
+          "description": "On a request the probe passed: the host it went to. Never a path, query, header or body."
+        },
         "carries_injected": {
           "const": true,
           "description": "A model request that holds the text a fault put in a result (a heuristic)."
@@ -952,6 +961,11 @@
         },
         "stopped_at": {
           "type": "string"
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many tool-less chat requests the probe let through before it stopped."
         },
         "unreadable": {
           "type": "boolean"

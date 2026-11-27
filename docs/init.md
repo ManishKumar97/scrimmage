@@ -127,7 +127,10 @@ Only the top-level name is looked for before the probe runs, without importing i
 A missing submodule under a real package, such as `evil.missing:answer`, is found by the probe: when its crash log holds a `ModuleNotFoundError` that names the probed module or a package above it, `--probe` exits 2 with the same mistake and writes no draft.
 A module that your function imports and cannot find is your agent's crash, and stays `crashed, see <log>`.
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
-The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
+The probe stops at the first model request that offers tools. That request is refused before it is sent, and the tools it offers are read from it.
+A chat request that offers no tools and is not streamed, such as a guardrail check, is let through with a canned reply that the provider's own reply builder makes, so nothing is sent and nothing costs.
+The probe passes up to 5 such requests, then stops at the next one and says so.
+An agent that cannot use the canned reply, such as a guardrail that parses JSON from it, may end or crash there; the outcome says how many requests were passed.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
 With neither key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
@@ -156,6 +159,9 @@ A script entry point is never probed: its command can do anything before Python 
 | The probe | `probe.outcome` |
 |---|---|
 | Reached a model request | `stopped at POST /v1/chat/completions on <host>, refused before it was sent` |
+| Passed tool-less chat requests, then reached one that offers tools | `stopped at POST /v1/chat/completions on <host>, refused before it was sent; passed 2 requests with no tools, such as guardrails` |
+| Passed 5 tool-less chat requests and the next offered none either | `stopped at <request>, which offers no tools either, refused before it was sent; passed 5 requests with no tools, such as guardrails; no tools are known, and the agent may offer tools later` |
+| Ended or crashed after a canned reply | `crashed, see <log>; passed 1 request with no tools first, such as guardrails, with a canned reply that may have sent the agent down another path` |
 | Reached a first model request that offers no tools, such as an embeddings call | `stopped at POST /v1/embeddings on <host>, which offers no tools, refused before it was sent; no tools are known` |
 | Was refused at another call first | `stopped at <label> <method> <path>, refused before it ran; no tools are known` |
 | Returned with no POST to a model path through httpx or httpx2 | `saw no model request through a gated client` |

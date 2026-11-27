@@ -74,7 +74,8 @@ NO_MODEL_REQUEST = "saw no model request through a gated client"
 NAMED = "the function named with --probe"
 GUESS_COMMENT = "# A guess from reading the code. Check it before you run anything."
 FIRST_ONLY = (
-    "the probe stops at the first model request, so tools offered later are not seen; "
+    "the probe stops at the first model request that offers tools, so tools offered later "
+    "are not seen; "
     "the candidates from reading the code stand"
 )
 NO_ENTRY = (
@@ -747,37 +748,66 @@ def read_probe(
     result: RunResult, lines: list[dict[str, object]], log: Path, function: str
 ) -> Probe:
     """What ended the probe: each ending has its own words."""
+    passes = [line for line in lines if "probe_pass" in line]
     notice = next((n for n in result.notices if n.get("notice") == "probe"), None)
     if notice is not None:
-        return Probe(True, stopped_at_model(notice), notice)
+        return Probe(True, stopped_at_model(notice, len(passes)), notice)
     outcome = result.outcome
     # A function that returned something other than text still ended by itself.
     returned = outcome == "crashed" and any(
         n.get("notice") == "answer_path" for n in result.notices
     )
     if outcome == "answered" or returned:
-        return Probe(True, NO_MODEL_REQUEST)
-    if outcome in ("crashed", "timed out"):
-        return Probe(
+        ended = Probe(True, f"ended by itself{after(len(passes))}" if passes else NO_MODEL_REQUEST)
+    elif outcome in ("crashed", "timed out"):
+        ended = Probe(
             True,
-            f"{outcome}, see {log}",
+            f"{outcome}, see {log}{after(len(passes))}",
             missing=missing_module(log, function) if outcome == "crashed" else None,
         )
-    if outcome == "refused call":
+    elif outcome == "refused call":
         return Probe(True, refused_first(lines))
-    return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
+    else:
+        return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
+    if passes:
+        # No request offered tools, so no stop: the first one still names the host and provider.
+        names = ("host", "method", "path", "provider")
+        request = {name: str(passes[0].get(name, "")) for name in names}
+        ended.notice = {"tools": [], "model_request": request}
+    return ended
 
 
-def stopped_at_model(notice: dict[str, object]) -> str:
+def requests_with_no_tools(count: int) -> str:
+    return f"{count} request{'s' if count != 1 else ''} with no tools"
+
+
+def after(passed: int) -> str:
+    """What to add when the probe let tool-less requests through before the run ended: the
+    canned reply may be why it ended, as a guardrail that parses a reply would fail on it."""
+    if not passed:
+        return ""
+    return (
+        f"; passed {requests_with_no_tools(passed)} first, such as guardrails, with a canned "
+        "reply that may have sent the agent down another path"
+    )
+
+
+def stopped_at_model(notice: dict[str, object], passed: int = 0) -> str:
     request = cast(dict[str, str], notice["model_request"])
     where = f"{request['method']} {request['path']} on {request['host']}"
+    skipped = f"; passed {requests_with_no_tools(passed)}, such as guardrails" if passed else ""
     if notice.get("unreadable"):
         return (
-            f"stopped at {where}, whose tools could not be read, refused before it was sent; "
-            "no tools are known"
+            f"stopped at {where}, whose tools could not be read, refused before it was sent"
+            f"{skipped}; no tools are known"
         )
     if notice.get("tools"):
-        return f"stopped at {where}, refused before it was sent"
+        return f"stopped at {where}, refused before it was sent{skipped}"
+    if passed:
+        return (
+            f"stopped at {where}, which offers no tools either, refused before it was sent"
+            f"{skipped}; no tools are known, and the agent may offer tools later"
+        )
     return (
         f"stopped at {where}, which offers no tools, refused before it was sent; no tools are known"
     )

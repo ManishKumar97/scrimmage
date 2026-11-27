@@ -365,6 +365,7 @@ class RunState:
         self.allowed = allowed
         self.began = time.monotonic()  # until a plan says how long the run has been going
         self.refused: str | None = None
+        self.probe_passed = 0  # init --probe: tool-less requests let through with a canned reply
         self.model_calls = 0
         self.proc = this_process()
         self._seq = 0
@@ -566,6 +567,14 @@ class RunState:
         """A call that is recorded but not decided, so it is not counted and cannot be refused."""
         with self._lock:
             return self._going(Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic()))
+
+    def pass_probe(self, limit: int) -> int | None:
+        """Count one tool-less request the probe lets through; None once the limit is met."""
+        with self._lock:
+            if self.probe_passed >= limit:
+                return None
+            self.probe_passed += 1
+            return self.probe_passed
 
     def refuse(self, step: Step, reason: str) -> Step:
         """Turn a decided call into a refusal for a reason the gate found, and poison the run."""

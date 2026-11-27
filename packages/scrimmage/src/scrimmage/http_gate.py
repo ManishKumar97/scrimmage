@@ -253,6 +253,8 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             with to_this_process(self, request):
                 return sync_send(self, request)
         bound, step, extra = prepared
+        if "probe_pass" in extra:
+            return passed_reply(bound, module, self, step, request, extra)
         change = None
         mode = step.decision.action
         if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
@@ -302,6 +304,8 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
                 "this model call runs outside asyncio, such as under trio, which Scrimmage "
                 "does not support yet, so it could not be budgeted; run the agent on asyncio",
             )
+        if "probe_pass" in extra:
+            return passed_reply(bound, module, self, step, request, extra)
         change = None
         mode = step.decision.action
         if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
@@ -481,7 +485,9 @@ def prepare(
     if step.decision.action == "real" and call.kind == "http":
         model_path_notice(ctx, call, where)
     if call.kind == "model" and run.plan.probe:
-        stop_probe(ctx, run, step, fields, request.url)
+        if not passes_probe(run, step, call, fields, extra, request.url):
+            stop_probe(ctx, run, step, fields, request.url)
+        return ctx, step, extra
     if call.kind == "model" and call.name == "chat":
         if fields is None:
             run.refuse(step, "unreadable_body")
@@ -530,6 +536,32 @@ def counts_requests(plan: Plan, call: Call) -> bool:
     return any(names(f, call) and schedule(f.when)[0] == "requests" for f in plan.faults)
 
 
+PROBE_PASS_LIMIT = 5  # tool-less requests, such as guardrails, the probe lets through
+
+
+def passes_probe(
+    run: RunState, step: Step, call: Call, fields: Fields | None, extra: dict[str, object], url: Any
+) -> bool:
+    """Whether the probe lets this chat request through, with a canned reply made by the
+    provider. Only one that offers no tools and is not streamed: a guardrail, not the agent,
+    so the probe can go on to the request that offers the tools. Nothing is sent."""
+    provider = provider_for(run, step)
+    if fields is None or call.name != "chat" or extra.get("stream") is True:
+        return False
+    offered = provider.offered(str(url.path), fields)
+    if offered.agent or offered.hosted_reads or offered.hosted_writes or offered.unknown:
+        return False
+    if offered.refused:
+        return False
+    passed = run.pass_probe(PROBE_PASS_LIMIT)
+    if passed is None:
+        return False
+    step.decision = Decision("mock")  # never sent: the reply is made here
+    extra["probe_pass"] = passed
+    extra["host"] = redact(host_of(url))
+    return True
+
+
 def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url: Any) -> NoReturn:
     """Note the tools this first model request offers, refuse it unsent, and end the program.
 
@@ -557,6 +589,7 @@ def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url
             "provider": str(step.call.provider),
         },
         "stopped_at": redact(f"{step.call.label} {method} {path}"),
+        "passed": run.probe_passed,
     }
     if fields is None:
         extra["unreadable"] = True
@@ -719,6 +752,19 @@ def built_reply(
         built = provider.unknown_tool_reply(path, fields, tokens, tool)
     headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
+    return reply(ctx, module, client, step, request, extra, (200, headers, built))
+
+
+def passed_reply(
+    ctx: Bound, module: ModuleType, client: Any, step: Step, request: Any, extra: dict[str, object]
+) -> Any:
+    """The canned reply of a request the probe let through: the provider's own refusal reply,
+    which reads as a model that declined. Nothing is sent and nothing costs."""
+    provider = provider_for(ctx.run, step)
+    body = body_of(request) or b""
+    fields = provider.request_fields(body) or NO_FIELDS
+    built = provider.refusal_reply(str(request.url.path), fields, len(body) // CHAR_PER_TOKEN)
+    headers = provider.fault_headers("application/json")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 

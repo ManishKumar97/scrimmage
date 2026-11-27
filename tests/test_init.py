@@ -951,10 +951,8 @@ def test_a_host_read_from_the_environment_is_found_by_the_probe(
     "request_line",
     [
         'client.embeddings.create(model="text-embedding-3-small", input=question)',
-        'client.chat.completions.create(model="gpt-4o-mini", '
-        'messages=[{"role": "user", "content": question}])',
     ],
-    ids=["embeddings", "chat-no-tools"],
+    ids=["embeddings"],
 )
 def test_a_first_request_that_offers_no_tools_stops_there_and_keeps_the_candidates(
     tmp_path: Path,
@@ -977,6 +975,34 @@ def test_a_first_request_that_offers_no_tools_stops_there_and_keeps_the_candidat
     assert tool_paths(doc) == ["bot:get_order"]
     assert cast(list[dict[str, str]], doc["tools"])[0]["found_by"] == "static"
     assert "tools offered later are not seen" in messages(doc, "notes")
+    assert doc["numbers"] is None
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_an_agent_that_ends_after_a_passed_request_keeps_the_candidates_and_the_host(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + "    return 'done'\n\n\n"
+        + "def is_tool(f):\n    return f\n\n\n@is_tool\ndef get_order(n):\n    return n\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    code_out, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert code_out == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert outcome.startswith("ended by itself; passed 1 request with no tools first")
+    assert tool_paths(doc) == ["bot:get_order"]
+    assert cast(list[dict[str, str]], doc["tools"])[0]["found_by"] == "static"
+    assert "tools offered later are not seen" in messages(doc, "notes")
+    assert doc["model_hosts"] == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]
     assert doc["numbers"] is None
 
 
@@ -1064,7 +1090,8 @@ def test_an_agent_that_catches_the_refusal_runs_nothing_more(
     code = (
         HEAD
         + "def answer(question):\n    try:\n        "
-        + 'client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        + 'client.chat.completions.create(model="gpt-4o-mini", messages=[], '
+        + f"tools=[{GET_ORDER}])\n"
         + "    except Exception:\n"
         + f"        open({str(marker)!r}, 'w').close()\n"
         + "    return 'done'\n"
@@ -1143,7 +1170,8 @@ def test_an_agent_that_ignores_sigterm_still_ends_at_once_with_its_output(
         + HEAD
         + "def answer(question):\n    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         + "    print('printed before the request')\n    try:\n"
-        + '        client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        + '        client.chat.completions.create(model="gpt-4o-mini", messages=[], '
+        + f"tools=[{GET_ORDER}])\n"
         + "    except Exception:\n"
         + f"        open({str(marker)!r}, 'w').close()\n"
         + "    return 'done'\n"
@@ -1405,6 +1433,99 @@ def test_the_probe_lists_a_framework_s_tools_as_adapter_tools(
     assert cast(list[dict[str, str]], doc["adapter_tools"])[0]["found_by"] == "probe"
     assert "tools" not in agent_table(tmp_path / "draft.toml")
     assert doc["numbers"] == {"tools_offered": 1, "tools_mapped": 0}
+
+
+LIST_ORDERS = (
+    '{"type": "function", "function": {"name": "list_orders", "parameters": {"type": "object"}}}'
+)
+ASK = (
+    'client.chat.completions.create(model="gpt-4o-mini", '
+    'messages=[{"role": "user", "content": question}]TOOLS)\n'
+)
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_the_probe_passes_a_request_with_no_tools_and_reads_the_next(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def get_order(n):\n    return n\n\n\ndef list_orders():\n    return []\n\n\n"
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + "    "
+        + ASK.replace("TOOLS", f", tools=[{GET_ORDER}, {LIST_ORDERS}]")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK
+    assert fake.received == []  # the canned reply is made here: nothing reached the network
+    assert sorted(tool_paths(doc)) == ["bot:get_order", "bot:list_orders"]
+    assert doc["numbers"] == {"tools_offered": 2, "tools_mapped": 2}
+    outcome = str(probe_of(doc)["outcome"])
+    assert "refused before it was sent; passed 1 request with no tools, such as guardrails" in (
+        outcome
+    )
+    files = list((tmp_path / "scrimmage-runs").glob("*/*.jsonl"))
+    schema = json.loads(
+        (Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text()
+    )
+    for line in (json.loads(text) for text in files[0].read_text().splitlines()):
+        jsonschema.validate(line, schema)
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_a_probe_where_every_request_has_no_tools_stops_at_the_limit_and_says_so(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    for _ in range(8):\n        "
+        + ASK.replace("TOOLS", "")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert "passed 5 requests with no tools" in outcome
+    assert "the agent may offer tools later" in outcome
+    assert doc["tools"] == []
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_an_agent_that_fails_on_the_canned_reply_is_said_to_have_failed_on_it(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    reply = "
+        + ASK.replace("TOOLS", "")
+        + "    return json.loads(reply.choices[0].message.content)\n"
+    ).replace("import os\n", "import json\nimport os\n")
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert outcome.startswith("crashed, see ")
+    assert "passed 1 request with no tools first" in outcome
+    assert "may have sent the agent down another path" in outcome
 
 
 @pytest.mark.slow
