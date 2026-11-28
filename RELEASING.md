@@ -42,7 +42,7 @@ The next-release job warns earlier, from a pre-release or the default branch.
 Widen a range only after the steps below, never to make a red job green.
 
 1. Run the gate tests against the new version, with no change to the code:
-   `uv run --with httpx==0.29.0 pytest $(grep -v test_tested_range tools/gate-tests.txt)`.
+   `uv run --with httpx==0.29.0 pytest $(python3 tools/gate_tests.py --without-range)`.
    Use the library's own name and the exact new version.
    Leave out `tests/test_tested_range.py`: it fails on purpose until `TESTED` is widened.
    For a pre-release, add `--prerelease explicit` to `uv run`.

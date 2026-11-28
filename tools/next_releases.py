@@ -5,9 +5,9 @@
 Two sources per library:
 
 - Its default branch on GitHub, pinned to the commit it has now. That is what ships next.
-- Its newest pre-release on PyPI, only when that was uploaded after the newest stable
-  release. An older pre-release (a 1.0 development build from before the current stable
-  line) is stale and is skipped.
+- Its newest pre-release on PyPI, unless it is stale: superseded by a stable release, or
+  older than STALE_DAYS with a stable release uploaded after it (a 1.0 development build
+  left from before the current 0.29).
 
 Each leg installs only its own library's next version over the lock, and the job runs the
 gate tests on it. A leg that cannot install or import fails by itself.
@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime
 
 from packaging.version import InvalidVersion, Version
 
@@ -43,6 +43,10 @@ LIBRARIES: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
     "langgraph": ("langchain-ai/langgraph", "libs/langgraph", ()),
     "mcp": ("modelcontextprotocol/python-sdk", "", ()),
 }
+
+
+# A pre-release older than this, with a stable release uploaded after it, is left behind.
+STALE_DAYS = 60
 
 
 class Release:
@@ -69,18 +73,27 @@ def releases(name: str) -> list[Release]:
     return sorted(found, key=lambda r: r.version)
 
 
-def next_prerelease(found: list[Release]) -> Release | None:
-    """The newest pre-release that is newer than the newest stable release, by version and
-    by upload time, if there is one."""
+def next_prerelease(found: list[Release], now: datetime) -> Release | None:
+    """The newest pre-release that is still ahead of what is stable, if there is one.
+
+    A pre-release is stale when a stable release has superseded it: one at or above the
+    pre-release's own version. Otherwise it counts when it was uploaded after the newest
+    stable release (a patch of an older line, uploaded later, does not drop it) or within
+    the last STALE_DAYS days. A 1.0 development build left from before the stable 0.29
+    is neither, so it is skipped.
+    """
     stable = [r for r in found if not r.version.is_prerelease]
-    newest = max(stable, key=lambda r: r.version, default=None)
+    newest = max(stable, key=lambda r: r.uploaded, default=None)
     ahead = [
         r
         for r in found
         if r.version.is_prerelease
-        and (newest is None or (r.version > newest.version and r.uploaded > newest.uploaded))
+        and not any(s.version >= r.version for s in stable)
+        and (
+            newest is None or r.uploaded > newest.uploaded or (now - r.uploaded).days <= STALE_DAYS
+        )
     ]
-    return ahead[-1] if ahead else None
+    return max(ahead, key=lambda r: r.version, default=None)
 
 
 def head(repo: str) -> tuple[str, str]:
@@ -124,7 +137,7 @@ def legs(name: str) -> list[dict[str, str]]:
             "requirements": "\n".join(wanted),
         }
     ]
-    pre = next_prerelease(releases(name))
+    pre = next_prerelease(releases(name), datetime.now(UTC))
     if pre is not None:
         out.append(
             {

@@ -83,4 +83,4 @@ jobs:
           uv pip install -r leg-requirements.txt
           uv pip freeze
       - name: The gate tests, except the range check
-        run: uv run --no-sync pytest $(grep -v '^tests/test_tested_range.py$' tools/gate-tests.txt)
+        run: uv run --no-sync pytest $(python3 tools/gate_tests.py --without-range)

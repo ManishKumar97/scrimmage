@@ -45,4 +45,4 @@ jobs:
       # --no-sync keeps the upgrade. tests/test_tested_range.py fails when a library is newer
       # than the range its gate was tested with. tools/gate-tests.txt lists the gate tests.
       - name: The gate tests, with the newest releases
-        run: uv run --no-sync pytest $(cat tools/gate-tests.txt)
+        run: uv run --no-sync pytest $(python3 tools/gate_tests.py)
