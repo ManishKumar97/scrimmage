@@ -8,6 +8,11 @@ Limits of judging an answer, and of what a record keeps and removes.
   "shipped" is found in "has not shipped", and Markdown stays in the answer.
   See [Judging an answer](../judging.md).
 
+- **Matching is substring matching, and an unlisted negation is not caught.** `forbid = ["card"]` finds "card" inside "discarded", so it fails an answer that never meant a card.
+  `forbid = ["not shipped"]` does not find "not yet shipped", so an `expect` of "shipped" passes that answer.
+  A guard against a negation catches only the wordings you list.
+  See [Guard a word against its negation](../judging.md#guard-a-word-against-its-negation).
+
 - **A look-alike letter is a different letter.** A Cyrillic "е" is not a Latin "e", so `forbid = ["secret"]` does not find "sеcret".
   Scrimmage drops characters that do not show, but it does not fold letters that only look alike.
 

@@ -130,10 +130,14 @@ class Ledger:
             self._line.pop(ticket, None)
 
     def settle(self, reservation: int, usd: float) -> None:
-        """Replace a reservation with what the call really cost."""
+        """Replace a reservation with what the call really cost. One that is no longer held is
+        already settled, and counts nothing again: a settle can arrive twice, such as one
+        resent after its reply was lost."""
         with self._lock:
             hold = self._held.pop(reservation, None)
-            self.reserved -= hold.usd if hold else 0.0
+            if hold is None:
+                return
+            self.reserved -= hold.usd
             if not self._held:
                 self.reserved = 0.0  # no rounding left over for a waiter to wait on
             self.spent += usd
