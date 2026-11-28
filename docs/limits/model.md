@@ -88,6 +88,8 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
   On an Anthropic call it is Anthropic's 400 with the type `invalid_request_error`.
   A streamed Responses call gets a 200 event stream that ends in a failed response, as the real API sends it, and the library raises `APIError` for it.
   A rejected request in a Responses conversation OpenAI keeps is assumed to store nothing, so `context too long` is carried out there; this is assumed, not captured.
+The assumption is weaker for a streamed request: the real streamed rejection came back with `store` true and a real `resp_` id, so OpenAI may have kept something under it.
+The injected failed response carries a made-up id and the model name your request sent, not the snapshot the real one named, and its `tools` is empty, as in every built reply.
   The Chat Completions message names the numbers of the real reply it was saved from, not your model's context or your prompt's length; the Responses message has none.
 
 - **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a test mistake: the call fails at once and nothing is sent.

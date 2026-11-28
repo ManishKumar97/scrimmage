@@ -367,6 +367,9 @@ def failed_response_stream(fields: dict[str, object]) -> bytes:
     base = dict(RESPONSE_REPLY)
     del base["billing"]
     base.update({key: fields[key] for key in RESPONSE_ECHOED if fields.get(key) is not None})
+    for key in RESPONSE_MERGED:
+        if asked := _obj(fields.get(key)):
+            base[key] = {**cast("dict[str, object]", base[key]), **asked}
     base.update(
         id="resp_" + secrets.token_bytes(RESPONSE_ID_LENGTH // 2).hex(),
         created_at=int(time.time()),
@@ -458,7 +461,11 @@ def response_reply(
 def response_ids(reply: bytes) -> list[str]:
     """The ids of a Responses reply and of its output items: a later request may name the
     reply as previous_response_id, and an item in an item_reference."""
-    value = _obj(fields_dict(request_fields(reply)))
+    if reply.startswith(b"event:"):  # a failed stream: the response of its first event
+        first = reply.split(b"\n\n", 1)[0].split(b"data: ", 1)[-1]
+        value = _obj(_obj(fields_dict(request_fields(first))).get("response"))
+    else:
+        value = _obj(fields_dict(request_fields(reply)))
     found = [value.get("id"), *(_obj(item).get("id") for item in _list(value.get("output")))]
     return [i for i in found if isinstance(i, str) and i]
 

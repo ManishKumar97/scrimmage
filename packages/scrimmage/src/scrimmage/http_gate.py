@@ -804,6 +804,8 @@ def fault(
         if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
             not_carried_out(run, step, why)
         status, kind, body = provider.context_too_long_reply(str(request.url.path), asked)
+        if isinstance(provider, ServerChains):  # a failed stream has a response id of its own
+            run.add_faulted_reply(provider.chain_ids(str(request.url.path), body))
         headers = provider.fault_headers(kind)
         return reply(ctx, module, client, step, request, extra, (status, headers, body))
     status = int(plan_fault.do.split()[1])

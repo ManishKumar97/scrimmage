@@ -121,7 +121,7 @@ do   = "context too long"
 when = "first 1"
 ```
 
-The openai library raises `BadRequestError` with `code` `context_length_exceeded` and does not retry it.
+The openai library raises `BadRequestError` with `code` `context_length_exceeded` and does not retry it; on a streamed Responses call it raises `APIError`, as below.
 On a Chat Completions call the `param` is `messages`; on a Responses call it is `input`.
 An agent that shortens its prompt when it reads that code can be tested this way.
 On a Chat Completions call the body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
@@ -129,7 +129,8 @@ They are not your model's context or your prompt's length.
 On a Responses call the body is copied from a real Responses reply, which has no numbers: `Your input exceeds the context window of this model. Please adjust your input and try again.`
 A streamed Responses call gets what a real one gets, which is not a 400: a 200 event stream of `response.created`, `response.in_progress`, an `error` event and `response.failed`, all copied from a real reply.
 The openai library yields the first two events and then raises `APIError`, not `BadRequestError`, with the same code and param, whether you iterate `responses.create(stream=True)`, use `responses.stream` or run async.
-The failed response repeats the fields your request set, such as `max_output_tokens`, with a new `resp_` id.
+The failed response repeats the fields your request set, such as `max_output_tokens`, `text` and `reasoning`, with a new `resp_` id and the model name your request sent, not the snapshot OpenAI resolved; as in every built reply, its `tools` is empty.
+That id counts as one a fault made: a later request that names it in `previous_response_id` is a test mistake, as after any faulted Responses reply.
 It works on a chat or Responses call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
