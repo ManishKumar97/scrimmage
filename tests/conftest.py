@@ -715,7 +715,9 @@ class Result:
 
     def records(self, *, processes: bool = False) -> list[list[dict[str, object]]]:
         """Every run's record lines, one list per run. Each process's own line is left out
-        unless asked for, so a test about calls reads only calls.
+        unless asked for, so a test about calls reads only calls. A `newer_version` notice is
+        always left out: a release past the tested range adds it, and it must not shift the
+        lines a test reads by position.
 
         Folders are in the order they were written. Their names are not: two `scrimmage
         test` runs in one second share a stamp, and a random suffix then decides."""
@@ -725,7 +727,15 @@ class Result:
             newest[file.parent] = max(newest.get(file.parent, 0), file.stat().st_mtime_ns)
         files.sort(key=lambda file: (newest[file.parent], file))
         runs = [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
-        return [[x for x in run if processes or x.get("notice") != "process"] for run in runs]
+        return [
+            [
+                x
+                for x in run
+                if x.get("notice") != "newer_version"
+                and (processes or x.get("notice") != "process")
+            ]
+            for run in runs
+        ]
 
     def summaries(self) -> list[dict[str, object]]:
         return [lines[-1]["summary"] for lines in self.records()]  # type: ignore[misc]
