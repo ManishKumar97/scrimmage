@@ -84,3 +84,54 @@ def test_the_injected_error_bodies_match_the_captured_ones(gated: None, do: str,
     if do == "status 401":  # the scrub found a masked key in each, and hid only that
         for message in (got.json()["error"]["message"], want["body"]["error"]["message"]):
             assert MASKED_KEY.search(message), message
+
+
+RESPONSES_URL = "https://api.openai.com/v1/responses"
+RESPONSES_BODY = {"model": "gpt-4o-mini", "input": "hi"}
+
+
+def shape(error: dict[str, Any]) -> dict[str, Any]:
+    """An error object's shape: its keys, and its type. Message, code and param name the
+    request that failed, so they are not part of it."""
+    return {"keys": list(error), "type": error["type"]}
+
+
+def send_responses() -> httpx2.Response:
+    transport = httpx2.MockTransport(lambda _: httpx2.Response(200, json={}))
+    return httpx2.Client(transport=transport).post(RESPONSES_URL, json=RESPONSES_BODY)
+
+
+@pytest.mark.design("fixtures.match_real_errors")
+def test_a_responses_401_is_the_chat_completions_401(gated: None) -> None:
+    """Captured 28 November 2026: OpenAI's Responses 401 is the Chat Completions 401, down
+    to the text/plain content type and the top-level status. So `status 401` sends one
+    body on both paths."""
+    want, chat = load("real_response_error_401"), load("real_error_401")
+    assert want["status"] == chat["status"] == 401
+    assert want["headers"] == chat["headers"]
+    assert scrubbed(want["body"]) == scrubbed(chat["body"])
+    install("status 401", "model")
+    got = send_responses()
+    assert got.status_code == 401
+    assert got.headers["content-type"] == want["headers"]["content-type"]
+    assert scrubbed(got.json()) == scrubbed(want["body"])
+
+
+@pytest.mark.design("fixtures.match_real_errors")
+@pytest.mark.parametrize(
+    ("status", "real"), [(404, "real_response_error_404"), (400, "real_response_error_400")]
+)
+def test_a_responses_404_and_400_have_the_shape_of_the_injected_error(
+    gated: None, status: int, real: str
+) -> None:
+    """Captured 28 November 2026. The same four fields and the same type as the body
+    `status N` sends. The message and the code name the failed request (its model, its
+    parameter), so a generic status cannot match them and they are not compared."""
+    want = load(real)
+    assert want["status"] == status
+    install(f"status {status}", "model")
+    got = send_responses()
+    assert got.status_code == status
+    assert got.headers["content-type"] == want["headers"]["content-type"]
+    assert shape(got.json()["error"]) == shape(want["body"]["error"])
+    assert set(want["body"]) == {"error"}
