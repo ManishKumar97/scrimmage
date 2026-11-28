@@ -149,3 +149,18 @@ Limits of the tools Scrimmage gates, of MCP tools, and of web requests and recor
 
 - **A value that changes between runs is frozen by its mock.** That is what a mock is for.
   A value that changes within one run is listed `nondeterministic`.
+
+## Tested versions
+
+Each gate says which minor versions of its library it was tested with.
+A library newer than the last version in its row gets a notice at startup; an older one gets none.
+CI also runs the gate tests every day against the newest release of each library, so a break shows within a day of the release.
+
+| Library | Tested from | Tested up to |
+|---|---|---|
+| httpx | 0.28 | 0.29 |
+| httpx2 | 2.16 | 2.16 |
+| langchain-core | 1.8 | 1.8 |
+| mcp | 2.3 | 2.3 |
+
+The OpenAI and Anthropic clients, `langchain-openai` and `langgraph` have no range of their own: their calls pass through the gates above.

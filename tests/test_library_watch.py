@@ -112,3 +112,20 @@ def test_the_requirement_is_a_pre_release_or_the_default_branch_at_one_commit(
 @pytest.mark.parametrize("library", [*tested_ranges.ranges(), *THROUGH_HTTPX])
 def test_the_next_releases_job_covers_every_gated_library(library: str) -> None:
     assert library in next_releases().LIBRARIES
+
+
+def test_the_tested_versions_table_lists_every_tested_range() -> None:
+    """A widened TESTED range cannot leave the page stale, and a new gate must add its row."""
+    text = (ROOT / "docs" / "limits" / "calls.md").read_text()
+    section = text.split("\n## Tested versions\n")[1].split("\n## ")[0]
+    cells = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("| ") and not line.startswith("| Library")
+    ]
+    shown = {library: (low, high) for library, low, high in cells}
+    expected = {
+        library: (".".join(map(str, low)), ".".join(map(str, high)))
+        for library, (low, high) in tested_ranges.ranges().items()
+    }
+    assert shown == expected, "run the gate tests with the new version, then edit this table"
