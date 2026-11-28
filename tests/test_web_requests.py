@@ -392,6 +392,8 @@ class Sink:
         self.kept: list[bool] = []
 
     def put(self, line: dict[str, Any], *, keep: bool = False) -> None:
+        if line.get("notice") == "newer_version":
+            return  # a release past the tested range adds it; it must not shift the lines read
         self.lines.append(line)
         self.kept.append(keep)
 
