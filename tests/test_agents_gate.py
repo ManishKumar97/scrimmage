@@ -329,6 +329,54 @@ def test_a_label_uses_the_name_the_model_sees(project: Project, fake_openai: Fak
     assert tool_lines(result.records()[0])[0]["call"] == "tool:lookup_order"
 
 
+@pytest.mark.design("adapter.agents_handoff")
+@pytest.mark.slow
+def test_a_handoff_is_seen_and_recorded_and_never_refused(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "answer_handoff")
+    project.edit('expect   = ["shipped", ["Oct 30", "October 30"]]', 'expect   = ["paid"]')
+    project.edit('[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n', "")
+    project.edit(
+        '[[test.mock]]\ncall    = "tool:get_stock"             # returns an acme.models.Stock'
+        ' object\nreturns = {sku = "SKU-42", count = 12}\n',
+        "",
+    )
+    project.edit('real     = ["tool:check_inventory"]', "real = []")
+    fake = fake_openai([], responses=["agents_handoff", "agents_billing_answer"])
+    result = project.test(fake)
+    assert result.code == 0, result.out + result.err
+    run = row(result, "baseline")
+    switched = [x for x in tool_lines(run) if x["call"] == "handoff:transfer_to_billing_agent"]
+    assert len(switched) == 1 and switched[0]["action"] == "real", tool_lines(run)
+    assert run[-1]["summary"]["answer"] == "Billing here: order 1234 was paid."  # type: ignore[index]
+
+
+@pytest.mark.design("adapter.agents_handoff")
+@pytest.mark.slow
+def test_a_handoff_beside_a_function_tool_runs_a_baseline(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "answer_handoff_with_tool")
+    project.edit('expect   = ["shipped", ["Oct 30", "October 30"]]', 'expect   = ["paid"]')
+    project.edit(
+        '[[test.mock]]\ncall    = "tool:get_stock"             # returns an acme.models.Stock'
+        ' object\nreturns = {sku = "SKU-42", count = 12}\n',
+        "",
+    )
+    project.edit('real     = ["tool:check_inventory"]', "real = []")
+    fake = fake_openai(
+        [], responses=["agents_get_order", "agents_handoff", "agents_billing_answer"]
+    )
+    result = project.test(fake)
+    assert result.code == 0, result.out + result.err
+    calls = [(x["call"], x["action"]) for x in tool_lines(row(result, "baseline"))]
+    assert calls == [
+        ("tool:get_order", "mock"),
+        ("handoff:transfer_to_billing_agent", "real"),
+    ]
+
+
 @pytest.mark.design("adapter.agents_unseen_tool")
 @pytest.mark.slow
 def test_a_tool_with_its_own_invoker_is_refused_by_the_model_gate_with_the_reason(

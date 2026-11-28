@@ -20,11 +20,13 @@ from types import ModuleType
 from typing import Any
 
 from scrimmage import hooks, tool_gate
+from scrimmage.decide import Call
 from scrimmage.errors import ScrimmageRefused
 from scrimmage.state import ProcessState, RunState
 
 LIBRARY = "openai-agents"
 TOOL_MODULE = "agents.tool"
+HANDOFF_MODULE = "agents.handoffs"
 TESTED = ((0, 20), (0, 26))  # the minor versions this release was tested with
 INVOKER = "_FailureHandlingFunctionToolInvoker"
 # The team's function, kept on the SDK's invoker implementation: a mock is typed from it.
@@ -35,6 +37,7 @@ MCP = "mcp"  # the value of agents.tool.ToolOriginType for a tool made from an M
 
 def install(process: ProcessState, stop: Callable[[str], None]) -> None:
     hooks.on_import(TOOL_MODULE, lambda module: patch_tools(module, process, stop))
+    hooks.on_import(HANDOFF_MODULE, lambda module: patch_handoffs(module, process, stop))
 
 
 def version() -> tuple[int, int] | None:
@@ -161,3 +164,49 @@ def gate_impl(impl: Callable[..., Any], own: Callable[[], Any]) -> Callable[...,
     gated = tool_gate.gate_with(impl, describe)
     setattr(gated, RAW, original)
     return gated
+
+
+def patch_handoffs(
+    module: ModuleType, owner: ProcessState | RunState, stop: Callable[[str], None]
+) -> None:
+    process = owner.process if isinstance(owner, RunState) else owner
+    handoff = module.Handoff
+    made = handoff.__init__
+    if getattr(made, RAW, False):
+        return
+
+    @functools.wraps(made)
+    def seen_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        made(self, *args, **kwargs)
+        # A handoff is a function tool to the model: its name is one a gate sees.
+        process.adapted.add(self.tool_name)
+        self.on_invoke_handoff = recorded(self.on_invoke_handoff, process, self)
+
+    setattr(seen_init, RAW, True)
+    handoff.__init__ = seen_init
+
+
+def recorded(invoke: Callable[..., Any], process: ProcessState, handoff: Any) -> Callable[..., Any]:
+    """The handoff's own invoker, leaving a line for each switch. It decides nothing: a
+    handoff runs no code of the team's that touches the world, and a refusal would break
+    every agent that has one."""
+    if getattr(invoke, RAW, False):
+        return invoke
+
+    @functools.wraps(invoke)
+    async def switch(*args: Any, **kwargs: Any) -> Any:
+        run = process.current()
+        if run is None:  # code outside any run, or a plain request to a service
+            return await invoke(*args, **kwargs)
+        name = handoff.tool_name
+        step = run.passed(Call("tool", f"handoff:{name}", name))
+        try:
+            result = await invoke(*args, **kwargs)
+        except BaseException as exc:
+            run.finish(step, error=exc)
+            raise
+        run.finish(step)
+        return result
+
+    setattr(switch, RAW, True)
+    return switch

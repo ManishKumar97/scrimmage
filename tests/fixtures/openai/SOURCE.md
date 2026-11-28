@@ -118,6 +118,8 @@ Only the model name, the output items and a `cache_write_tokens` of 0 in the usa
 | `agents_get_order.json` | a `function_call` to `get_order` with `{"order_id": "1234"}` |
 | `agents_get_stock.json` | a `function_call` to `get_stock` with `{"sku": "SKU-42"}` |
 | `agents_check_inventory.json` | a `function_call` to `check_inventory` with `{"sku": "SKU-42"}` |
+| `agents_handoff.json` | a `function_call` to `transfer_to_billing_agent`, the SDK's handoff tool |
 | `agents_answer.json` | the answer text |
+| `agents_billing_answer.json` | the answer text of the agent that took the handoff |
 | `agents_get_order_renamed.json` | a `function_call` to `lookup_order`, a tool the SDK renamed |
 | `agents_search.json` | a `function_call` to `search` with `{"q": "refunds"}`, a tool an MCP server lists |

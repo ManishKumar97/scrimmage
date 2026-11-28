@@ -15,6 +15,7 @@ from agents import (
     RunContextWrapper,
     Runner,
     function_tool,
+    handoff,
     set_tracing_disabled,
 )
 
@@ -117,6 +118,29 @@ def answer_renamed(question: str) -> str:
 
 def answer_sync(question: str) -> str:
     return run([get_order_sync, check_inventory, get_stock], question, model="gpt-4o-mini")
+
+
+def answer_handoff(question: str) -> str:
+    """A triage agent that hands the question to a billing agent."""
+    billing = Agent(name="Billing Agent", instructions="Answer billing questions.")
+    triage = Agent(
+        name="Triage", instructions="Route the question.", handoffs=[billing], model="gpt-4o-mini"
+    )
+    billing.model = "gpt-4o-mini"
+    return str(asyncio.run(Runner.run(triage, question)).final_output)
+
+
+def answer_handoff_with_tool(question: str) -> str:
+    """The same, where the triage agent also has a tool, and the handoff is built by hand."""
+    billing = Agent(name="Billing Agent", instructions="Answer.", model="gpt-4o-mini")
+    triage = Agent(
+        name="Triage",
+        instructions="Route the question.",
+        tools=[get_order],
+        handoffs=[handoff(billing)],
+        model="gpt-4o-mini",
+    )
+    return str(asyncio.run(Runner.run(triage, question)).final_output)
 
 
 async def own_invoker(ctx: Any, text: str) -> str:

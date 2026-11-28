@@ -39,6 +39,8 @@ _.answer_told  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names
 _.answer_raises  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _.answer_timed  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _.answer_sync  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff_with_tool  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _.answer_custom  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _.answer_replaced  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _.answer_mcp  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
