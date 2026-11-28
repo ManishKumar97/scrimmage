@@ -1565,7 +1565,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         )
     if do == "context too long" and (kind != "model" or "/" in call):
         raise ConfigError(
-            f"{where} do: 'context too long' works only on a chat model call, such as "
+            f"{where} do: 'context too long' works only on a chat or Responses model call, such as "
             f'call = "model", the one OpenAI sends it for; see {docs_url("model-faults")}'
         )
     if do in CONNECTION and kind in ("tool", "mcp"):

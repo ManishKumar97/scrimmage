@@ -97,6 +97,24 @@ These are real replies to `gpt-4o-mini` requests, saved on 18 November 2026 from
 | `real_response_function_call_truncated.json` | A Responses request with one strict tool, `tool_choice = "required"` and `max_output_tokens = 16`, saved on 19 November 2026: a 200 with `status` `incomplete`, `incomplete_details.reason` `max_output_tokens`, and the `function_call` item `incomplete` with its arguments cut, unlike Chat Completions' 400 |
 | `real_response_answer.json` | A Responses request with one tool, whose `input` holds a `function_call` item with a made-up `fc_` id and its `function_call_output`: a 200, the model answered from the tool result |
 
+These are real error replies, saved on 28 November 2026 from OpenAI's Responses API, `POST /v1/responses`.
+Each holds the status, the `content-type` and the body; every other header, the request id included, is left out.
+Each was a direct request, with the key read from the environment and never printed.
+A rejected request returns no `usage`, and OpenAI does not bill one.
+A 429 was not captured: it cannot be provoked without sending load.
+`tests/test_fixtures_match_real.py` compares them with the Chat Completions form.
+
+| File | Reply to |
+|---|---|
+| `real_response_error_401.json` | `{"model": "gpt-4o-mini", "input": "hi"}` with a made-up key, whose last four characters are the fragment in the message. Equal to `real_error_401.json` but for the last four characters of the made-up key |
+| `real_response_error_404.json` | `{"model": "gpt-4o-mini-does-not-exist", "input": "hi"}`: code `model_not_found` |
+| `real_response_error_400.json` | `{"model": "gpt-4o-mini", "input": "hi", "max_output_tokens": 1}`: code `integer_below_min_value`, param `max_output_tokens`, the minimum being 16 |
+| `real_response_error_context_length.json` | `{"model": "gpt-4o-mini", "input": "hello hello ...", "max_output_tokens": 16}` with about 140,000 tokens of input: code `context_length_exceeded`, param `input`, and a message with no token counts, unlike Chat Completions' |
+
+`real_response_error_context_length_stream.sse` was saved the same way on 28 November 2026, as the raw bytes of the reply to the same request with `"stream": true`.
+It is a 200 with `content-type` `text/event-stream; charset=utf-8`, not a 400: four events, `response.created`, `response.in_progress`, `error` and `response.failed`, the last two holding the same error as the non-streamed 400.
+`usage` is null in each, so nothing was billed.
+
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.
 It keeps the real reply's layout: pretty-printed, with `logprobs` and `refusal` null, `usage`, `service_tier` and `system_fingerprint`, and longer than a record line's preview.
 The id, the time and the fingerprint are made up.

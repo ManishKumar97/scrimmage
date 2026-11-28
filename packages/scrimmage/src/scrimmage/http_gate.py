@@ -864,9 +864,11 @@ def fault(
         asked = provider.request_fields(body_of(request) or b"") or NO_FIELDS
         if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
             not_carried_out(run, step, why)
-        headers = provider.fault_headers("application/json")
-        body = provider.context_too_long_body()
-        return reply(ctx, module, client, step, request, extra, (400, headers, body))
+        status, kind, body = provider.context_too_long_reply(str(request.url.path), asked)
+        if isinstance(provider, ServerChains):  # a failed stream has a response id of its own
+            run.add_faulted_reply(provider.chain_ids(str(request.url.path), body))
+        headers = provider.fault_headers(kind)
+        return reply(ctx, module, client, step, request, extra, (status, headers, body))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         provider = provider_for(run, step)

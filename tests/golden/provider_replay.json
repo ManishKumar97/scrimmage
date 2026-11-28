@@ -1250,12 +1250,38 @@
   "stops": []
 },
 "fault context too long responses": {
-  "blobs": ["b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
+  "blobs": ["6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "context too long", "why": "is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 204, "preview": "{\"error\": {\"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\", \"type\": \"invalid_request_error\", \"param\": \"input\", \"code\": \"context_length_exceede", "sha256": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 400, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one"}
+    {"body": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "headers": {"content-length": "204", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 204, "status": 400}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault context too long responses stream": {
+  "blobs": ["3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a", "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 55, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"stream\": true}", "sha256": "3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 4095, "preview": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_8aa53dc15cda6293625bc1e5a7dffaf632e7aca7e7dc6d7e28\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"", "sha256": "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": true, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364", "headers": {"content-length": "4095", "content-type": "text/event-stream; charset=utf-8", "x-request-id": "req_scrimmage_injected"}, "length": 4095, "status": 200}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault status 401 on responses": {
+  "blobs": ["ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8", "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "error": null, "fault": {"do": "status 401", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 276, "preview": "{\"error\": {\"message\": \"Incorrect API key provided: sk-proj-********************************************xxxx. You can find your API key at https://platform.openai.com/account/api-keys.\", \"type\": \"inval", "sha256": "ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 401, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8", "headers": {"content-length": "276", "content-type": "text/plain", "x-request-id": "req_scrimmage_injected"}, "length": 276, "status": 401}
   ],
   "reserved": [],
   "sent": [],
@@ -8452,12 +8478,12 @@
   "stops": []
 },
 "fault context too long responses conversation": {
-  "blobs": ["93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"],
+  "blobs": ["6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"],
   "lines": [
-    {"action": "refused", "args": {"bytes": 60, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"conversation\": \"c\"}", "sha256": "93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"}, "call": "model:openai", "error": "ScrimmageMockError: model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one", "kind": "model", "method": "POST", "mistake": "model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "reason": "mistake", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "stream": false, "test": "t", "unchanged": {"do": "context too long", "why": "is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one"}, "v": 1}
+    {"action": "fault", "args": {"bytes": 60, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"conversation\": \"c\"}", "sha256": "93d3317bcb2bd59bc7fc9171f511c2662967955c6597f5b8e911732088a3385c"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 204, "preview": "{\"error\": {\"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\", \"type\": \"invalid_request_error\", \"param\": \"input\", \"code\": \"context_length_exceede", "sha256": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 400, "stream": false, "test": "t", "v": 1}
   ],
   "replies": [
-    {"raised": "ScrimmageMockError", "text": "model:openai is a Responses call, and context too long sends Chat Completions' error; fault a chat call, or use a status on this one"}
+    {"body": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "headers": {"content-length": "204", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 204, "status": 400}
   ],
   "reserved": [],
   "sent": [],

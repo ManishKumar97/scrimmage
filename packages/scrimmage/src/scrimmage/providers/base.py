@@ -229,7 +229,15 @@ class FaultMaker(Protocol):
 
     def broken_body(self, path: str, op: str) -> bytes: ...
 
-    def context_too_long_body(self) -> bytes: ...
+    def context_too_long_body(self, path: str) -> bytes:
+        """The error body for a request over the context, in the form the API the path
+        names sends."""
+        ...
+
+    def context_too_long_reply(self, path: str, wire: Fields) -> tuple[int, str, bytes]:
+        """The status, content type and body of the reply to a request over the context, as the
+        API the path names sends it for a request of this kind."""
+        ...
 
     def not_carried_out(self, word: str, path: str, wire: Fields) -> str | None:
         """Why this fault cannot be carried out on this request, which is then a mistake in

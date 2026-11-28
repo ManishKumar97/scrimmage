@@ -10,7 +10,7 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 
 ## Faults on tools, MCP and web requests
 
-- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a chat model call.
+- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat or Responses model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a chat model call.
   `append` on a model call comes later.
 
 - **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a test mistake, and the tool never runs.
@@ -74,7 +74,9 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 ## Faults on a model reply
 
 - **`replace` on a model reply is for text replies.** It changes the text of an OpenAI Chat Completions reply and of each `text` block of an Anthropic Messages reply.
-  A streamed reply and an OpenAI Responses API call are a test mistake, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
+  A streamed reply is a test mistake.
+  So is an OpenAI Responses API call, because a Responses message has typed `output_text` parts and annotations, and changing them honestly needs a design of its own.
+  A reply with no text is left as it is, and a moderation or embedding result cannot take it.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`bad body` on a streamed model request.** It is a test mistake: the call fails at once and the fault is not counted as fired.
@@ -82,10 +84,13 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
   Fault a request that is not streamed, or use `timeout` or a status on this one.
 
 - **`context too long` is a saved real reply, not your model's.**
-  On OpenAI's Chat Completions it is OpenAI's 400 with the code `context_length_exceeded`.
+  On OpenAI's Chat Completions it is OpenAI's 400 with the code `context_length_exceeded`, and on a Responses call it is the Responses API's own 400 with that code.
   On an Anthropic call it is Anthropic's 400 with the type `invalid_request_error`.
-  On a Responses call it is a test mistake: the call fails at once and the fault is not counted as fired.
-  The message names the numbers of the real reply it was saved from, not your model's context or your prompt's length.
+  A streamed Responses call gets a 200 event stream that ends in a failed response, as the real API sends it, and the library raises `APIError` for it.
+  A rejected request in a Responses conversation OpenAI keeps is assumed to store nothing, so `context too long` is carried out there; this is assumed, not captured.
+The assumption is weaker for a streamed request: the real streamed rejection came back with `store` true and a real `resp_` id, so OpenAI may have kept something under it.
+The injected failed response carries a made-up id and the model name your request sent, not the snapshot the real one named, and its `tools` is empty, as in every built reply.
+  The Chat Completions message names the numbers of the real reply it was saved from, not your model's context or your prompt's length; the Responses message has none.
 
 - **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a test mistake: the call fails at once and nothing is sent.
   A changed stream is a later fault.

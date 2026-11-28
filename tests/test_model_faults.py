@@ -16,9 +16,8 @@ import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage import config, suggest
+from scrimmage import config
 from scrimmage import runner as runner_module
-from scrimmage.decide import MISTAKE_REFUSAL
 from scrimmage.errors import ConfigError, ScrimmageMockError
 from scrimmage.runner import Runner
 from test_connection_faults import gated, install
@@ -499,24 +498,129 @@ def test_context_too_long_raises_bad_request_with_the_real_code(gated: None, syn
     assert budget.asked == 0 and sink.settles == []
 
 
+def streamed_by(how: str, reached: list[object]) -> tuple[list[str], BaseException | None]:
+    """A streamed Responses call through the openai library, by one of its ways in: the event
+    types it yielded, and what it raised."""
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        return httpx2.Response(200, json={})
+
+    transport = httpx2.MockTransport(provider)
+    seen: list[str] = []
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=transport) as http:
+            client = openai.AsyncOpenAI(api_key="test", http_client=http)
+            async for event in await client.responses.create(
+                model="gpt-4o-mini", input="hi", stream=True
+            ):
+                seen.append(event.type)
+
+    try:
+        if how == "async":
+            asyncio.run(go())
+        else:
+            client = openai.OpenAI(api_key="test", http_client=httpx2.Client(transport=transport))
+            if how == "create":
+                for event in client.responses.create(model="gpt-4o-mini", input="hi", stream=True):
+                    seen.append(event.type)
+            else:
+                with client.responses.stream(model="gpt-4o-mini", input="hi") as stream:
+                    for event in stream:
+                        seen.append(event.type)
+    except Exception as error:
+        return seen, error
+    return seen, None
+
+
+@pytest.mark.design("model.context_too_long")
+@pytest.mark.parametrize("how", ["create", "stream", "async"])
+def test_context_too_long_on_a_streamed_responses_call_is_the_real_failed_stream(
+    gated: None, how: str
+) -> None:
+    """Captured 28 November 2026: OpenAI answers a streamed Responses request over the context
+    with a 200 stream, not a 400. The library yields the first two events, then raises its
+    APIError (not BadRequestError) at the error event."""
+    real = captured("real_response_error_context_length")["body"]["error"]
+    sink, budget = install("context too long", "model")
+    reached: list[object] = []
+    seen, error = streamed_by(how, reached)
+    assert type(error) is openai.APIError, repr(error)
+    assert error.code == "context_length_exceeded" == real["code"]
+    assert error.param == "input" == real["param"]
+    assert error.message == real["message"]
+    assert seen == ["response.created", "response.in_progress"]
+    assert reached == [], "the faulted request reached the provider"
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 200)]
+    assert budget.asked == 0 and sink.settles == []
+
+
+def streamed_failure(**more: Any) -> tuple[list[dict[str, Any]], list[object]]:
+    """A streamed Responses request over httpx2, with the context fault installed: the events
+    the agent gets, and what reached the provider."""
+    reached: list[object] = []
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        return httpx2.Response(200, json={})
+
+    client = httpx2.Client(transport=httpx2.MockTransport(provider))
+    sent = {"model": "gpt-4o-mini", "input": "hi", "stream": True, **more}
+    got = client.post("https://api.openai.com/v1/responses", json=sent)
+    blocks = got.text.strip().split("\n\n")
+    return [json.loads(b.split("data: ", 1)[1]) for b in blocks], reached
+
+
+@pytest.mark.design("model.context_too_long")
+def test_the_failed_stream_repeats_the_text_and_reasoning_a_request_set(gated: None) -> None:
+    """text and reasoning are merged over the template's own, as in a built reply."""
+    install("context too long", "model")
+    asked: dict[str, Any] = {
+        "text": {"format": {"type": "json_object"}},
+        "reasoning": {"effort": "high"},
+        "max_output_tokens": 77,
+    }
+    events, _ = streamed_failure(**asked)
+    for event in (events[0], events[-1]):
+        response = event["response"]
+        assert response["text"] == {"format": {"type": "json_object"}, "verbosity": "medium"}
+        assert response["reasoning"] == {"context": None, "effort": "high", "summary": None}
+        assert response["max_output_tokens"] == 77
+        assert response["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.design("model.context_too_long")
+def test_a_request_chained_to_a_failed_stream_is_a_mistake_and_not_sent(gated: None) -> None:
+    """The failed response has a made-up id, so OpenAI holds nothing under it."""
+    install("context too long", "model")
+    events, _ = streamed_failure()
+    made = events[-1]["response"]["id"]
+    assert made.startswith("resp_") and events[0]["response"]["id"] == made
+    with pytest.raises(ScrimmageMockError, match=f"asks OpenAI to look up {made},"):
+        streamed_failure(stream=False, previous_response_id=made)
+
+
 @pytest.mark.design("model.context_too_long")
 @pytest.mark.parametrize("sync", **SYNC)
-def test_context_too_long_on_a_responses_call_is_a_mistake_and_not_fired(
+def test_context_too_long_on_a_responses_call_raises_the_real_responses_error(
     gated: None, sync: bool
 ) -> None:
+    real = captured("real_response_error_context_length")["body"]["error"]
+    chat = captured("real_error_context_length")["body"]["error"]
+    assert real["param"] == "input" != chat["param"], "Responses names its own parameter"
     sink, budget = install("context too long", "model")
     reached: list[object] = []
     error = raised_by(sync, reached, responses=True)
-    assert isinstance(error, ScrimmageMockError), repr(error)
-    assert "is a Responses call" in str(error)
-    assert reached == [] and budget.asked == 0
-    [line] = model_lines(sink)  # one attempt: the library does not retry a mistake
-    # Not a fired fault, and not a real call the provider failed: nothing was sent.
-    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
-    assert runner_module.real_error(line) is None
-    assert suggest.refused_mistakes([line]) == [line] and suggest.unchanged_lines([line]) == []
-    unchanged = line["unchanged"]
-    assert isinstance(unchanged, dict) and unchanged["do"] == "context too long"
+    assert type(error) is openai.BadRequestError
+    assert error.code == "context_length_exceeded" == real["code"]
+    assert error.param == "input" == real["param"]
+    assert error.type == real["type"]
+    assert error.message == f"Error code: 400 - {real['message']}"
+    assert reached == [], "the faulted request reached the provider"
+    # Fired, once: the library does not retry a 400.
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 400)]
+    assert budget.asked == 0 and sink.settles == []
 
 
 @pytest.mark.design("model.context_too_long")
@@ -532,7 +636,9 @@ def test_context_too_long_on_a_responses_call_is_a_mistake_and_not_fired(
 )
 def test_context_too_long_is_refused_on_a_web_request_and_a_read_call(call: str) -> None:
     table: dict[str, object] = {"call": call, "do": "context too long", "when": "first 1"}
-    with pytest.raises(ConfigError, match=r"'context too long' works only on a chat model call"):
+    with pytest.raises(
+        ConfigError, match=r"'context too long' works only on a chat or Responses model call"
+    ):
         config.read_fault(table, "[[test.fault]] 1")
     for chat in ("model", "model:openai"):
         assert config.read_fault({**table, "call": chat}, "x").do == "context too long"

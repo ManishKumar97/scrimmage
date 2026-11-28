@@ -39,7 +39,7 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `status 500` | the library's `InternalServerError`, after its retries |
 | `status 400` | the library's `BadRequestError`, at once |
 | `status 401` | the library's `AuthenticationError`, at once; on OpenAI with the code `invalid_api_key`, on Anthropic with the type `authentication_error`: each provider's own reply to a bad API key |
-| `context too long` | the library's `BadRequestError`, at once; on OpenAI with the code `context_length_exceeded`, on Anthropic with the type `invalid_request_error` and a message that says the prompt is too long: each provider's own reply to a prompt over the model's context |
+| `context too long` | the library's `BadRequestError`, at once (on a streamed Responses call, `APIError` at the stream's error event); on OpenAI with the code `context_length_exceeded` (a chat call and a Responses call each get their API's own reply), on Anthropic with the type `invalid_request_error` and a message that says the prompt is too long: each provider's own reply to a prompt over the model's context |
 | `timeout` | the library's `APITimeoutError`, after its retries |
 | `refused` | the library's `APIConnectionError`, after its retries |
 | `reset` | the library's `APIConnectionError`, after its retries |
@@ -109,8 +109,10 @@ The test suite runs such an agent against a fake of the Messages API, plain and 
 On an OpenAI call its body is copied from a real OpenAI 401, the reply to a request with a key that was not real: the code `invalid_api_key`, and the message `Incorrect API key provided: sk-proj-****...xxxx. You can find your API key at ...`.
 The key fragment in the message is made up.
 As in the real reply, the content type is `text/plain` while the body is JSON; the openai library reads it either way.
+OpenAI's Responses API sends the same 401 body, so a Responses call gets it too.
+For the other statuses, a real Responses 404 and 400 have the same four fields and the same type as the body `status N` sends, with a message and a code that name the failed request, such as `model_not_found`; `status N` sends one generic message for each status.
 
-`context too long` is the provider's own error for a chat request longer than the model's context:
+`context too long` is the provider's own error for a chat or Responses request longer than the model's context:
 
 ```toml
 [[test.fault]]
@@ -119,14 +121,20 @@ do   = "context too long"
 when = "first 1"
 ```
 
-The openai library raises `BadRequestError` with `code` `context_length_exceeded` and `param` `messages`, and does not retry it.
+The openai library raises `BadRequestError` with `code` `context_length_exceeded` and does not retry it; on a streamed Responses call it raises `APIError`, as below.
+On a Chat Completions call the `param` is `messages`; on a Responses call it is `input`.
 An agent that shortens its prompt when it reads that code can be tested this way.
-The body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
+On a Chat Completions call the body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
 They are not your model's context or your prompt's length.
-It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
-On a Responses call it is a test mistake, and the call fails at once: the Responses API's reply is not this one.
+On a Responses call the body is copied from a real Responses reply, which has no numbers: `Your input exceeds the context window of this model. Please adjust your input and try again.`
+A streamed Responses call gets what a real one gets, which is not a 400: a 200 event stream of `response.created`, `response.in_progress`, an `error` event and `response.failed`, all copied from a real reply.
+The openai library yields the first two events and then raises `APIError`, not `BadRequestError`, with the same code and param, whether you iterate `responses.create(stream=True)`, use `responses.stream` or run async.
+The failed response repeats the fields your request set, such as `max_output_tokens`, `text` and `reasoning`, with a new `resp_` id and the model name your request sent, not the snapshot OpenAI resolved; as in every built reply, its `tools` is empty.
+That id counts as one a fault made: a later request that names it in `previous_response_id` is a test mistake, as after any faulted Responses reply.
+It works on a chat or Responses call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
+A streamed Anthropic call gets the same 400, as the real API sends: it refuses a streamed request over the window before it streams, and the anthropic library raises `BadRequestError` whether you use `messages.create(stream=True)`, `messages.stream` or async.
 It works on `model` or `model:anthropic`, and not on a call that only counts tokens, such as `model:anthropic/input_tokens`.
 
 ## A reply that comes back wrong
