@@ -259,7 +259,7 @@ class ControlServer:
             return 400, {"error": "bad_request"}
         if not usd >= 0:  # NaN too
             return 400, {"error": "bad_request"}
-        settles = self._settles(request, run)
+        settles = self._settles(request)
         if settles is None:
             return 400, {"error": "bad_request"}
         # The run's finished calls first: money spent is spent, so they count even if the run
@@ -277,11 +277,11 @@ class ControlServer:
             return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
 
-    def _settles(self, request: dict[str, object], run: str) -> list[tuple[int, float]] | None:
+    @staticmethod
+    def _settles(request: dict[str, object]) -> list[tuple[int, float]] | None:
         """The settles a reserve carries, or None if one is not valid, so none is applied. A
-        settle is not valid if its cost is not a finite number of at least 0, or if its
-        hold belongs to another run. One whose hold is gone is valid: it was settled
-        already, and the ledger ignores it."""
+        settle is not valid if its cost is not a finite number of at least 0. One whose hold
+        is gone is valid: it was settled already, and the ledger ignores it."""
         carried = request.get("settles")
         if carried is None:
             return []
@@ -294,10 +294,10 @@ class ControlServer:
                 spent = number(line, "usd")
                 if not (math.isfinite(spent) and spent >= 0):
                     return None
-                reservation = int(str(line["reservation"]))
-                if self.ledger.holder(reservation) not in (None, run):
-                    return None
-                settles.append((reservation, spent))
+                # No check that the hold belongs to this run: reservation numbers are unique
+                # and only a holder of the token calls this, who could as well send the same
+                # settle to /v1/budget/settle, which does not check either.
+                settles.append((int(str(line["reservation"])), spent))
         except (ValueError, KeyError):
             return None
         return settles

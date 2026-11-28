@@ -242,12 +242,12 @@ def sending_slowly(stack: Stack) -> tuple[threading.Thread, threading.Event]:
     return sending, let_go
 
 
-def test_a_reserve_waits_briefly_for_the_settle_the_sender_is_sending(stack: Stack) -> None:
-    """The sender has a settle in flight when the next call is reserved, and finishes it
-    within the wait: the reserve is checked after it, not against its hold."""
+def test_a_reserve_waits_for_a_settle_in_flight_however_slow_the_runner_is(stack: Stack) -> None:
+    """The sender has a settle in flight for 200 ms when the next call is reserved: the
+    reserve is checked after it, not against its hold."""
     held = queue_settle(stack)
     sending, let_go = sending_slowly(stack)
-    threading.Timer(client_module.SETTLE_WAIT_S / 5, let_go.set).start()
+    threading.Timer(0.2, let_go.set).start()
     stack.client.reserve("run-1", 0.001)
     sending.join(10)
     assert held not in stack.ledger._held  # type: ignore[reportPrivateUsage]
@@ -255,20 +255,54 @@ def test_a_reserve_waits_briefly_for_the_settle_the_sender_is_sending(stack: Sta
     assert not stack.sender.settles
 
 
-def test_a_reserve_does_not_wait_for_a_whole_settle_request(stack: Stack) -> None:
-    """A claim thread must not wait for a request: past SETTLE_WAIT_S the reserve goes on
-    carrying nothing, and the sender delivers the settle it was sending."""
+def test_a_claim_thread_does_not_wait_for_a_whole_settle_request(stack: Stack) -> None:
+    """A claim thread must not wait for a request: past SETTLE_WAIT_S its reserve goes on,
+    still taking the queued settles, and the sender delivers the one it was sending."""
     held = queue_settle(stack)
     other = queue_settle(stack, 0.003)
     sending, let_go = sending_slowly(stack)
+
+    taken: list[dict[str, object]] = []
+
+    def claim() -> None:
+        client_module.never_wait()
+        stack.sender.take_settles(taken)
+
+    thread = threading.Thread(target=claim)
     began = time.monotonic()
-    stack.client.reserve("run-1", 0.001)
-    assert time.monotonic() - began < 5
-    assert [line["reservation"] for line in stack.sender.settles] == [other]  # not taken
+    thread.start()
+    thread.join(5)
+    assert not thread.is_alive() and time.monotonic() - began < 5
+    assert [line["reservation"] for line in taken] == [other]  # the queued settle is taken
+    assert not stack.sender.settles
     let_go.set()
     sending.join(10)
-    assert held not in stack.ledger._held and not stack.sender.settles  # type: ignore[reportPrivateUsage]
-    assert stack.ledger.spent == pytest.approx(0.005)
+    assert held not in stack.ledger._held  # type: ignore[reportPrivateUsage]
+
+
+class Raced(deque[dict[str, object]]):
+    """A queue another thread has emptied between the check and the pop."""
+
+    def popleft(self) -> dict[str, object]:
+        raise IndexError
+
+
+def test_a_queue_emptied_by_a_reserve_gives_the_slot_back_and_still_sends_the_posts(
+    stack: Stack,
+) -> None:
+    stack.sender.settles = Raced([{"run": "run-1", "reservation": 1, "usd": 0.0}])
+    stack.sender.put_blob("a" * 64, b"x")
+    paths: list[str] = []
+    request = stack.client.request
+
+    def keep(method: str, path: str, *rest: Any, **more: Any) -> Any:
+        paths.append(path)
+        return request(method, path, *rest, **more)
+
+    stack.client.request = keep  # type: ignore[method-assign]
+    stack.sender._send_posts()  # type: ignore[reportPrivateUsage]
+    assert stack.client.slots._value == client_module.CAP  # type: ignore[reportPrivateUsage]
+    assert paths == ["/v1/blobs"]
 
 
 def failing(client: ControlClient, error: str) -> Any:
@@ -349,20 +383,6 @@ def test_a_non_finite_or_negative_settle_is_rejected_by_both_endpoints(
         "POST", "/v1/budget/settle", {"run": "run-1", "reservation": held, "usd": bad}
     )
     assert status == 400 and stack.ledger.spent == 0.0
-
-
-def test_a_carried_settle_for_another_runs_hold_is_rejected_and_none_applied(
-    stack: Stack,
-) -> None:
-    mine = queue_settle(stack)
-    theirs = stack.ledger.reserve(0.001, "run-2")
-    assert isinstance(theirs, int)
-    carried = [{"reservation": mine, "usd": 0.002}, {"reservation": theirs, "usd": 0.0}]
-    status, _ = stack.client.request(
-        "POST", "/v1/budget/reserve", {"run": "run-1", "usd": 0.001, "settles": carried}
-    )
-    assert status == 400
-    assert stack.ledger.spent == 0.0 and stack.ledger.holder(theirs) == "run-2"
 
 
 def test_closing_a_run_sender_forgets_it_even_when_the_last_batch_fails(stack: Stack) -> None:

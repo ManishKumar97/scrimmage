@@ -31,7 +31,7 @@ QUEUE_SIZE = 10_000
 BATCH_LINES = 500
 BATCH_S = 0.1
 SETTLES_PER_RESERVE = 256  # about 20 KB; any more wait for the sender
-SETTLE_WAIT_S = 0.05  # how long a reserve waits for a settle the sender is sending
+SETTLE_WAIT_S = 0.05  # how long a claim thread waits for a settle the sender is sending
 TIMEOUT_S = 10.0
 PING_TIMEOUT_S = 5.0  # the probe's ping must not hold the probe for a whole TIMEOUT_S
 BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
@@ -430,19 +430,22 @@ class Sender:
         A line is in the queue or in the caller's list, never both, so this process sends
         none twice. The ledger ignores one it has settled, for a reply that was lost.
 
-        It waits at most SETTLE_WAIT_S for a settle the sender is sending, so a thread that
-        must not wait for a whole request, such as a claim thread, is held no longer. It then
-        takes none: the sender delivers them, as it did before they could ride on a reserve."""
-        if not self._settling.acquire(timeout=SETTLE_WAIT_S):
-            return
+        It waits for a settle the sender is sending, however long its request takes, so the
+        reserve is checked after that settle. A claim thread must not wait for a whole
+        request: it waits at most SETTLE_WAIT_S, and then takes the queued settles anyway.
+        The lock only orders this against the one settle in flight, which stays off the
+        queue, so a reserve that gave up waiting for it can be checked before it lands."""
+        patient = not getattr(_waits, "never", False)
+        got = self._settling.acquire(timeout=-1 if patient else SETTLE_WAIT_S)
         try:
             while len(taken) < SETTLES_PER_RESERVE:
                 try:
-                    taken.append(self.settles.popleft())
+                    taken.append(self.settles.popleft())  # atomic: no lock is needed to pop
                 except IndexError:
                     break
         finally:
-            self._settling.release()
+            if got:
+                self._settling.release()
 
     def give_back_settles(self, taken: list[dict[str, object]]) -> None:
         """The reserve did not get through: the settles are queued again, in their order."""
@@ -573,7 +576,7 @@ class Sender:
                     try:
                         line = self.settles.popleft()
                     except IndexError:
-                        return
+                        break  # a reserve took them: the posts below still go
                     requested = True  # the request gives the slot back
                     status, _ = self.client.request("POST", "/v1/budget/settle", line, held=True)
                     sent = status == 200
