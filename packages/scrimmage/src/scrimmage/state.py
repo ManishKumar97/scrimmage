@@ -247,6 +247,7 @@ class ProcessState:
     def __init__(self, tools: Iterable[str] = (), *, service: bool = False) -> None:
         self.listed = set(tools)  # names gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
+        self.gates: dict[str, str] = {}  # each adapted name: the adapter that checked it
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
         self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.service = service
@@ -368,6 +369,7 @@ class RunState:
         self.allowed = allowed
         self.began = time.monotonic()  # until a plan says how long the run has been going
         self.refused: str | None = None
+        self.probe_passed = 0  # init --probe: tool-less requests let through with a canned reply
         self.model_calls = 0
         self.proc = this_process()
         self._seq = 0
@@ -455,6 +457,10 @@ class RunState:
     @property
     def adapted(self) -> set[str]:
         return self.process.adapted
+
+    @property
+    def gates(self) -> dict[str, str]:
+        return self.process.gates
 
     @property
     def blocked(self) -> dict[str, str]:
@@ -570,6 +576,14 @@ class RunState:
         with self._lock:
             return self._going(Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic()))
 
+    def pass_probe(self, limit: int) -> int | None:
+        """Count one tool-less request the probe lets through; None once the limit is met."""
+        with self._lock:
+            if self.probe_passed >= limit:
+                return None
+            self.probe_passed += 1
+            return self.probe_passed
+
     def refuse(self, step: Step, reason: str) -> Step:
         """Turn a decided call into a refusal for a reason the gate found, and poison the run."""
         with self._lock:
@@ -632,8 +646,8 @@ class RunState:
             "blind_child": detail,
             "orphan": detail,
             "probe": (
-                f"{label} {detail}: scrimmage init --probe stops at the first model request, "
-                "which is refused before it is sent"
+                f"{label} {detail}: scrimmage init --probe stops at the first model request "
+                "that offers tools, which is refused before it is sent"
             ),
         }
         return ScrimmageRefused(messages.get(reason, f"{label} is refused: {detail}"))

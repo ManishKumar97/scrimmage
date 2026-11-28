@@ -374,6 +374,155 @@ def test_decorated_methods_are_found_with_no_probe_and_the_package_name_is_kept(
     assert tool_paths(whole) == ["tau.air.tools:AirlineTools.book"]
 
 
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_whose_name_cannot_be_imported_is_read_as_top_level(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = (
+        "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n\n\n"
+        "@is_tool(1)\ndef cancel(x):\n    return x\n"
+    )
+    folder = tmp_path / "python-backend"
+    write(folder, {"__init__.py": "", "airline/__init__.py": "", "airline/tools.py": code})
+    write(folder, {"my-helpers.py": "def util():\n    return 1\n"})
+    _, doc = run(capsys, str(folder), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["airline.tools:cancel", "airline.tools:lookup"]
+    notes = messages(doc, "notes")
+    assert (
+        "python-backend is not an importable package name, so its modules are read as "
+        "top-level (airline.tools); run scrimmage from inside python-backend" in notes
+    )
+    text = (tmp_path / "d.toml").read_text()
+    # One comment for the folder, not one for each tool.
+    assert text.count("# read as top-level:") == 1
+    assert (
+        "# read as top-level: 2 paths under python-backend, such as airline.tools:cancel; "
+        "run scrimmage from inside python-backend\n" in text
+    )
+    assert tomllib.loads(text)["agent"]["tools"] == ["airline.tools:cancel", "airline.tools:lookup"]
+    # A file the read cannot name is counted, never dropped without a word.
+    assert "skipped definitions in 1 files whose names cannot be imported: my-helpers.py" in notes
+
+
+TOOLS = (
+    "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n\n\n"
+    "@is_tool(1)\ndef cancel(x):\n    return x\n"
+)
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_that_cannot_be_imported_below_the_folder_read_is_the_top_level(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command from the README: run in the repository's root, whose child holds the code."""
+    repo = tmp_path / "my-repo"
+    write(
+        repo,
+        {
+            "python-backend/__init__.py": "",
+            "python-backend/airline/__init__.py": "",
+            "python-backend/airline/tools.py": TOOLS,
+            "ui/readme.py": "x = 1\n",
+        },
+    )
+    _, doc = run(capsys, str(repo), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["airline.tools:cancel", "airline.tools:lookup"]
+    notes = messages(doc, "notes")
+    assert "python-backend is not an importable package name, so its modules are read as" in notes
+    assert "run scrimmage from inside python-backend" in notes
+    assert "skipped definitions" not in notes
+    assert "cannot be imported from" not in notes
+    moved = f"need it beside that code; move it to {(repo / 'python-backend').resolve()}"
+    assert moved in messages(doc, "warnings")
+    assert "# read as top-level: 2 paths under python-backend" in (tmp_path / "d.toml").read_text()
+
+
+FIND = "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n"
+PAY = "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef refund(x):\n    return x\n"
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_one_tool_in_two_top_level_folders_is_ambiguous_and_never_one_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(
+        tmp_path,
+        {
+            "col/svc-a/tools.py": FIND + PAY.split("\n\n\n", 1)[1],
+            "col/svc-b/tools.py": FIND + PAY.split("\n\n\n", 1)[1],
+        },
+    )
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert tool_paths(doc) == []
+    unresolved = cast(list[dict[str, object]], doc["unresolved"])
+    assert {u["name"]: u["problem"] for u in unresolved} == {
+        "lookup": "ambiguous",
+        "refund": "ambiguous",
+    }
+    assert unresolved[0]["candidates"] == [
+        "tools:lookup (under col/svc-a)",
+        "tools:lookup (under col/svc-b)",
+    ]
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_each_top_level_folder_gets_its_own_comment_and_the_warning_names_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"col/svc-a/tools.py": FIND, "col/svc-b/tools.py": PAY})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["tools:lookup", "tools:refund"]
+    text = (tmp_path / "d.toml").read_text()
+    assert "# read as top-level: 1 path under col/svc-a, such as tools:lookup;" in text
+    assert "# read as top-level: 1 path under col/svc-b, such as tools:refund;" in text
+    warnings = messages(doc, "warnings")
+    assert "under several folders" in warnings
+    assert f"col/svc-a ({(tmp_path / 'col' / 'svc-a').resolve()}): 1" in warnings
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_many_top_level_folders_are_one_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {f"ex-{n}/app.py": f"def tool{n}(x):\n    return x\n" for n in range(9)})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    notes = [str(m["message"]) for m in cast(list[dict[str, object]], doc["notes"])]
+    top = [n for n in notes if "cannot be imported" in n or "not an importable" in n]
+    assert len(top) == 1 and top[0].startswith("9 folders have names that cannot be imported (")
+    assert "and 4 more" in top[0]
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_with_no_init_and_a_name_that_cannot_be_imported_is_the_top_level_too(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"my-service/app/tools.py": TOOLS})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["app.tools:cancel", "app.tools:lookup"]
+    assert "my-service is not an importable folder name" in messages(doc, "notes")
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_file_that_cannot_be_named_is_counted_when_its_definitions_are_in_an_if(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = "import sys\n\nif sys.platform:\n    def lookup(x):\n        return x\n"
+    write(tmp_path, {"my-helpers.py": code})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert "skipped definitions in 1 files whose names cannot be imported" in messages(doc, "notes")
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_top_level_name_that_hides_the_standard_library_is_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"py-app/platform/__init__.py": "", "py-app/platform/tools.py": TOOLS})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert "py-app is read as top-level, and its platform shadow the standard library" in (
+        messages(doc, "notes")
+    )
+
+
 @pytest.mark.design("init.nested_listed")
 def test_a_nested_class_method_is_listed_and_not_written(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -595,6 +744,80 @@ def test_tools_mapped_over_tools_offered(
         == OK
     )
     assert "tools: 4 of 5 offered to the model mapped" in capsys.readouterr().out
+
+
+def adapter_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: list[str],
+    plain: list[str],
+    missing: list[str],
+    mcp: tuple[str, ...] = (),
+) -> None:
+    """A probe that offered adapter tools, tools the read maps, and tools it cannot place."""
+    offered: list[dict[str, object]] = [
+        {"name": n, "paths": [], "adapter": True, "gate": "LangChain adapter"} for n in adapter
+    ]
+    offered += [{"name": n, "paths": [], "adapter": True, "gate": "MCP gate"} for n in mcp]
+    offered += [{"name": n, "paths": [f"m:{n}"], "adapter": False} for n in plain]
+    offered += [{"name": n, "paths": ["a:" + n, "b:" + n], "adapter": False} for n in missing]
+    request = {"host": "api.openai.com", "method": "POST", "path": "/v1/chat/completions"}
+    notice = {"tools": offered, "model_request": {**request, "provider": "openai"}}
+    monkeypatch.setattr(
+        drafting,
+        "run_probe",
+        lambda *a: drafting.Probe(True, "stopped at POST", cast(dict[str, object], notice)),
+    )
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_tools_all_gated_by_an_adapter_are_not_counted_as_unmapped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(8)], [], [])
+    write(tmp_path, {"bot.py": ENTRY})
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert "tools: 8 offered to the model, all gated (8 by the LangChain adapter)\n" in out
+    assert "mapped" not in out.split("tools:")[1].splitlines()[0]
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_each_adapter_tool_is_said_to_be_gated_by_its_own_adapter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(tmp_path, {"bot.py": ENTRY})
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(6)], [], [], mcp=("m1", "m2"))
+    capsys.readouterr()
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    expected = (
+        "tools: 8 offered to the model, all gated (6 by the LangChain adapter, 2 by the MCP gate)\n"
+    )
+    assert expected in out
+    adapter_probe(monkeypatch, ["t0", "t1"], [], ["x"], mcp=("m1",))
+    (tmp_path / "b.toml").unlink()
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert (
+        "tools: 4 offered, 2 gated by the LangChain adapter, 1 gated by the MCP gate, "
+        "1 not mapped: x\n" in out
+    )
+
+
+@pytest.mark.design("init.adapter_numbers")
+def test_a_mix_of_adapter_and_other_tools_says_each_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter_probe(monkeypatch, [f"t{n}" for n in range(6)], [], ["x", "y"])
+    write(tmp_path, {"bot.py": ENTRY})
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+    assert cli.main(args) == OK
+    out = capsys.readouterr().out
+    assert "tools: 8 offered, 6 gated by the LangChain adapter, 2 not mapped: x, y\n" in out
 
 
 def test_a_probe_with_no_offer_keeps_the_static_tools_and_a_name_found_only_by_the_read(
@@ -886,10 +1109,8 @@ def test_a_host_read_from_the_environment_is_found_by_the_probe(
     "request_line",
     [
         'client.embeddings.create(model="text-embedding-3-small", input=question)',
-        'client.chat.completions.create(model="gpt-4o-mini", '
-        'messages=[{"role": "user", "content": question}])',
     ],
-    ids=["embeddings", "chat-no-tools"],
+    ids=["embeddings"],
 )
 def test_a_first_request_that_offers_no_tools_stops_there_and_keeps_the_candidates(
     tmp_path: Path,
@@ -912,6 +1133,34 @@ def test_a_first_request_that_offers_no_tools_stops_there_and_keeps_the_candidat
     assert tool_paths(doc) == ["bot:get_order"]
     assert cast(list[dict[str, str]], doc["tools"])[0]["found_by"] == "static"
     assert "tools offered later are not seen" in messages(doc, "notes")
+    assert doc["numbers"] is None
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_an_agent_that_ends_after_a_passed_request_keeps_the_candidates_and_the_host(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + "    return 'done'\n\n\n"
+        + "def is_tool(f):\n    return f\n\n\n@is_tool\ndef get_order(n):\n    return n\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    code_out, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert code_out == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert outcome.startswith("ended by itself; passed 1 request with no tools first")
+    assert tool_paths(doc) == ["bot:get_order"]
+    assert cast(list[dict[str, str]], doc["tools"])[0]["found_by"] == "static"
+    assert "tools offered later are not seen" in messages(doc, "notes")
+    assert doc["model_hosts"] == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]
     assert doc["numbers"] is None
 
 
@@ -999,7 +1248,8 @@ def test_an_agent_that_catches_the_refusal_runs_nothing_more(
     code = (
         HEAD
         + "def answer(question):\n    try:\n        "
-        + 'client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        + 'client.chat.completions.create(model="gpt-4o-mini", messages=[], '
+        + f"tools=[{GET_ORDER}])\n"
         + "    except Exception:\n"
         + f"        open({str(marker)!r}, 'w').close()\n"
         + "    return 'done'\n"
@@ -1078,7 +1328,8 @@ def test_an_agent_that_ignores_sigterm_still_ends_at_once_with_its_output(
         + HEAD
         + "def answer(question):\n    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         + "    print('printed before the request')\n    try:\n"
-        + '        client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        + '        client.chat.completions.create(model="gpt-4o-mini", messages=[], '
+        + f"tools=[{GET_ORDER}])\n"
         + "    except Exception:\n"
         + f"        open({str(marker)!r}, 'w').close()\n"
         + "    return 'done'\n"
@@ -1172,7 +1423,9 @@ def test_the_named_function_runs_and_nothing_else(
     code = cli.main(["init", str(tmp_path), "--probe", "agent:answer"])
     out = capsys.readouterr().out
     assert code == OK
-    assert out.splitlines()[0] == "probe: running agent:answer up to its first model request"
+    assert out.splitlines()[0] == (
+        "probe: running agent:answer up to the first model request that offers tools"
+    )
     assert not (tmp_path / "DELETED").exists()
     data = agent_table(tmp_path / "scrimmage.toml")
     assert data["function"] == "agent:answer"
@@ -1316,6 +1569,14 @@ def test_comments_say_how_to_fix_a_nested_or_ambiguous_tool(
     assert 'list it as {path = "...", name = "twice"}' in text
 
 
+def gate_of_offered_tools(root: Path) -> list[str | None]:
+    """The gate the probe's notice names for each tool the model was offered."""
+    files = sorted((root / "scrimmage-runs").glob("*/*.jsonl"))
+    lines = [json.loads(text) for text in files[-1].read_text().splitlines()]
+    notice = next(line for line in lines if line.get("notice") == "probe")
+    return [tool.get("gate") for tool in notice["tools"]]
+
+
 @pytest.mark.slow
 @pytest.mark.design("init.adapter_tools")
 def test_the_probe_lists_a_framework_s_tools_as_adapter_tools(
@@ -1340,6 +1601,198 @@ def test_the_probe_lists_a_framework_s_tools_as_adapter_tools(
     assert cast(list[dict[str, str]], doc["adapter_tools"])[0]["found_by"] == "probe"
     assert "tools" not in agent_table(tmp_path / "draft.toml")
     assert doc["numbers"] == {"tools_offered": 1, "tools_mapped": 0}
+    assert gate_of_offered_tools(tmp_path) == ["LangChain adapter"]
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "again.toml")]
+    assert cli.main(args) == OK
+    assert "tools: 1 offered to the model, all gated (1 by the LangChain adapter)\n" in (
+        capsys.readouterr().out
+    )
+
+
+LIST_ORDERS = (
+    '{"type": "function", "function": {"name": "list_orders", "parameters": {"type": "object"}}}'
+)
+ASK = (
+    'client.chat.completions.create(model="gpt-4o-mini", '
+    'messages=[{"role": "user", "content": question}]TOOLS)\n'
+)
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_the_probe_passes_a_request_with_no_tools_and_reads_the_next(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def get_order(n):\n    return n\n\n\ndef list_orders():\n    return []\n\n\n"
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + "    "
+        + ASK.replace("TOOLS", f", tools=[{GET_ORDER}, {LIST_ORDERS}]")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK
+    assert fake.received == []  # the canned reply is made here: nothing reached the network
+    assert sorted(tool_paths(doc)) == ["bot:get_order", "bot:list_orders"]
+    assert doc["numbers"] == {"tools_offered": 2, "tools_mapped": 2}
+    outcome = str(probe_of(doc)["outcome"])
+    assert "refused before it was sent; passed 1 request with no tools, such as guardrails" in (
+        outcome
+    )
+    files = list((tmp_path / "scrimmage-runs").glob("*/*.jsonl"))
+    schema = json.loads(
+        (Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text()
+    )
+    for line in (json.loads(text) for text in files[0].read_text().splitlines()):
+        jsonschema.validate(line, schema)
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_a_probe_where_every_request_has_no_tools_stops_at_the_limit_and_says_so(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    for _ in range(8):\n        "
+        + ASK.replace("TOOLS", "")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert "passed 5 requests with no tools" in outcome
+    assert "the most the probe passes" in outcome
+    assert "the agent may offer tools later" in outcome
+    assert doc["tools"] == []
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_an_agent_that_fails_on_the_canned_reply_is_said_to_have_failed_on_it(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    reply = "
+        + ASK.replace("TOOLS", "")
+        + "    return json.loads(reply.choices[0].message.content)\n"
+    ).replace("import os\n", "import json\nimport os\n")
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert outcome.startswith("crashed, see ")
+    assert "passed 1 request with no tools first" in outcome
+    assert "may have sent the agent down another path" in outcome
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.adapter_tools")
+def test_the_probe_says_an_mcp_tool_is_gated_by_the_mcp_gate(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = Path(__file__).parent / "fakes" / "docs_server.py"
+    code = (
+        HEAD
+        + "import asyncio\nimport sys\n\nfrom mcp import ClientSession, StdioServerParameters\n"
+        + "from mcp.client.stdio import stdio_client\n\n\n"
+        + "async def listed():\n"
+        + f"    args = [{str(server)!r}, 'stdio', 'docs', {str(tmp_path / 'docs.log')!r}, 'ok']\n"
+        + "    params = StdioServerParameters(command=sys.executable, args=args)\n"
+        + "    async with stdio_client(params) as (r, w), ClientSession(r, w) as session:\n"
+        + "        await session.initialize()\n"
+        + "        return [tool.name for tool in (await session.list_tools()).tools]\n\n\n"
+        + "def answer(question):\n    names = asyncio.run(listed())\n"
+        + "    tools = [{'type': 'function', 'function': {'name': n, 'parameters': "
+        + "{'type': 'object'}}} for n in names]\n    "
+        + ASK.replace("TOOLS", ", tools=tools")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == [], doc
+    assert names_found(doc, "adapter_tools")
+    assert set(gate_of_offered_tools(tmp_path)) == {"MCP gate"}
+    capsys.readouterr()
+    args = ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "again.toml")]
+    assert cli.main(args) == OK
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("tools:"))
+    assert line.endswith(" by the MCP gate)") and "all gated (" in line
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_a_probe_stops_at_a_streamed_request_with_no_tools_and_says_why(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = (
+        HEAD
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + "    "
+        + ASK.replace("TOOLS", ", stream=True")
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert "which offers no tools and is streamed" in outcome
+    assert "passed 1 request with no tools" in outcome
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_passes_guardrails")
+def test_a_call_refused_after_a_passed_request_keeps_the_count_and_the_host(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A guardrail passes, then the agent's trace exporter posts to the web and is refused."""
+    code = (
+        "import httpx\n"
+        + HEAD
+        + "def answer(question):\n    "
+        + ASK.replace("TOOLS", "")
+        + '    httpx.post("http://127.0.0.1:1/traces", json={})\n'
+        + '    return "done"\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    outcome = str(probe_of(doc)["outcome"])
+    assert "refused before it ran; no tools are known; passed 1 request with no tools first" in (
+        outcome
+    )
+    assert doc["model_hosts"] == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]
 
 
 @pytest.mark.slow

@@ -149,7 +149,7 @@ def test_the_probe_names_a_host_that_is_not_anthropics_and_nothing_is_sent(
     assert exit_code == OK, doc
     assert fake.received == []
     assert hosts_of(doc) == [{"host": "127.0.0.1", "provider": "anthropic", "found_by": "probe"}]
-    assert "stopped at POST /v1/messages on 127.0.0.1" in str(probe_of(doc)["outcome"])
+    assert "passed 1 request with no tools" in str(probe_of(doc)["outcome"])
     assert agent_table(out)["model_hosts"] == [{"host": "127.0.0.1", "provider": "anthropic"}]
     out.write_text(out.read_text() + ONE_TEST)
     capsys.readouterr()

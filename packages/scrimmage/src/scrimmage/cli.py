@@ -155,7 +155,8 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     init.add_argument(
         "--probe",
         metavar="MODULE:FUNCTION",
-        help="run this function up to its first model request, to read the tools it offers",
+        help="run this function up to the first model request that offers tools (passing up to 5 "
+        "that offer none), to read the tools it offers",
     )
     init.add_argument("--json", action="store_true", help="print one JSON document")
     show = commands.add_parser(
