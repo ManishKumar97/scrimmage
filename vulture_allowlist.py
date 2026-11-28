@@ -35,6 +35,14 @@ _.nested  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.sync_tool_through_arun  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.async_tool  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.handle_tool_error  # tests/example/acme/graph.py: LangChain reads it on the tool
+_.answer_told  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_raises  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_timed  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_sync  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_custom  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_replaced  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_mcp  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_impl_replaced  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _._arun  # tests/test_langgraph.py: a stand-in for LangChain's own, read by the structural check
 _.mixin_tool  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.answer_overridden  # tests/example/acme/graph.py: a test's scrimmage.toml names it

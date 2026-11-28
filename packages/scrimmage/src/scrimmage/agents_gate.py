@@ -1,0 +1,163 @@
+# pyright: standard, reportPrivateUsage=true
+"""The adapter for the OpenAI Agents SDK's function tools and handoffs.
+
+`@function_tool` captures the team's function when it decorates it, so a swap of the module
+attribute never sees a call. Every run reaches a function tool through the SDK's own invoker,
+which runs the tool inside the tool's failure-error function. The gate sits there: an
+injected failure reaches the model as a real failure of that tool does, by the SDK's default
+text or the team's own function. The team writes no tools list. The SDK never imports the
+Agents SDK: the hook patches it when the agent imports it.
+
+A handoff runs no I/O, so it is seen and recorded and never refused or faulted.
+"""
+
+import functools
+import inspect
+import json
+import weakref
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
+
+from scrimmage import hooks, tool_gate
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.state import ProcessState, RunState
+
+LIBRARY = "openai-agents"
+TOOL_MODULE = "agents.tool"
+TESTED = ((0, 20), (0, 26))  # the minor versions this release was tested with
+INVOKER = "_FailureHandlingFunctionToolInvoker"
+# The team's function, kept on the SDK's invoker implementation: a mock is typed from it.
+WRAPPED = "__agents_function_tool_wrapped_callable__"
+RAW = "__scrimmage_raw_invoker__"  # on a gate: the SDK's own implementation it wraps
+MCP = "mcp"  # the value of agents.tool.ToolOriginType for a tool made from an MCP server's tool
+
+
+def install(process: ProcessState, stop: Callable[[str], None]) -> None:
+    hooks.on_import(TOOL_MODULE, lambda module: patch_tools(module, process, stop))
+
+
+def version() -> tuple[int, int] | None:
+    try:
+        # Not at import: the SDK starts without it. A team's stray module of the same name
+        # as one this pulls in can raise, and that must not crash the run.
+        import importlib.metadata
+
+        parts = importlib.metadata.version(LIBRARY).split(".")
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return None
+
+
+def patch_tools(
+    module: ModuleType, owner: ProcessState | RunState, stop: Callable[[str], None]
+) -> None:
+    """owner: the process, or a run's own process; the adapter keeps no run."""
+    process = owner.process if isinstance(owner, RunState) else owner
+    process.newer_version(LIBRARY, version(), TESTED)
+    invoker = getattr(module, INVOKER)
+    tool_class = module.FunctionTool
+    if getattr(invoker, RAW, False):
+        return
+    made = invoker.__init__
+    created = tool_class.__post_init__
+    # By id: a dataclass with eq has no hash, so a WeakSet cannot hold one.
+    tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+
+    @functools.wraps(made)
+    def gated_init(self: Any, invoke_tool_impl: Any, *args: Any, **kwargs: Any) -> None:
+        # The SDK rebinds an invoker to a copied tool with the same implementation: gate its
+        # own, so each gate reads the tool of its own invoker.
+        raw = getattr(invoke_tool_impl, RAW, invoke_tool_impl)
+        made(self, gate_impl(raw, lambda: self._function_tool), *args, **kwargs)
+
+    @functools.wraps(created)
+    def tracked_post_init(self: Any) -> None:
+        created(self)
+        with process.lock:
+            tools[id(self)] = self
+        vet(self)
+
+    def vet(tool: Any) -> str | None:
+        """Record whether a call to this tool reaches the gate. Says why not, if it does not."""
+        reason = skips_gate(tool, invoker)
+        if reason is None:
+            process.adapted.add(tool.name)  # offered to the model, it will reach the gate
+        else:
+            process.blocked[tool.name] = reason
+        return reason
+
+    def recheck() -> None:
+        with process.lock:
+            live = list(tools.values())
+        for tool in live:
+            vet(tool)
+
+    process.rechecks.append(recheck)
+    setattr(invoker, RAW, True)
+    invoker.__init__ = gated_init
+    tool_class.__post_init__ = tracked_post_init
+
+
+def skips_gate(tool: Any, invoker: type) -> str | None:
+    """Why a call to this tool could run without passing the gate, if one could."""
+    own = tool.on_invoke_tool
+    if not isinstance(own, invoker):
+        return (
+            f"{tool.name} cannot be gated, because its on_invoke_tool is the team's own "
+            "function and not the Agents SDK's"
+        )
+    if not tool_gate.is_gate(getattr(own, "_invoke_tool_impl", None)):
+        return f"{tool.name} cannot be gated, because its _invoke_tool_impl was replaced"
+    return None
+
+
+def parsed(text: object) -> dict[str, object]:
+    """The call's arguments: the SDK passes the model's JSON text. Text that is no JSON object
+    is kept as it came, under a name no mock's args can name."""
+    try:
+        value = json.loads(text) if isinstance(text, str) and text else {}
+    except ValueError:
+        return {"<unparsed arguments>": str(text)}
+    return value if isinstance(value, dict) else {"<unparsed arguments>": str(text)}
+
+
+def from_mcp(tool: Any) -> bool:
+    """A tool made from an MCP server's tool: the MCP gate decides its call."""
+    if getattr(tool, "_mcp_tool_binding", None) is not None:
+        return True
+    origin = getattr(tool, "_tool_origin", None)
+    return str(getattr(getattr(origin, "type", None), "value", "")) == MCP
+
+
+def awaiting(impl: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(impl)
+    async def awaited(*args: Any, **kwargs: Any) -> Any:
+        return await impl(*args, **kwargs)
+
+    return awaited
+
+
+def gate_impl(impl: Callable[..., Any], own: Callable[[], Any]) -> Callable[..., Any]:
+    """A gate in place of the invoker's implementation, so it runs inside the failure handling.
+
+    own: the FunctionTool this invoker belongs to, once the SDK has bound it.
+    """
+    function = getattr(impl, WRAPPED, None) or impl
+    original = impl
+    if not inspect.iscoroutinefunction(impl):  # a callable object the SDK awaits all the same
+        impl = awaiting(impl)
+
+    def describe(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tool_gate.Gated | None:
+        context, text = args[0], args[1]
+        tool = own()
+        if tool is not None and from_mcp(tool):
+            return None  # the MCP gate sees the call of the server's tool, which is this one
+        name = tool.name if tool is not None else getattr(context, "tool_name", None)
+        if not isinstance(name, str) or not name:
+            raise ScrimmageRefused("an Agents SDK tool was called with no name, so it is refused")
+        return tool_gate.Gated(name, parsed(text), function, RuntimeError)
+
+    gated = tool_gate.gate_with(impl, describe)
+    setattr(gated, RAW, original)
+    return gated

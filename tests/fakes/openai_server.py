@@ -11,7 +11,8 @@ change its answer. "a@b" serves a, or b to a conversation where a tool result ho
 a note addressed to the assistant, as a model that obeys one would answer.
 A saved real reply, a file of its status, headers and body, is sent with its own status.
 A ".sse" fixture is sent as a stream of server-sent events. Embeddings, moderations and
-the Responses API each have one fixture of their own. A request it has no reply for gets
+the Responses API each have one fixture of their own; `responses` lists one fixture per turn
+of a Responses conversation instead, as an agent loop needs. A request it has no reply for gets
 an error, and the error is kept, so a test cannot pass by accident. This is test support
 code; it is never in a wheel.
 
@@ -94,6 +95,20 @@ def holds(request: dict[str, Any], marker: str, roles: tuple[str, ...] | None = 
         marker in text_of(m)
         for m in request.get("messages", [])
         if roles is None or m.get("role") in roles
+    )
+
+
+def response_turn(request: dict[str, Any]) -> int:
+    """How many rounds of tool results a Responses request already holds: each run of
+    consecutive function_call_output items is one round, so parallel calls are one turn."""
+    items = request.get("input")
+    if not isinstance(items, list):
+        return 0
+    kinds = [str(i.get("type")) if isinstance(i, dict) else "" for i in items]  # type: ignore[union-attr]
+    return sum(
+        1
+        for n, kind in enumerate(kinds)
+        if kind == "function_call_output" and (n == 0 or kinds[n - 1] != "function_call_output")
     )
 
 
@@ -186,6 +201,7 @@ class FakeOpenAI:
         *,
         embedding: str | None = None,
         response: str | None = None,
+        responses: list[str] | None = None,
         moderation: str | None = None,
         by_model: dict[str, Rule] | None = None,
         host: str = "127.0.0.1",
@@ -197,6 +213,7 @@ class FakeOpenAI:
         self._replies = [Reply(name) for name in replies]
         self._embedding = Reply(embedding) if embedding else None
         self._response = Reply(response) if response else None
+        self._turns = [Reply(name) for name in responses or []]
         self._moderation = Reply(moderation) if moderation else None
         self._used: set[str] = set()
         self._lock = threading.Lock()
@@ -217,7 +234,7 @@ class FakeOpenAI:
     @property
     def unused(self) -> list[str]:
         """Fixtures the test listed that no request asked for."""
-        listed = [r.name for r in self._replies] + [
+        listed = [r.name for r in (*self._replies, *self._turns)] + [
             r.name for r in (self._embedding, self._response, self._moderation) if r is not None
         ]
         with self._lock:
@@ -240,7 +257,12 @@ class FakeOpenAI:
                 RESPONSES_PATH: self._response,
                 MODERATIONS_PATH: self._moderation,
             }
-            if path in single:
+            if path == RESPONSES_PATH and self._turns:
+                turn = response_turn(request)
+                if turn >= len(self._turns):
+                    return self._error(f"no response for turn {turn + 1}")
+                reply = self._turns[turn]
+            elif path in single:
                 reply = single[path]
                 if reply is None:
                     return self._error(f"no fixture serves {path}")
