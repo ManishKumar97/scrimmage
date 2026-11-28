@@ -133,6 +133,7 @@ The failed response repeats the fields your request set, such as `max_output_tok
 It works on a chat or Responses call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
 On an Anthropic call it works the same way and sends Anthropic's own 400: the error type `invalid_request_error` and the message `prompt is too long: ... tokens > ... maximum`, which the anthropic library raises as `BadRequestError` and does not retry.
 Its numbers are copied from a real reply too.
+A streamed Anthropic call gets the same 400, as the real API sends: it refuses a streamed request over the window before it streams, and the anthropic library raises `BadRequestError` whether you use `messages.create(stream=True)`, `messages.stream` or async.
 It works on `model` or `model:anthropic`, and not on a call that only counts tokens, such as `model:anthropic/input_tokens`.
 
 ## A reply that comes back wrong

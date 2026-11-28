@@ -4,6 +4,7 @@ parse, and the fault that never can be built, which refuses and names Anthropic.
 The anthropic library reads each as it would a real one: the class of the error follows the
 status, the body's type is Anthropic's own, and the request id header is there."""
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -258,3 +259,74 @@ def test_a_retry_after_on_the_fault_is_the_wait_the_library_takes(
     _run, _provider, client, sleeps = retrying("first 2", monkeypatch, retry_after=3)
     ask(client)
     assert sleeps.waits == [3.0, 3.0], "the header replaces the library's backoff"
+
+
+def streamed_error(how: str, handler: Any) -> BaseException:
+    """A streamed Messages call through the anthropic library, by one of its ways in: what it
+    raised."""
+    transport = httpx2.MockTransport(handler)
+    sync = anthropic.Anthropic(
+        base_url="https://api.anthropic.com",
+        api_key="k",
+        max_retries=0,
+        http_client=anthropic.DefaultHttpxClient(transport=transport),
+    )
+    args: dict[str, Any] = {
+        "model": MODEL,
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    async def go() -> None:
+        async with anthropic.DefaultAsyncHttpxClient(transport=transport) as http:
+            client = anthropic.AsyncAnthropic(
+                base_url="https://api.anthropic.com", api_key="k", max_retries=0, http_client=http
+            )
+            async for _ in await client.messages.create(**args, stream=True):
+                pass
+
+    try:
+        if how == "async":
+            asyncio.run(go())
+        elif how == "create":
+            for _ in sync.messages.create(**args, stream=True):
+                pass
+        else:
+            with sync.messages.stream(**args) as stream:
+                for _ in stream:
+                    pass
+    except Exception as error:
+        return error
+    raise AssertionError("the call did not raise")
+
+
+@pytest.mark.parametrize("how", ["create", "stream", "async"])
+def test_a_streamed_prompt_over_the_window_is_the_captured_plain_400(how: str) -> None:
+    """Captured 28 November 2026: Anthropic answers a streamed request over the window with a
+    plain 400, as it does an unstreamed one, and never starts a stream. The library raises
+    BadRequestError for the real bytes and for the injected ones alike."""
+    real = json.loads((FIXTURES / "real_context_too_long_stream.json").read_text())
+    plain = json.loads((FIXTURES / "real_context_too_long.json").read_text())
+    assert real["status"] == plain["status"] == 400
+    assert real["headers"] == plain["headers"]
+    assert set(real["body"]) == set(plain["body"])
+    assert real["body"]["error"]["type"] == plain["body"]["error"]["type"]
+
+    def served(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(real["status"], json=real["body"], headers=real["headers"])
+
+    assert type(streamed_error(how, served)) is anthropic.BadRequestError
+
+    run = Gate(
+        Fault("model", "context too long", "always"),
+        hosts=(),
+        prices=((MODEL, Rates(3.0, 15.0)),),
+    )
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=b"{}"))
+    got = streamed_error(how, provider)
+    assert type(got) is anthropic.BadRequestError
+    assert provider.sent == [], "the faulted request reached the provider"
+    body: Any = got.body
+    assert body["error"]["type"] == real["body"]["error"]["type"]
+    assert body["error"]["message"] == plain["body"]["error"]["message"]
+    assert run.line["status"] == 400
