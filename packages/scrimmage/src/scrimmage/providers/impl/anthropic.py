@@ -151,6 +151,7 @@ class Anthropic:
     fault_headers = staticmethod(table.fault_headers)
     broken_body = staticmethod(table.broken_body)
     context_too_long_body = staticmethod(table.context_too_long_body)
+    context_too_long_reply = staticmethod(table.context_too_long_reply)
     not_carried_out = staticmethod(table.not_carried_out)
     never_carried_out = staticmethod(table.never_carried_out)
     conversation_key = staticmethod(table.conversation_key)

@@ -2258,15 +2258,18 @@ def timed(scenario: Scenario) -> dict[str, object]:
 def capture(only: Callable[[Scenario], bool] | None = None) -> dict[str, object]:
     import secrets
 
-    real = time.time, secrets.choice, secrets.token_hex
+    real = time.time, secrets.choice, secrets.token_hex, secrets.token_bytes
     dice = random.Random(SEED)  # the made-up ids of a built reply
     time.time = lambda: NOW  # a built reply's created field
     secrets.choice = dice.choice  # type: ignore[assignment]
     secrets.token_hex = lambda n=32: dice.randbytes(n).hex()  # type: ignore[assignment]
+    # A failed stream's id has its own dice, so it takes none of a built reply's.
+    own = random.Random(SEED + 1)
+    secrets.token_bytes = lambda n=32: own.randbytes(n)  # type: ignore[assignment]
     try:
         return {s.name: timed(s) for s in scenarios() if only is None or only(s)}
     finally:
-        time.time, secrets.choice, secrets.token_hex = real
+        time.time, secrets.choice, secrets.token_hex, secrets.token_bytes = real
 
 
 GOLDEN = Path(__file__).parent / "golden" / "provider_replay.json"

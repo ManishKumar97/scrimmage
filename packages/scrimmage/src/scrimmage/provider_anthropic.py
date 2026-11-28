@@ -179,6 +179,12 @@ def context_too_long_body(path: str) -> bytes:
     return _error_json(error)
 
 
+def context_too_long_reply(path: str, wire: Fields) -> tuple[int, str, bytes]:
+    """Anthropic's 400, whether the request streams or not."""
+    del wire
+    return 400, "application/json", context_too_long_body(path)
+
+
 def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
     """Why a fault cannot be carried out on this request: the mistake in the test. Only the
     words no Anthropic reply can take are, and they are known before the request."""

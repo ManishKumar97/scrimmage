@@ -1264,12 +1264,12 @@
   "stops": []
 },
 "fault context too long responses stream": {
-  "blobs": ["3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a", "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"],
+  "blobs": ["3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a", "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364"],
   "lines": [
-    {"action": "fault", "args": {"bytes": 55, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"stream\": true}", "sha256": "3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 204, "preview": "{\"error\": {\"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\", \"type\": \"invalid_request_error\", \"param\": \"input\", \"code\": \"context_length_exceede", "sha256": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 400, "stream": true, "test": "t", "v": 1}
+    {"action": "fault", "args": {"bytes": 55, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"stream\": true}", "sha256": "3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 4095, "preview": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_8aa53dc15cda6293625bc1e5a7dffaf632e7aca7e7dc6d7e28\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"", "sha256": "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": true, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "headers": {"content-length": "204", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 204, "status": 400}
+    {"body": "4c1617b6c5b17598d215925c05a7b536be5f0578f5b1c42183d12dbc50d98364", "headers": {"content-length": "4095", "content-type": "text/event-stream; charset=utf-8", "x-request-id": "req_scrimmage_injected"}, "length": 4095, "status": 200}
   ],
   "reserved": [],
   "sent": [],

@@ -132,6 +132,47 @@ def test_a_responses_context_error_is_not_the_chat_completions_one(gated: None) 
     assert got.json() == want["body"]
 
 
+def events_of(raw: bytes) -> list[tuple[str, dict[str, Any]]]:
+    """A server-sent event stream's events, as name and data, with what differs per reply (the
+    response's id and time) put to a fixed value."""
+    found: list[tuple[str, dict[str, Any]]] = []
+    for block in raw.decode().strip().split("\n\n"):
+        name, data = block.split("\n")
+        event = json.loads(data.removeprefix("data: "))
+        if "response" in event:
+            event["response"].update(id="resp_x", created_at=0)
+        found.append((name.removeprefix("event: "), event))
+    return found
+
+
+@pytest.mark.design("fixtures.match_real_errors")
+def test_a_streamed_responses_context_error_is_the_captured_failed_stream(gated: None) -> None:
+    """Captured 28 November 2026: a streamed request over the context gets a 200 event stream
+    of four events, whose last holds the failed response. The injected one is the same, event
+    for event, for the same request, whatever the reply's id and time."""
+    want = (FIXTURES / "real_response_error_context_length_stream.sse").read_bytes()
+    install("context too long", "model")
+    transport = httpx2.MockTransport(lambda _: httpx2.Response(200, json={}))
+    got = httpx2.Client(transport=transport).post(
+        RESPONSES_URL,
+        json={
+            "model": "gpt-4o-mini-2024-07-18",
+            "input": "hi",
+            "max_output_tokens": 16,
+            "stream": True,
+        },
+    )
+    assert got.status_code == 200
+    assert got.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert events_of(got.content) == events_of(want)
+    assert [name for name, _ in events_of(got.content)] == [
+        "response.created",
+        "response.in_progress",
+        "error",
+        "response.failed",
+    ]
+
+
 @pytest.mark.design("fixtures.match_real_errors")
 @pytest.mark.parametrize(
     ("status", "real"), [(404, "real_response_error_404"), (400, "real_response_error_400")]

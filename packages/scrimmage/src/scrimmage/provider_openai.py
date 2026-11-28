@@ -345,6 +345,52 @@ ITEM_PREFIXES = {"message": "msg_", "function_call": "fc_"}  # the item ids a re
 RESPONSE_ID_LENGTH = 50  # after resp_ and msg_, in lowercase hex, as in real ids
 
 
+SSE = "text/event-stream; charset=utf-8"
+
+
+def context_too_long_reply(path: str, wire: Fields) -> tuple[int, str, bytes]:
+    """The status, content type and body of the reply to a request over the context. A
+    streamed Responses request is not refused with a 400: a real one gets a 200 stream that
+    says created, in progress, then an error event and a failed response (captured 28
+    November 2026, tests/fixtures/openai/real_response_error_context_length_stream.sse)."""
+    if is_responses(path) and streams(wire):
+        return 200, SSE, failed_response_stream(fields_dict(wire))
+    return 400, "application/json", context_too_long_body(path)
+
+
+def failed_response_stream(fields: dict[str, object]) -> bytes:
+    """The four events a real streamed Responses request over the context gets. The response
+    is the built Responses reply's template, as the real failed one has it: no output, no
+    usage, and no billing, and the reply's id, time and model made for this request."""
+    import secrets  # not at import, as made_up_hex_id: it pulls in random
+
+    base = dict(RESPONSE_REPLY)
+    del base["billing"]
+    base.update({key: fields[key] for key in RESPONSE_ECHOED if fields.get(key) is not None})
+    base.update(
+        id="resp_" + secrets.token_bytes(RESPONSE_ID_LENGTH // 2).hex(),
+        created_at=int(time.time()),
+        model=name_in(fields) or "",
+        completed_at=None,
+        service_tier="auto",
+        usage=None,
+    )
+    error = {key: RESPONSES_CONTEXT_TOO_LONG[key] for key in ("type", "code", "message", "param")}
+    running = {**base, "status": "in_progress", "error": None}
+    failed = {**base, "status": "failed", "error": error}
+    events: list[tuple[str, dict[str, object]]] = [
+        ("response.created", {"type": "response.created", "response": running}),
+        ("response.in_progress", {"type": "response.in_progress", "response": running}),
+        ("error", {"type": "error", "error": error}),
+        ("response.failed", {"type": "response.failed", "response": failed}),
+    ]
+    out = ""
+    for number, (name, event) in enumerate(events):
+        data = json.dumps({**event, "sequence_number": number}, separators=(",", ":"))
+        out += f"event: {name}\ndata: {data}\n\n"
+    return out.encode()
+
+
 def made_up_hex_id(prefix: str) -> str:
     import secrets
 
@@ -448,7 +494,9 @@ def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
     if not is_responses(path):
         return None
     if word == "context too long":
-        return None  # OpenAI refuses the request, so no reply is left in a conversation
+        # Assumed, not captured: a rejected request in a conversation OpenAI keeps is
+        # assumed to store nothing in it, so the next turn is not changed.
+        return None
     if fields.get("conversation") is not None:
         return (
             f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "

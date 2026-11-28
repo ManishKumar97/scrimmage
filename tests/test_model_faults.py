@@ -498,6 +498,64 @@ def test_context_too_long_raises_bad_request_with_the_real_code(gated: None, syn
     assert budget.asked == 0 and sink.settles == []
 
 
+def streamed_by(how: str, reached: list[object]) -> tuple[list[str], BaseException | None]:
+    """A streamed Responses call through the openai library, by one of its ways in: the event
+    types it yielded, and what it raised."""
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        return httpx2.Response(200, json={})
+
+    transport = httpx2.MockTransport(provider)
+    seen: list[str] = []
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=transport) as http:
+            client = openai.AsyncOpenAI(api_key="test", http_client=http)
+            async for event in await client.responses.create(
+                model="gpt-4o-mini", input="hi", stream=True
+            ):
+                seen.append(event.type)
+
+    try:
+        if how == "async":
+            asyncio.run(go())
+        else:
+            client = openai.OpenAI(api_key="test", http_client=httpx2.Client(transport=transport))
+            if how == "create":
+                for event in client.responses.create(model="gpt-4o-mini", input="hi", stream=True):
+                    seen.append(event.type)
+            else:
+                with client.responses.stream(model="gpt-4o-mini", input="hi") as stream:
+                    for event in stream:
+                        seen.append(event.type)
+    except Exception as error:
+        return seen, error
+    return seen, None
+
+
+@pytest.mark.design("model.context_too_long")
+@pytest.mark.parametrize("how", ["create", "stream", "async"])
+def test_context_too_long_on_a_streamed_responses_call_is_the_real_failed_stream(
+    gated: None, how: str
+) -> None:
+    """Captured 28 November 2026: OpenAI answers a streamed Responses request over the context
+    with a 200 stream, not a 400. The library yields the first two events, then raises its
+    APIError (not BadRequestError) at the error event."""
+    real = captured("real_response_error_context_length")["body"]["error"]
+    sink, budget = install("context too long", "model")
+    reached: list[object] = []
+    seen, error = streamed_by(how, reached)
+    assert type(error) is openai.APIError, repr(error)
+    assert error.code == "context_length_exceeded" == real["code"]
+    assert error.param == "input" == real["param"]
+    assert error.message == real["message"]
+    assert seen == ["response.created", "response.in_progress"]
+    assert reached == [], "the faulted request reached the provider"
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 200)]
+    assert budget.asked == 0 and sink.settles == []
+
+
 @pytest.mark.design("model.context_too_long")
 @pytest.mark.parametrize("sync", **SYNC)
 def test_context_too_long_on_a_responses_call_raises_the_real_responses_error(
@@ -533,7 +591,9 @@ def test_context_too_long_on_a_responses_call_raises_the_real_responses_error(
 )
 def test_context_too_long_is_refused_on_a_web_request_and_a_read_call(call: str) -> None:
     table: dict[str, object] = {"call": call, "do": "context too long", "when": "first 1"}
-    with pytest.raises(ConfigError, match=r"'context too long' works only on a chat model call"):
+    with pytest.raises(
+        ConfigError, match=r"'context too long' works only on a chat or Responses model call"
+    ):
         config.read_fault(table, "[[test.fault]] 1")
     for chat in ("model", "model:openai"):
         assert config.read_fault({**table, "call": chat}, "x").do == "context too long"
