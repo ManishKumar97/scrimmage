@@ -34,6 +34,7 @@ SESSION = "mcp.client.session"
 TRANSPORT = "mcp.client.streamable_http"
 STDIO = "mcp.client.stdio"
 STARTS_THE_SERVER = "_create_platform_compatible_process"
+LIBRARY = "mcp"  # the PyPI project the gate patches
 TESTED = ((2, 3), (2, 3))  # the oldest and newest minor versions this release was tested with
 GATED = "__scrimmage_gate__"
 SEND_ARGUMENTS = [
@@ -188,7 +189,7 @@ def version() -> tuple[int, int] | None:
     import importlib.metadata  # not at import: the SDK starts without it
 
     try:
-        parts = importlib.metadata.version("mcp").split(".")
+        parts = importlib.metadata.version(LIBRARY).split(".")
         return int(parts[0]), int(parts[1])
     except (importlib.metadata.PackageNotFoundError, ValueError, IndexError):
         return None
@@ -232,7 +233,7 @@ def patch(module: ModuleType, gate: Gate) -> None:
     if not gatable(module):
         broken(gate)
         return
-    gate.process.newer_version("mcp", version(), TESTED)
+    gate.process.newer_version(LIBRARY, version(), TESTED)
     send = module.ClientSession.send_request
     if getattr(send, GATED, False):
         return

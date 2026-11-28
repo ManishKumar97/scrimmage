@@ -34,6 +34,30 @@ A failed first upload burns the number.
 So the first run of a new workflow uses an rc tag, and a retry uses the next rc.
 The final version is tagged only after an rc has passed.
 
+## Widening a tested range
+
+A gate's `TESTED` range says which minor versions of its library it was tested with.
+A library newer than the range gets a notice, and the daily newest-release job fails.
+The next-release job warns earlier, from a pre-release or the default branch.
+Widen a range only after the steps below, never to make a red job green.
+
+1. Run the gate tests against the new version, with no change to the code:
+   `uv run --with httpx==0.29.0 pytest $(python3 tools/gate_tests.py --without-range)`.
+   Use the library's own name and the exact new version.
+   Leave out `tests/test_tested_range.py`: it fails on purpose until `TESTED` is widened.
+   For a pre-release, add `--prerelease explicit` to `uv run`.
+   The daily next-release job runs each library's default branch the same way, one leg per library.
+2. Read the library's release notes against what the gate replaces.
+   For the web gate that is `Client._send_single_request` and the stream types.
+   A renamed or reordered argument can pass a test and still break the gate in a team's agent.
+3. Fix the gate if a test or the notes show a break.
+   Change `TESTED` only once the tests pass.
+4. Change the row in the "Tested versions" table in `docs/limits/calls.md`.
+   `tests/test_library_watch.py` fails until the table matches every `TESTED` range.
+5. Name the version and the notes you read in the pull request.
+
+The httpx 0.29 change, pull request 208, is the worked example.
+
 ## Verifying the attestation
 
 The upload action signs each file with Sigstore, and the index serves the signature as a provenance file.
