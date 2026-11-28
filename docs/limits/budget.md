@@ -10,6 +10,7 @@ Limits of how a call is held and settled, and of the shipped prices.
   So calls in flight at once can pass `max_cost_usd`, by up to what they cost above their holds, added together.
   A call that finished earlier in the same process counts at its real cost before the next call is reserved, so a program that makes one call at a time in one process is checked against what its calls cost, not what they held.
   A call that finished in another process, of this run or another, can still count at its hold until that process delivers its cost, usually within 0.1 second and later when the process is busy sending records.
+  A call reserved on a service's claim thread, which never waits for a request, does not wait for a settle that is still being sent, and can be checked against that call's hold.
   Three `gpt-4.1` calls with no `max_tokens` each hold about $0.0328, so all three fit in $0.10 at once; if each writes 8192 output tokens, the test spends $0.1967.
   Once money spent passes the limit, every later call is refused at once.
   Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call, in a body Scrimmage can read, to bound its output, `n` choices included; nothing bounds the input estimate.
