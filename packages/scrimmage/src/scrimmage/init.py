@@ -788,7 +788,8 @@ def read_probe(
             missing=missing_module(log, function) if outcome == "crashed" else None,
         )
     elif outcome == "refused call":
-        return Probe(True, refused_first(lines))
+        said = f"; passed {requests_with_no_tools(len(passes))} first" if passes else ""
+        ended = Probe(True, refused_first(lines) + said)
     else:
         return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
     if passes:
@@ -825,6 +826,18 @@ def stopped_at_model(notice: dict[str, object], passed: int = 0) -> str:
         )
     if notice.get("tools"):
         return f"stopped at {where}, refused before it was sent{skipped}"
+    if notice.get("why") == "streamed":
+        return (
+            f"stopped at {where}, which offers no tools and is streamed, so the probe cannot "
+            f"answer it with a canned reply, refused before it was sent{skipped}; "
+            "no tools are known, and the agent may offer tools later"
+        )
+    if notice.get("why") == "limit":
+        return (
+            f"stopped at {where}, which offers no tools either, refused before it was sent"
+            f"{skipped}, the most the probe passes; no tools are known, "
+            "and the agent may offer tools later"
+        )
     if passed:
         return (
             f"stopped at {where}, which offers no tools either, refused before it was sent"

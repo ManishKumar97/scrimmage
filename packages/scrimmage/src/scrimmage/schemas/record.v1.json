@@ -966,6 +966,13 @@
         "stopped_at": {
           "type": "string"
         },
+        "why": {
+          "enum": [
+            "streamed",
+            "limit"
+          ],
+          "description": "Why the probe stopped at a request that offers no tools: it was streamed, or the probe had already passed its limit."
+        },
         "passed": {
           "type": "integer",
           "minimum": 0,

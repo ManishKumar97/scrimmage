@@ -165,7 +165,9 @@ A script entry point is never probed: its command can do anything before Python 
 |---|---|
 | Reached a model request | `stopped at POST /v1/chat/completions on <host>, refused before it was sent` |
 | Passed tool-less chat requests, then reached one that offers tools | `stopped at POST /v1/chat/completions on <host>, refused before it was sent; passed 2 requests with no tools, such as guardrails` |
-| Passed 5 tool-less chat requests and the next offered none either | `stopped at <request>, which offers no tools either, refused before it was sent; passed 5 requests with no tools, such as guardrails; no tools are known, and the agent may offer tools later` |
+| Passed tool-less requests, then reached a streamed one that offers no tools | `stopped at <request>, which offers no tools and is streamed, so the probe cannot answer it with a canned reply, refused before it was sent; passed 1 request with no tools, such as guardrails; no tools are known, and the agent may offer tools later` |
+| Passed 5, the most it passes, and the next offered none either | `... which offers no tools either, refused before it was sent; passed 5 requests with no tools, such as guardrails, the most the probe passes; no tools are known, and the agent may offer tools later` |
+| Passed tool-less requests, then was refused at another call | `stopped at <label> <method> <path>, refused before it ran; no tools are known; passed 1 request with no tools first` |
 | Ended or crashed after a canned reply | `crashed, see <log>; passed 1 request with no tools first, such as guardrails, with a canned reply that may have sent the agent down another path` |
 | Reached a model request that is not a chat request and offers no tools, such as an embeddings call | `stopped at POST /v1/embeddings on <host>, which offers no tools, refused before it was sent; no tools are known` |
 | Was refused at another call first | `stopped at <label> <method> <path>, refused before it ran; no tools are known` |

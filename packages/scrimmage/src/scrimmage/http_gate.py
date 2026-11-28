@@ -485,8 +485,9 @@ def prepare(
     if step.decision.action == "real" and call.kind == "http":
         model_path_notice(ctx, call, where)
     if call.kind == "model" and run.plan.probe:
-        if not passes_probe(run, step, call, fields, extra, request.url):
-            stop_probe(ctx, run, step, fields, request.url)
+        stopped = passes_probe(run, step, call, fields, extra, request.url)
+        if stopped is not None:
+            stop_probe(ctx, run, step, fields, request.url, why=stopped)
         return ctx, step, extra
     if call.kind == "model" and call.name == "chat":
         if fields is None:
@@ -540,29 +541,40 @@ PROBE_PASS_LIMIT = 5  # tool-less requests, such as guardrails, the probe lets t
 
 
 def passes_probe(
-    run: RunState, step: Step, call: Call, fields: Fields | None, extra: dict[str, object], url: Any
-) -> bool:
-    """Whether the probe lets this chat request through, with a canned reply made by the
+    run: RunState,
+    step: Step,
+    call: Call,
+    fields: Fields | None,
+    extra: dict[str, object],
+    url: Any,
+) -> str | None:
+    """None when the probe lets this chat request through, with a canned reply made by the
     provider. Only one that offers no tools and is not streamed: a guardrail, not the agent,
-    so the probe can go on to the request that offers the tools. Nothing is sent."""
+    so the probe can go on to the request that offers the tools. Nothing is sent. Otherwise
+    why not: "streamed" and "limit" are the reasons a request that offers no tools stops the
+    probe, the others ("tools", "other") are not worth saying."""
     provider = provider_for(run, step)
-    if fields is None or call.name != "chat" or extra.get("stream") is True:
-        return False
+    if fields is None or call.name != "chat":
+        return "other"
     offered = provider.offered(str(url.path), fields)
     if offered.agent or offered.hosted_reads or offered.hosted_writes or offered.unknown:
-        return False
+        return "tools"
     if offered.refused:
-        return False
+        return "tools"
+    if extra.get("stream") is True:
+        return "streamed"
     passed = run.pass_probe(PROBE_PASS_LIMIT)
     if passed is None:
-        return False
+        return "limit"
     step.decision = Decision("mock")  # never sent: the reply is made here
     extra["probe_pass"] = passed
     extra["host"] = redact(host_of(url))
-    return True
+    return None
 
 
-def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url: Any) -> NoReturn:
+def stop_probe(
+    ctx: Bound, run: RunState, step: Step, fields: Fields | None, url: Any, why: str = ""
+) -> NoReturn:
     """Note the tools this model request offers, refuse it unsent, and end the program.
 
     The note is put before the refusal, so the runner has it when the refusal stops the run.
@@ -592,6 +604,8 @@ def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url
         "stopped_at": redact(f"{step.call.label} {method} {path}"),
         "passed": run.probe_passed,
     }
+    if why in ("streamed", "limit"):
+        extra["why"] = why  # a request that offers no tools, and why the probe stopped at it
     if fields is None:
         extra["unreadable"] = True
     run.notice("probe", "scrimmage", f"the probe stopped at {method} {path}", extra=extra)
