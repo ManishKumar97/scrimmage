@@ -298,7 +298,9 @@ class Runner:
             config = on_port(config, port)
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
-        self.probe = probe  # scrimmage init --probe: the first model request ends the run
+        self.probe = (
+            probe  # scrimmage init --probe: the first model request that offers tools ends the run
+        )
         self.control_url = control_url  # lets a test point the agent elsewhere
         # Read first: these can stop the test, and nothing is made on disk until they pass.
         self.token = secrets.token_hex(32)

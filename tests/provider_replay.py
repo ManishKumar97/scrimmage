@@ -397,6 +397,18 @@ def scenarios() -> list[Scenario]:
         faults=fault("context too long"),
     )
     add(
+        "fault context too long responses stream",
+        [(RESPONSES, responses(stream=True))],
+        response="response_stream",
+        faults=fault("context too long"),
+    )
+    add(
+        "fault status 401 on responses",
+        [(RESPONSES, responses())],
+        response="response_text",
+        faults=fault("status 401"),
+    )
+    add(
         "fault model narrowed",
         [(CHAT, chat())],
         ["chat_answer"],
@@ -1845,6 +1857,13 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     add("unlisted host", [(MESSAGES, message())], ["real_answer"], listed=False)
     add("unlisted host probing", [(MESSAGES, message())], ["real_answer"], listed=False, probe=True)
     add(
+        "probe with tools",
+        [(MESSAGES, message(tools=[ORDER]))],
+        ["real_answer"],
+        listed=False,
+        probe=True,
+    )
+    add(
         "model path run for real",
         [(MESSAGES, message())],
         ["real_answer"],
@@ -2246,15 +2265,18 @@ def timed(scenario: Scenario) -> dict[str, object]:
 def capture(only: Callable[[Scenario], bool] | None = None) -> dict[str, object]:
     import secrets
 
-    real = time.time, secrets.choice, secrets.token_hex
+    real = time.time, secrets.choice, secrets.token_hex, secrets.token_bytes
     dice = random.Random(SEED)  # the made-up ids of a built reply
     time.time = lambda: NOW  # a built reply's created field
     secrets.choice = dice.choice  # type: ignore[assignment]
     secrets.token_hex = lambda n=32: dice.randbytes(n).hex()  # type: ignore[assignment]
+    # A failed stream's id has its own dice, so it takes none of a built reply's.
+    own = random.Random(SEED + 1)
+    secrets.token_bytes = lambda n=32: own.randbytes(n)  # type: ignore[assignment]
     try:
         return {s.name: timed(s) for s in scenarios() if only is None or only(s)}
     finally:
-        time.time, secrets.choice, secrets.token_hex = real
+        time.time, secrets.choice, secrets.token_hex, secrets.token_bytes = real
 
 
 GOLDEN = Path(__file__).parent / "golden" / "provider_replay.json"

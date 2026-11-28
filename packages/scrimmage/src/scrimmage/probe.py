@@ -1,4 +1,4 @@
-"""What scrimmage init --probe finds inside the agent's process, at its first model request.
+"""What scrimmage init --probe finds in the agent's process, at the first request that offers tools.
 
 It reads the modules the agent already loaded and imports nothing. A module or a class is
 only looked at, never called, so this runs none of the team's code. The static read in

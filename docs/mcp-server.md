@@ -65,7 +65,7 @@ scrimmage-mcp --config PATH [--root DIR] [--max-session-usd USD] [--allow-no-bud
 |---|---|---|
 | `check` | `scrimmage check` | Nothing: it reads the file only |
 | `show` | `scrimmage show`, with `target`, `run` and `compare` | Nothing: it reads a records folder only |
-| `init` | `scrimmage init`, with `folder`, and `probe` only with `--allow-probe` | Nothing, unless a probe runs your code up to its first model request |
+| `init` | `scrimmage init`, with `folder`, and `probe` only with `--allow-probe` | Nothing, unless a probe runs your code up to the first model request that offers tools (passing up to 5 that offer none) |
 | `test` | `scrimmage test`, with `compare` | Your agent's model calls, up to `max_cost_usd` |
 | `record` | `scrimmage record`, with `tests`, `refresh` and `runs` | Your agent's model calls, up to `max_cost_usd` |
 

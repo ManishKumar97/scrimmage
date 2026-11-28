@@ -271,7 +271,6 @@ CASES = {
         not_carried=(
             ("unknown tool", "/v1/responses", {"model": "m", "conversation": "c"}),
             ("garble", "/v1/responses", {"model": "m", "conversation": "c"}),
-            ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
         ),
         capped=lambda n: {"model": "gpt-4o-mini", "messages": [], "max_tokens": n},
         call_reply=OPENAI / "real_chat_tool_call.json",
@@ -446,7 +445,7 @@ def test_the_hold_may_read_the_request_and_never_costs_less_than_the_settle(
 
 
 def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
-    body = json.loads(provider.context_too_long_body())
+    body = json.loads(provider.context_too_long_body(case_of(provider).chat_path))
     assert body["error"]["message"]
 
 

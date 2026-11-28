@@ -119,7 +119,8 @@ PROPERTIES: dict[str, dict[str, dict[str, object]]] = {
 }
 PROBE_PROPERTY = described(
     {"type": "string", "pattern": f"^{PROBE.pattern}$"},
-    "module:function to run up to its first model request, which is refused before it is "
+    "module:function to run up to the first model request that offers tools (passing up to 5 that "
+    "offer none), which is refused before it is "
     "sent, to read the tools it offers. Importing the module runs its top-level code.",
 )
 REQUIRED = {"test": ["max_cost_usd"], "record": ["max_cost_usd"]}
@@ -363,7 +364,7 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
             lines.append(f"entry: {point.get('kind')} {point.get('value')}{guess}")
         probe = doc.get("probe")
         if isinstance(probe, dict) and cast(dict[str, Any], probe).get("ran"):
-            lines.append("probe ran your code up to its first model request")
+            lines.append("probe ran your code up to the first model request that offers tools")
     elif command == "show":
         runs = cast(list[Mapping[str, Any]], doc.get("runs") or [])
         lines.append(f"runs shown: {len(runs)}")

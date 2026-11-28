@@ -283,7 +283,7 @@ With `--runs` above 1, the line the text form prints before the first run, how m
   "adapter_tools": [],
   "unresolved": [],
   "model_hosts": [{"host": "gateway.acme.internal", "provider": "openai", "found_by": "probe"}],
-  "mistakes": [], "notes": [{"message": "the probe ran your code up to its first model request; ..."}], "warnings": [], "infra": []
+  "mistakes": [], "notes": [{"message": "the probe ran your code up to the first model request that offers tools (passing up to 5 that offer none); ..."}], "warnings": [], "infra": []
 }
 ```
 
