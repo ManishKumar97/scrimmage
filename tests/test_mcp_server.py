@@ -1057,7 +1057,7 @@ def test_probe_runs_only_with_the_server_flag(bed: Bed) -> None:
     probed = anyio.run(go)
     doc = doc_of(probed)
     assert doc["exit"] == 0 and doc["probe"]["ran"] is True, texts(probed)
-    assert "probe ran your code up to its first model request" in texts(probed)[0]
+    assert "probe ran your code up to the first model request that offers tools" in texts(probed)[0]
     assert bed.starts() == 1
 
 

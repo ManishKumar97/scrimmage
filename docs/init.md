@@ -36,6 +36,13 @@ That count is by name alone, with no stat, and stops at 100000 names, then says 
 Counting 100000 names took about 1.2 seconds on a busy 4-core machine.
 Reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
+A folder whose name cannot be imported, such as `python-backend`, is where the top level starts.
+It may be the folder you read, a folder above it with an `__init__.py`, or any folder below it, such as the one under a repository's root.
+What is under it is read as top-level modules, as it is when you run from inside it.
+A note names the folder, for example `python-backend is not an importable package name, so its modules are read as top-level (airline.tools); run scrimmage from inside python-backend`.
+The draft has one comment for each such folder, above `tools`, such as `# read as top-level: 11 paths under python-backend, such as airline.tools:lookup; run scrimmage from inside python-backend`.
+When a top-level name there is a standard library module, such as `platform`, a note says it would hide the standard library when you run from inside the folder.
+A file with definitions whose own name cannot be imported, such as `my-helpers.py`, is not mapped, and a note counts it and names it.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.
 Names used by several parts then stop being ambiguous.
@@ -79,7 +86,9 @@ A gateway you reach with `Anthropic(base_url="https://gateway.acme.internal")` i
 model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]
 ```
 
-With `--probe`, a first request to `POST /v1/messages` on a host that is not one of the providers' own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
+With `--probe`, a request to `POST /v1/messages` on a host that is not one of the providers' own counts as a model request.
+One that offers no tools and is not streamed is passed with a canned reply, like any other.
+The first one that offers tools is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
 The probe sets placeholder keys, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, only when neither is in the environment, so a client can be built.
 When you have one of them set, the probe sets none, and an agent that chooses its client by which key it finds takes the branch your key selects.
 It sends nothing.
@@ -124,7 +133,13 @@ Only the top-level name is looked for before the probe runs, without importing i
 A missing submodule under a real package, such as `evil.missing:answer`, is found by the probe: when its crash log holds a `ModuleNotFoundError` that names the probed module or a package above it, `--probe` exits 2 with the same mistake and writes no draft.
 A module that your function imports and cannot find is your agent's crash, and stays `crashed, see <log>`.
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
-The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
+The probe stops at the first model request that offers tools. That request is refused before it is sent, and the tools it offers are read from it.
+A chat request that offers no tools and is not streamed, such as a guardrail check, is let through with a canned reply that the provider's own reply builder makes, so nothing is sent and nothing costs.
+The probe passes up to 5 such requests, then stops at the next one and says so.
+An agent that cannot use the canned reply, such as a guardrail that parses JSON from it, may end or crash there; the outcome says how many requests were passed.
+An agent built on the OpenAI Agents SDK sends its traces to `api.openai.com`, in a background thread, through the same gated client.
+The probe refuses that request like any other web write, and the refusal ends the program, so the probe can stop there before it reaches the request that offers tools.
+The SDK's own switch for this is the environment variable `OPENAI_AGENTS_DISABLE_TRACING=1`, or `set_tracing_disabled(True)` in code; set one of them for the probe run.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
 With neither key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
@@ -137,8 +152,9 @@ After any refusal, at the model gate or at a web, tool or MCP gate, the probe en
 ### What the probe can do
 
 !!! warning "The probe runs your code"
-    It runs the function you name up to its first model request, as a program, with no tool list and no budget.
-    A plain tool function called before the first model request runs for real, because the probe does not know your tools yet.
+    It runs the function you name up to the first model request that offers tools (passing up to 5 that offer none), as a program, with no tool list and no budget.
+    A plain tool function called before the first model request that offers tools runs for real, because the probe does not know your tools yet.
+    Code that runs after a request the probe passed also runs for real: the agent got a canned reply and went on.
 
 A web write through httpx or httpx2, a LangChain tool, and an MCP tool call are refused, as in `scrimmage test`.
 A write through a library Scrimmage does not gate, such as `requests`, runs, and so does a subprocess.
@@ -153,12 +169,20 @@ A script entry point is never probed: its command can do anything before Python 
 | The probe | `probe.outcome` |
 |---|---|
 | Reached a model request | `stopped at POST /v1/chat/completions on <host>, refused before it was sent` |
-| Reached a first model request that offers no tools, such as an embeddings call | `stopped at POST /v1/embeddings on <host>, which offers no tools, refused before it was sent; no tools are known` |
+| Passed tool-less chat requests, then reached one that offers tools | `stopped at POST /v1/chat/completions on <host>, refused before it was sent; passed 2 requests with no tools, such as guardrails` |
+| Passed tool-less requests, then reached a streamed one that offers no tools | `stopped at <request>, which offers no tools and is streamed, so the probe cannot answer it with a canned reply, refused before it was sent; passed 1 request with no tools, such as guardrails; no tools are known, and the agent may offer tools later` |
+| Passed 5, the most it passes, and the next offered none either | `... which offers no tools either, refused before it was sent; passed 5 requests with no tools, such as guardrails, the most the probe passes; no tools are known, and the agent may offer tools later` |
+| Passed tool-less requests, then was refused at another call | `stopped at <label> <method> <path>, refused before it ran; no tools are known; passed 1 request with no tools first` |
+| Ended or crashed after a canned reply | `crashed, see <log>; passed 1 request with no tools first, such as guardrails, with a canned reply that may have sent the agent down another path` |
+| Reached a model request that is not a chat request and offers no tools, such as an embeddings call | `stopped at POST /v1/embeddings on <host>, which offers no tools, refused before it was sent; no tools are known` |
 | Was refused at another call first | `stopped at <label> <method> <path>, refused before it ran; no tools are known` |
 | Returned with no POST to a model path through httpx or httpx2 | `saw no model request through a gated client` |
 | Crashed, or passed its 120 seconds | `crashed, see <log>` or `timed out, see <log>` |
 
 When no tools are known, the candidates from reading the code stand.
+The `tools:` line counts a framework adapter's tools as covered, and says which adapter gated each: the LangChain adapter or the MCP gate.
+When every tool the model was offered is an adapter tool it reads `tools: 8 offered to the model, all gated (6 by the LangChain adapter, 2 by the MCP gate)`.
+With a mix it reads `tools: 8 offered, 4 gated by the LangChain adapter, 2 gated by the MCP gate, 2 not mapped: x, y`, and names only the tools it could not map.
 The number to read is `numbers`: `tools_mapped` over `tools_offered`.
 
 | Exit code | Meaning |

@@ -1,10 +1,11 @@
 """scrimmage init: draft a scrimmage.toml from reading the code, and from a probe if asked.
 
 The read uses ast and imports nothing, so none of the team's code runs. The entry point it
-finds is a guess, and a guess is never run. The probe takes the function to run by name, runs
-it up to its first model request, which is refused before it is sent, and reads the tools
-that request offers. A script is never probed. The draft never holds a real tool, a test or
-a mock, as those are the team's to say, and it never replaces a file.
+finds is a guess, and a guess is never run. The probe takes the function to run by name and
+runs it up to the first model request that offers tools (passing up to 5 that offer none).
+That request is refused before it is sent, and the tools it offers are read. A script is never
+probed. The draft never holds a real tool, a test or a mock, as those are the team's to say,
+and it never replaces a file.
 """
 
 import ast
@@ -16,6 +17,7 @@ import shlex
 import sys
 import tomllib
 import warnings
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -59,8 +61,9 @@ READ_PREFIXES = ("get_", "list_", "search_", "find_", "lookup_", "read_", "check
 FOUND_BY = ("probe", "static")  # how a tool or a model host was found
 PROBLEMS = ("ambiguous", "nested", "not_found")  # why a tool could not be mapped to one path
 RISK_NOTE = (
-    "the probe ran your code up to its first model request; a tool function called before "
-    "then, or a write through a library Scrimmage does not gate, would have run for real"
+    "the probe ran your code up to the first model request that offers tools (passing up to 5 "
+    "that offer none); a tool function called before then, code after a passed request, or a "
+    "write through a library Scrimmage does not gate, would have run for real"
 )
 BAD_PROBE = (
     "--probe takes the function to run, as module:function, such as acme.agent:answer; "
@@ -74,7 +77,8 @@ NO_MODEL_REQUEST = "saw no model request through a gated client"
 NAMED = "the function named with --probe"
 GUESS_COMMENT = "# A guess from reading the code. Check it before you run anything."
 FIRST_ONLY = (
-    "the probe stops at the first model request, so tools offered later are not seen; "
+    "the probe stops at the first model request that offers tools, so tools offered later "
+    "are not seen; "
     "the candidates from reading the code stand"
 )
 NO_ENTRY = (
@@ -93,6 +97,7 @@ class Definition:
     decorated: bool  # carries a tool decorator
     model_name: str | None  # the name its decorator gives the model, if a literal one
     framework: bool  # a tool a framework's adapter sees, so it needs no tools list
+    folder: str = ""  # the top-level folder it was read under, when its name cannot be imported
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,14 @@ class Reading:
     cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
     skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
+    # A folder whose name cannot be imported is where the top level starts. It is named by its
+    # path under the folder read, so two folders of one name stay apart.
+    top_level: dict[str, str] = field(default_factory=dict[str, str])  # folder: a module under it
+    top_modules: dict[str, set[str]] = field(default_factory=dict[str, set[str]])  # module: folders
+    top_dirs: dict[str, Path] = field(default_factory=dict[str, Path])  # folder: where it is
+    top_init: set[str] = field(default_factory=set[str])  # folders that hold an __init__.py
+    here: str = ""  # the top-level folder of the file being read
+    unimportable: list[str] = field(default_factory=list[str])  # files with defs and no name
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
     candidates: list[Candidate] = field(default_factory=list[Candidate])
@@ -144,6 +157,7 @@ class Tools:
     mapped: list[Tool] = field(default_factory=list[Tool])
     adapter: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])  # name, found_by
     unresolved: list[Unresolved] = field(default_factory=list[Unresolved])
+    gates: dict[str, str] = field(default_factory=dict[str, str])  # adapter tool: its adapter
 
 
 @dataclass
@@ -243,7 +257,7 @@ def prepare(
     chosen = entries[0] if entries else None
     result = Probe()
     if probe is not None:
-        announce(f"probe: running {probe} up to its first model request")
+        announce(f"probe: running {probe} up to the first model request that offers tools")
         result = run_probe(probe, root, stop_flag)
     if probe is not None and result.missing is not None:
         return refused(
@@ -359,19 +373,53 @@ def parse(path: Path) -> ast.Module | None:
 
 def module_name(folder: Path, path: Path, reading: Reading) -> str:
     """Its import name once its package is installed. A src layout's folder is not a package,
-    and a folder that is itself inside a package keeps its packages' names."""
+    and a folder that is itself inside a package keeps its packages' names. A folder anywhere
+    on the way whose name cannot be imported is where the top level starts: no code can name
+    it, so what is under it is named as when the team runs from inside it. reading.here says
+    which folder that was, or is empty."""
+    reading.here = ""
+    whole = path.relative_to(folder).parts
     parts = list(path.relative_to(folder).with_suffix("").parts)
+    dropped = 0
     if parts[0] == "src" and len(parts) > 1:
         parts = parts[1:]
+        dropped = 1
         reading.src_dropped = True
     if parts[-1] == "__init__":
         parts.pop()
+        dirs = parts
+    else:
+        dirs = parts[:-1]
+    for index in range(len(dirs) - 1, -1, -1):
+        if not dirs[index].isidentifier():
+            directory = folder.joinpath(*whole[: index + dropped + 1])
+            key = directory.relative_to(folder).as_posix()
+            return read_as_top_level(reading, key, directory, parts[index + 1 :])
     packages: list[str] = []
     above = folder
     while (above / "__init__.py").is_file():
+        if not above.name.isidentifier():
+            return read_as_top_level(reading, above.name, above, [*packages, *parts])
         packages.insert(0, above.name)
         above = above.parent
     return ".".join([*packages, *parts])
+
+
+def read_as_top_level(reading: Reading, key: str, directory: Path, parts: list[str]) -> str:
+    """The module's name under a folder that cannot be imported, which is kept so the note and
+    the draft can say where to run from. The deepest name seen is the example."""
+    name = ".".join(parts)
+    reading.here = key
+    if key not in reading.top_dirs:
+        reading.top_dirs[key] = directory.resolve()
+        if (directory / "__init__.py").is_file():
+            reading.top_init.add(key)
+    if name:
+        reading.top_modules.setdefault(name, set()).add(key)
+        shown = reading.top_level.get(key)
+        if importable(name) and (shown is None or name.count(".") > shown.count(".")):
+            reading.top_level[key] = name
+    return name
 
 
 def importable(module: str) -> bool:
@@ -393,11 +441,21 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
     if is_script(tree, imports):
         reading.candidates.append(script_candidate(relative))
     if not importable(module):
+        if any(
+            isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            for s in top_level(tree.body)
+        ):
+            reading.unimportable.append(relative)
         return
     for statement in top_level(tree.body):
         if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
             reading.definitions.append(
-                definition(f"{module}:{statement.name}", statement, framework=framework)
+                definition(
+                    f"{module}:{statement.name}",
+                    statement,
+                    framework=framework,
+                    folder=reading.here,
+                )
             )
             found = function_candidate(statement, module, imports, relative, builds_client)
             if found is not None:
@@ -431,7 +489,9 @@ def read_class(
     for item in node.body:
         if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
             path = f"{owner}.{item.name}"
-            reading.definitions.append(definition(path, item, framework=framework, nested=nested))
+            reading.definitions.append(
+                definition(path, item, framework=framework, nested=nested, folder=reading.here)
+            )
         elif isinstance(item, ast.ClassDef):
             read_class(item, f"{owner}.{item.name}", reading, framework=framework, nested=True)
 
@@ -442,6 +502,7 @@ def definition(
     *,
     framework: bool,
     nested: bool = False,
+    folder: str = "",
 ) -> Definition:
     tool = next((d for d in node.decorator_list if tool_decorator(d)), None)
     return Definition(
@@ -451,6 +512,7 @@ def definition(
         tool is not None,
         None if tool is None else decorator_name(tool),
         framework and tool is not None,
+        folder,
     )
 
 
@@ -638,7 +700,9 @@ def static_tools(reading: Reading) -> Tools:
 
 def place(tools: Tools, name: str, matches: list[Definition], found_by: str) -> None:
     """One match is a path. None, several, or one that cannot be gated is listed instead."""
-    paths = tuple(sorted({m.path for m in matches}))  # defined in both arms of an if: one path
+    # Defined in both arms of an if: one path. The same path under two top-level folders is two
+    # functions, since the folders hold two different programs.
+    paths = tuple(sorted({f"{m.path} (under {m.folder})" if m.folder else m.path for m in matches}))
     if not matches:
         tools.unresolved.append(Unresolved(name, (), "not_found"))
     elif len(paths) > 1:
@@ -658,6 +722,7 @@ def probe_tools(result: Probe, reading: Reading) -> Tools:
         paths = cast(list[str], offered["paths"])
         if offered["adapter"]:
             tools.adapter.append((name, "probe"))
+            tools.gates[name] = str(offered.get("gate", "framework adapter"))
         elif len(paths) == 1:
             tools.mapped.append(Tool(paths[0], name, "probe"))
         elif paths:
@@ -691,8 +756,9 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
 
 
 def run_probe(function: str, folder: Path, stop_flag: list[str] | None) -> Probe:
-    """One run of the function the team named, with no tools, no mocks and no budget. Its
-    first model request is refused before it is sent, and any refusal ends the program."""
+    """One run of the function the team named, with no tools, no mocks and no budget. The
+    first model request that offers tools is refused before it is sent, and any refusal ends
+    the program. Up to 5 chat requests that offer none get a canned reply first."""
     agent = Agent(function, 1, 1, PROBE_TIMEOUT_S, (), (), max_cost_usd=None)
     config = Config(agent, (Test("init-probe", PROBE_QUESTION, (), (), ()),), folder)
     runner = Runner(config, stop_flag=stop_flag, probe=True)
@@ -733,37 +799,79 @@ def read_probe(
     result: RunResult, lines: list[dict[str, object]], log: Path, function: str
 ) -> Probe:
     """What ended the probe: each ending has its own words."""
+    passes = [line for line in lines if "probe_pass" in line]
     notice = next((n for n in result.notices if n.get("notice") == "probe"), None)
     if notice is not None:
-        return Probe(True, stopped_at_model(notice), notice)
+        return Probe(True, stopped_at_model(notice, len(passes)), notice)
     outcome = result.outcome
     # A function that returned something other than text still ended by itself.
     returned = outcome == "crashed" and any(
         n.get("notice") == "answer_path" for n in result.notices
     )
     if outcome == "answered" or returned:
-        return Probe(True, NO_MODEL_REQUEST)
-    if outcome in ("crashed", "timed out"):
-        return Probe(
+        ended = Probe(True, f"ended by itself{after(len(passes))}" if passes else NO_MODEL_REQUEST)
+    elif outcome in ("crashed", "timed out"):
+        ended = Probe(
             True,
-            f"{outcome}, see {log}",
+            f"{outcome}, see {log}{after(len(passes))}",
             missing=missing_module(log, function) if outcome == "crashed" else None,
         )
-    if outcome == "refused call":
-        return Probe(True, refused_first(lines))
-    return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
+    elif outcome == "refused call":
+        said = f"; passed {requests_with_no_tools(len(passes))} first" if passes else ""
+        ended = Probe(True, refused_first(lines) + said)
+    else:
+        return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
+    if passes:
+        # No request offered tools, so no stop: the first one still names the host and provider.
+        names = ("host", "method", "path", "provider")
+        request = {name: str(passes[0].get(name, "")) for name in names}
+        ended.notice = {"tools": [], "model_request": request}
+    return ended
 
 
-def stopped_at_model(notice: dict[str, object]) -> str:
+def requests_with_no_tools(count: int) -> str:
+    return f"{count} request{'s' if count != 1 else ''} with no tools"
+
+
+def after(passed: int) -> str:
+    """What to add when the probe let tool-less requests through before the run ended: the
+    canned reply may be why it ended, as a guardrail that parses a reply would fail on it."""
+    if not passed:
+        return ""
+    return (
+        f"; passed {requests_with_no_tools(passed)} first, such as guardrails, with a canned "
+        "reply that may have sent the agent down another path"
+    )
+
+
+def stopped_at_model(notice: dict[str, object], passed: int = 0) -> str:
     request = cast(dict[str, str], notice["model_request"])
     where = f"{request['method']} {request['path']} on {request['host']}"
+    skipped = f"; passed {requests_with_no_tools(passed)}, such as guardrails" if passed else ""
     if notice.get("unreadable"):
         return (
-            f"stopped at {where}, whose tools could not be read, refused before it was sent; "
-            "no tools are known"
+            f"stopped at {where}, whose tools could not be read, refused before it was sent"
+            f"{skipped}; no tools are known"
         )
     if notice.get("tools"):
-        return f"stopped at {where}, refused before it was sent"
+        return f"stopped at {where}, refused before it was sent{skipped}"
+    if notice.get("why") == "streamed":
+        return (
+            f"stopped at {where}, which offers no tools and is streamed, so the probe cannot "
+            f"answer it with a canned reply, refused before it was sent{skipped}; "
+            "no tools are known, and the agent may offer tools later"
+        )
+    if notice.get("why") == "limit":
+        return (
+            f"stopped at {where}, which offers no tools either, refused before it was sent"
+            f"{skipped}, the most the probe passes; no tools are known, "
+            "and the agent may offer tools later"
+        )
+    if passed:
+        return (
+            f"stopped at {where}, which offers no tools either, refused before it was sent"
+            f"{skipped}; no tools are known, and the agent may offer tools later"
+        )
     return (
         f"stopped at {where}, which offers no tools, refused before it was sent; no tools are known"
     )
@@ -805,7 +913,32 @@ def fill(draft: Draft, found: Findings) -> None:
             "safe to run for real under real, then run scrimmage check"
         )
     root = found.folder.resolve()
-    if draft.out.resolve().parent != root:
+    under = top_level_paths(found)
+    here = draft.out.resolve().parent
+    if len(under) == 1:
+        folder = next(iter(under))
+        where = found.reading.top_dirs[folder]
+        if here != where:
+            draft.messages.append(
+                (
+                    WARNINGS,
+                    "the draft's module paths were read as top-level under "
+                    f"{printable(folder)} and need it beside that code; move it to {where}",
+                )
+            )
+    elif under:
+        each = "; ".join(
+            f"{printable(folder)} ({found.reading.top_dirs[folder]}): {len(held)}"
+            for folder, held in under.items()
+        )
+        draft.messages.append(
+            (
+                WARNINGS,
+                "the draft's module paths were read as top-level under several folders, "
+                f"and each needs its own draft beside its code; paths in each: {each}",
+            )
+        )
+    elif here != root:
         draft.messages.append(
             (WARNINGS, f"the draft's module paths need it beside the code; move it to {root}")
         )
@@ -864,8 +997,7 @@ def say_found(draft: Draft, found: Findings) -> None:
     lines.append(probe_line(found))
     numbers = numbers_of(found)
     if numbers is not None:
-        mapped, offered = numbers["tools_mapped"], numbers["tools_offered"]
-        lines.append(f"tools: {mapped} of {offered} offered to the model mapped")
+        lines.append(tools_line(numbers["tools_mapped"], numbers["tools_offered"], tools))
     else:
         lines.append(f"tools: {len(tools.mapped)} found by reading the code")
     lines += [f"  {printable(t.path)}" for t in tools.mapped]
@@ -879,12 +1011,35 @@ def say_found(draft: Draft, found: Findings) -> None:
         lines.append(f"model hosts: {printable(hosts)}")
 
 
+def tools_line(mapped: int, offered: int, tools: Tools) -> str:
+    """Tools mapped over tools offered. A framework adapter's tools reach a gate by themselves,
+    so they count as covered and are never said to be unmapped. Each says which adapter."""
+    gated = len(tools.adapter)
+    if not gated:
+        return f"tools: {mapped} of {offered} offered to the model mapped"
+    by_gate = Counter(tools.gates.get(name, "framework adapter") for name, _ in tools.adapter)
+    if gated == offered:
+        each = ", ".join(f"{n} by the {gate}" for gate, n in by_gate.items())
+        return f"tools: {offered} offered to the model, all gated ({each})"
+    parts = [f"{offered} offered"]
+    if mapped:
+        parts.append(f"{mapped} mapped")
+    parts += [f"{n} gated by the {gate}" for gate, n in by_gate.items()]
+    if left := offered - mapped - gated:
+        names = ", ".join(printable(u.name) for u in tools.unresolved)
+        parts.append(f"{left} not mapped" + (f": {names}" if names else ""))
+    return "tools: " + ", ".join(parts)
+
+
 def probe_line(found: Findings) -> str:
     """Says how to name a function. It never prints a command for the guess: one that can be
     run as given would run the guess, which may be the wrong function."""
     result, chosen = found.result, found.chosen
     if result.ran and chosen is not None:
-        return f"probe: ran {chosen.value} up to its first model request; {result.outcome}"
+        return (
+            f"probe: ran {chosen.value} up to the first model request that offers tools; "
+            f"{result.outcome}"
+        )
     if chosen is not None and chosen.kind == "command":
         return "probe: not run; a script is never probed"
     return (
@@ -920,6 +1075,18 @@ def add_notes(draft: Draft, found: Findings) -> None:
         notes.append(
             f"skipped {len(reading.outside)} .py symlinks that point outside the folder: {shown}"
         )
+    notes += top_level_notes(reading)
+    for folder, names in shadowing(reading).items():
+        notes.append(
+            f"{printable(folder)} is read as top-level, and its {printable(', '.join(names))} "
+            "shadow the standard library when run from inside it; rename them"
+        )
+    if reading.unimportable:
+        shown = ", ".join(printable(n) for n in reading.unimportable[:5])
+        notes.append(
+            f"skipped definitions in {len(reading.unimportable)} files whose names cannot be "
+            f"imported: {shown}"
+        )
     if reading.cut_off:
         more = "at least " if reading.skipped > SKIP_COUNT_LIMIT else ""
         notes.append(
@@ -929,10 +1096,42 @@ def add_notes(draft: Draft, found: Findings) -> None:
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:
         notes.append(
-            "not offered in the first model request, so left out of the draft: "
+            "not offered in the request the probe read, so left out of the draft: "
             + ", ".join(left_out)
         )
     draft.messages += [(NOTES, note) for note in notes]
+
+
+def top_level_notes(reading: Reading) -> list[str]:
+    """What was read as top-level and where to run from: one note for each folder, or one
+    for them all when there are many."""
+    folders = reading.top_level
+    if len(folders) > 3:
+        names = ", ".join(printable(f) for f in list(folders)[:5])
+        more = f" and {len(folders) - 5} more" if len(folders) > 5 else ""
+        return [
+            f"{len(folders)} folders have names that cannot be imported ({names}{more}), so their "
+            "modules are read as top-level; run scrimmage from inside the folder that holds "
+            "your agent"
+        ]
+    return [
+        f"{printable(folder)} is not an importable "
+        f"{'package' if folder in reading.top_init else 'folder'} name, so its modules are read "
+        f"as top-level ({printable(example)}); run scrimmage from inside {printable(folder)}"
+        for folder, example in folders.items()
+    ]
+
+
+def shadowing(reading: Reading) -> dict[str, list[str]]:
+    """For each folder read as top-level, its top-level names that are standard library
+    modules, which they would hide when the team runs from inside the folder."""
+    found: dict[str, set[str]] = {}
+    for module, folders in reading.top_modules.items():
+        top = module.split(".")[0]
+        if top in sys.stdlib_module_names:
+            for folder in folders:
+                found.setdefault(folder, set()).add(top)
+    return {folder: sorted(names) for folder, names in found.items()}
 
 
 def install_notes(found: Findings) -> list[str]:
@@ -943,6 +1142,8 @@ def install_notes(found: Findings) -> list[str]:
     paths = [t.path for t in found.tools.mapped]
     if found.chosen is not None and found.chosen.kind == "function":
         paths.append(found.chosen.value)
+    # A path read as top-level has its own note: it is imported from inside its folder.
+    paths = [p for p in paths if p.split(":")[0] not in found.reading.top_modules]
     root = found.folder.resolve()
     missing = sorted(
         {
@@ -996,6 +1197,7 @@ def render(found: Findings) -> str:
             lines.append(
                 f"# And {len(others) - SHOWN_ENTRIES} more; scrimmage init --json lists them."
             )
+    lines += top_level_comments(found)
     if tools.mapped:
         entries_of_tools = [
             {"path": t.path, "name": t.name} if t.renamed else t.path for t in tools.mapped
@@ -1023,6 +1225,31 @@ def render(found: Findings) -> str:
     text = "\n".join(lines) + "\n"
     read_back(text, tools)
     return text
+
+
+def top_level_paths(found: Findings) -> dict[str, list[str]]:
+    """The drafted paths that were read under a top-level folder, by folder."""
+    paths = [t.path for t in found.tools.mapped]
+    if found.chosen is not None and found.chosen.kind == "function":
+        paths.insert(0, found.chosen.value)
+    under: dict[str, list[str]] = {}
+    for path in paths:
+        folders = {d.folder for d in found.reading.definitions if d.path == path}
+        if len(folders) == 1 and "" not in folders:
+            under.setdefault(next(iter(folders)), []).append(path)
+    return under
+
+
+def top_level_comments(found: Findings) -> list[str]:
+    """One comment for each folder whose name cannot be imported, above the paths read under
+    it as top-level: they name modules as when the team runs from inside it."""
+    return [
+        toml_write.comment(
+            f"read as top-level: {len(held)} path{'s' if len(held) != 1 else ''} under "
+            f"{folder}, such as {held[0]}; run scrimmage from inside {folder}"
+        )
+        for folder, held in top_level_paths(found).items()
+    ]
 
 
 def real_lines(tools: Tools) -> list[str]:
