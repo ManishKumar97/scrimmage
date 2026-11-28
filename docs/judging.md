@@ -53,7 +53,7 @@ Add a `forbid` that lists the negations you foresee:
 [[test]]
 name     = "order-shipped"
 question = "Has order 1234 shipped?"
-expect   = [["shipped"]]
+expect   = ["shipped"]
 forbid   = ["not shipped", "never shipped", "hasn't shipped"]
 ```
 

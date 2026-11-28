@@ -20,6 +20,7 @@ from conftest import (
     FAULT_FORBID_STOCK,
     FAULT_WORDS,
 )
+from scrimmage.config import read_expect
 from scrimmage.judge import Rules, broken_rules
 from test_docs_examples import DOCS, FENCE
 
@@ -293,7 +294,9 @@ def test_the_negation_guard_on_the_judging_page_gives_the_results_it_states() ->
     section = page.split("## Guard a word against its negation", 1)[1].split("\n## ", 1)[0]
     (toml,) = [body for lang, _, body in FENCE.findall(section) if lang == "toml"]
     (test,) = tomllib.loads(toml)["test"]
-    rules = Rules(tuple(tuple(item) for item in test["expect"]), tuple(test["forbid"]), 1.0)
+    expect = read_expect(test, "the judging page")
+    assert expect is not None
+    rules = Rules(expect, tuple(test["forbid"]), 1.0)
     rows = re.findall(r"^\| (.+?) \| (pass|fail) \|$", section, re.M)
     assert len(rows) == 5
     for answer, stated in rows:
