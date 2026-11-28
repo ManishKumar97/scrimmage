@@ -432,7 +432,64 @@ def test_a_folder_that_cannot_be_imported_below_the_folder_read_is_the_top_level
     assert "run scrimmage from inside python-backend" in notes
     assert "skipped definitions" not in notes
     assert "cannot be imported from" not in notes
+    moved = f"need it beside that code; move it to {(repo / 'python-backend').resolve()}"
+    assert moved in messages(doc, "warnings")
     assert "# read as top-level: 2 paths under python-backend" in (tmp_path / "d.toml").read_text()
+
+
+FIND = "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n"
+PAY = "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef refund(x):\n    return x\n"
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_one_tool_in_two_top_level_folders_is_ambiguous_and_never_one_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(
+        tmp_path,
+        {
+            "col/svc-a/tools.py": FIND + PAY.split("\n\n\n", 1)[1],
+            "col/svc-b/tools.py": FIND + PAY.split("\n\n\n", 1)[1],
+        },
+    )
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert tool_paths(doc) == []
+    unresolved = cast(list[dict[str, object]], doc["unresolved"])
+    assert {u["name"]: u["problem"] for u in unresolved} == {
+        "lookup": "ambiguous",
+        "refund": "ambiguous",
+    }
+    assert unresolved[0]["candidates"] == [
+        "tools:lookup (under col/svc-a)",
+        "tools:lookup (under col/svc-b)",
+    ]
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_each_top_level_folder_gets_its_own_comment_and_the_warning_names_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"col/svc-a/tools.py": FIND, "col/svc-b/tools.py": PAY})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["tools:lookup", "tools:refund"]
+    text = (tmp_path / "d.toml").read_text()
+    assert "# read as top-level: 1 path under col/svc-a, such as tools:lookup;" in text
+    assert "# read as top-level: 1 path under col/svc-b, such as tools:refund;" in text
+    warnings = messages(doc, "warnings")
+    assert "under several folders" in warnings
+    assert f"col/svc-a ({(tmp_path / 'col' / 'svc-a').resolve()}): 1" in warnings
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_many_top_level_folders_are_one_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {f"ex-{n}/app.py": f"def tool{n}(x):\n    return x\n" for n in range(9)})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    notes = [str(m["message"]) for m in cast(list[dict[str, object]], doc["notes"])]
+    top = [n for n in notes if "cannot be imported" in n or "not an importable" in n]
+    assert len(top) == 1 and top[0].startswith("9 folders have names that cannot be imported (")
+    assert "and 4 more" in top[0]
 
 
 @pytest.mark.design("init.unimportable_folder")
@@ -442,7 +499,7 @@ def test_a_folder_with_no_init_and_a_name_that_cannot_be_imported_is_the_top_lev
     write(tmp_path, {"my-service/app/tools.py": TOOLS})
     _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
     assert sorted(tool_paths(doc)) == ["app.tools:cancel", "app.tools:lookup"]
-    assert "my-service is not an importable package name" in messages(doc, "notes")
+    assert "my-service is not an importable folder name" in messages(doc, "notes")
 
 
 @pytest.mark.design("init.unimportable_folder")

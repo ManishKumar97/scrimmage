@@ -97,6 +97,7 @@ class Definition:
     decorated: bool  # carries a tool decorator
     model_name: str | None  # the name its decorator gives the model, if a literal one
     framework: bool  # a tool a framework's adapter sees, so it needs no tools list
+    folder: str = ""  # the top-level folder it was read under, when its name cannot be imported
 
 
 @dataclass(frozen=True)
@@ -121,8 +122,13 @@ class Reading:
     cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
     skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
+    # A folder whose name cannot be imported is where the top level starts. It is named by its
+    # path under the folder read, so two folders of one name stay apart.
     top_level: dict[str, str] = field(default_factory=dict[str, str])  # folder: a module under it
-    top_modules: dict[str, str] = field(default_factory=dict[str, str])  # module: its folder
+    top_modules: dict[str, set[str]] = field(default_factory=dict[str, set[str]])  # module: folders
+    top_dirs: dict[str, Path] = field(default_factory=dict[str, Path])  # folder: where it is
+    top_init: set[str] = field(default_factory=set[str])  # folders that hold an __init__.py
+    here: str = ""  # the top-level folder of the file being read
     unimportable: list[str] = field(default_factory=list[str])  # files with defs and no name
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
@@ -369,10 +375,15 @@ def module_name(folder: Path, path: Path, reading: Reading) -> str:
     """Its import name once its package is installed. A src layout's folder is not a package,
     and a folder that is itself inside a package keeps its packages' names. A folder anywhere
     on the way whose name cannot be imported is where the top level starts: no code can name
-    it, so what is under it is named as when the team runs from inside it."""
+    it, so what is under it is named as when the team runs from inside it. reading.here says
+    which folder that was, or is empty."""
+    reading.here = ""
+    whole = path.relative_to(folder).parts
     parts = list(path.relative_to(folder).with_suffix("").parts)
+    dropped = 0
     if parts[0] == "src" and len(parts) > 1:
         parts = parts[1:]
+        dropped = 1
         reading.src_dropped = True
     if parts[-1] == "__init__":
         parts.pop()
@@ -381,26 +392,33 @@ def module_name(folder: Path, path: Path, reading: Reading) -> str:
         dirs = parts[:-1]
     for index in range(len(dirs) - 1, -1, -1):
         if not dirs[index].isidentifier():
-            return read_as_top_level(reading, dirs[index], parts[index + 1 :])
+            directory = folder.joinpath(*whole[: index + dropped + 1])
+            key = directory.relative_to(folder).as_posix()
+            return read_as_top_level(reading, key, directory, parts[index + 1 :])
     packages: list[str] = []
     above = folder
     while (above / "__init__.py").is_file():
         if not above.name.isidentifier():
-            return read_as_top_level(reading, above.name, [*packages, *parts])
+            return read_as_top_level(reading, above.name, above, [*packages, *parts])
         packages.insert(0, above.name)
         above = above.parent
     return ".".join([*packages, *parts])
 
 
-def read_as_top_level(reading: Reading, folder: str, parts: list[str]) -> str:
+def read_as_top_level(reading: Reading, key: str, directory: Path, parts: list[str]) -> str:
     """The module's name under a folder that cannot be imported, which is kept so the note and
     the draft can say where to run from. The deepest name seen is the example."""
     name = ".".join(parts)
+    reading.here = key
+    if key not in reading.top_dirs:
+        reading.top_dirs[key] = directory.resolve()
+        if (directory / "__init__.py").is_file():
+            reading.top_init.add(key)
     if name:
-        reading.top_modules[name] = folder
-        shown = reading.top_level.get(folder)
+        reading.top_modules.setdefault(name, set()).add(key)
+        shown = reading.top_level.get(key)
         if importable(name) and (shown is None or name.count(".") > shown.count(".")):
-            reading.top_level[folder] = name
+            reading.top_level[key] = name
     return name
 
 
@@ -432,7 +450,12 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
     for statement in top_level(tree.body):
         if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
             reading.definitions.append(
-                definition(f"{module}:{statement.name}", statement, framework=framework)
+                definition(
+                    f"{module}:{statement.name}",
+                    statement,
+                    framework=framework,
+                    folder=reading.here,
+                )
             )
             found = function_candidate(statement, module, imports, relative, builds_client)
             if found is not None:
@@ -466,7 +489,9 @@ def read_class(
     for item in node.body:
         if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
             path = f"{owner}.{item.name}"
-            reading.definitions.append(definition(path, item, framework=framework, nested=nested))
+            reading.definitions.append(
+                definition(path, item, framework=framework, nested=nested, folder=reading.here)
+            )
         elif isinstance(item, ast.ClassDef):
             read_class(item, f"{owner}.{item.name}", reading, framework=framework, nested=True)
 
@@ -477,6 +502,7 @@ def definition(
     *,
     framework: bool,
     nested: bool = False,
+    folder: str = "",
 ) -> Definition:
     tool = next((d for d in node.decorator_list if tool_decorator(d)), None)
     return Definition(
@@ -486,6 +512,7 @@ def definition(
         tool is not None,
         None if tool is None else decorator_name(tool),
         framework and tool is not None,
+        folder,
     )
 
 
@@ -673,7 +700,9 @@ def static_tools(reading: Reading) -> Tools:
 
 def place(tools: Tools, name: str, matches: list[Definition], found_by: str) -> None:
     """One match is a path. None, several, or one that cannot be gated is listed instead."""
-    paths = tuple(sorted({m.path for m in matches}))  # defined in both arms of an if: one path
+    # Defined in both arms of an if: one path. The same path under two top-level folders is two
+    # functions, since the folders hold two different programs.
+    paths = tuple(sorted({f"{m.path} (under {m.folder})" if m.folder else m.path for m in matches}))
     if not matches:
         tools.unresolved.append(Unresolved(name, (), "not_found"))
     elif len(paths) > 1:
@@ -884,7 +913,32 @@ def fill(draft: Draft, found: Findings) -> None:
             "safe to run for real under real, then run scrimmage check"
         )
     root = found.folder.resolve()
-    if draft.out.resolve().parent != root:
+    under = top_level_paths(found)
+    here = draft.out.resolve().parent
+    if len(under) == 1:
+        folder = next(iter(under))
+        where = found.reading.top_dirs[folder]
+        if here != where:
+            draft.messages.append(
+                (
+                    WARNINGS,
+                    "the draft's module paths were read as top-level under "
+                    f"{printable(folder)} and need it beside that code; move it to {where}",
+                )
+            )
+    elif under:
+        each = "; ".join(
+            f"{printable(folder)} ({found.reading.top_dirs[folder]}): {len(held)}"
+            for folder, held in under.items()
+        )
+        draft.messages.append(
+            (
+                WARNINGS,
+                "the draft's module paths were read as top-level under several folders, "
+                f"and each needs its own draft beside its code; paths in each: {each}",
+            )
+        )
+    elif here != root:
         draft.messages.append(
             (WARNINGS, f"the draft's module paths need it beside the code; move it to {root}")
         )
@@ -1021,11 +1075,7 @@ def add_notes(draft: Draft, found: Findings) -> None:
         notes.append(
             f"skipped {len(reading.outside)} .py symlinks that point outside the folder: {shown}"
         )
-    for folder, example in reading.top_level.items():
-        notes.append(
-            f"{printable(folder)} is not an importable package name, so its modules are read as "
-            f"top-level ({printable(example)}); run scrimmage from inside {printable(folder)}"
-        )
+    notes += top_level_notes(reading)
     for folder, names in shadowing(reading).items():
         notes.append(
             f"{printable(folder)} is read as top-level, and its {printable(', '.join(names))} "
@@ -1052,14 +1102,35 @@ def add_notes(draft: Draft, found: Findings) -> None:
     draft.messages += [(NOTES, note) for note in notes]
 
 
+def top_level_notes(reading: Reading) -> list[str]:
+    """What was read as top-level and where to run from: one note for each folder, or one
+    for them all when there are many."""
+    folders = reading.top_level
+    if len(folders) > 3:
+        names = ", ".join(printable(f) for f in list(folders)[:5])
+        more = f" and {len(folders) - 5} more" if len(folders) > 5 else ""
+        return [
+            f"{len(folders)} folders have names that cannot be imported ({names}{more}), so their "
+            "modules are read as top-level; run scrimmage from inside the folder that holds "
+            "your agent"
+        ]
+    return [
+        f"{printable(folder)} is not an importable "
+        f"{'package' if folder in reading.top_init else 'folder'} name, so its modules are read "
+        f"as top-level ({printable(example)}); run scrimmage from inside {printable(folder)}"
+        for folder, example in folders.items()
+    ]
+
+
 def shadowing(reading: Reading) -> dict[str, list[str]]:
     """For each folder read as top-level, its top-level names that are standard library
     modules, which they would hide when the team runs from inside the folder."""
     found: dict[str, set[str]] = {}
-    for module, folder in reading.top_modules.items():
+    for module, folders in reading.top_modules.items():
         top = module.split(".")[0]
         if top in sys.stdlib_module_names:
-            found.setdefault(folder, set()).add(top)
+            for folder in folders:
+                found.setdefault(folder, set()).add(top)
     return {folder: sorted(names) for folder, names in found.items()}
 
 
@@ -1156,23 +1227,28 @@ def render(found: Findings) -> str:
     return text
 
 
-def top_level_comments(found: Findings) -> list[str]:
-    """One comment for each folder whose name cannot be imported, above the paths read under
-    it as top-level: they name modules as when the team runs from inside it."""
+def top_level_paths(found: Findings) -> dict[str, list[str]]:
+    """The drafted paths that were read under a top-level folder, by folder."""
     paths = [t.path for t in found.tools.mapped]
     if found.chosen is not None and found.chosen.kind == "function":
         paths.insert(0, found.chosen.value)
     under: dict[str, list[str]] = {}
     for path in paths:
-        folder = found.reading.top_modules.get(path.split(":")[0])
-        if folder is not None:
-            under.setdefault(folder, []).append(path)
+        folders = {d.folder for d in found.reading.definitions if d.path == path}
+        if len(folders) == 1 and "" not in folders:
+            under.setdefault(next(iter(folders)), []).append(path)
+    return under
+
+
+def top_level_comments(found: Findings) -> list[str]:
+    """One comment for each folder whose name cannot be imported, above the paths read under
+    it as top-level: they name modules as when the team runs from inside it."""
     return [
         toml_write.comment(
-            f"read as top-level: {len(held)} path{'s' if len(held) != 1 else ''} under {folder}, "
-            f"such as {held[0]}; run scrimmage from inside {folder}"
+            f"read as top-level: {len(held)} path{'s' if len(held) != 1 else ''} under "
+            f"{folder}, such as {held[0]}; run scrimmage from inside {folder}"
         )
-        for folder, held in under.items()
+        for folder, held in top_level_paths(found).items()
     ]
 
 
