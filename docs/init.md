@@ -86,7 +86,9 @@ A gateway you reach with `Anthropic(base_url="https://gateway.acme.internal")` i
 model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]
 ```
 
-With `--probe`, a first request to `POST /v1/messages` on a host that is not one of the providers' own is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
+With `--probe`, a request to `POST /v1/messages` on a host that is not one of the providers' own counts as a model request.
+One that offers no tools and is not streamed is passed with a canned reply, like any other.
+The first one that offers tools is stopped, and its host is drafted with `provider = "anthropic"` in the same way.
 The probe sets placeholder keys, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, only when neither is in the environment, so a client can be built.
 When you have one of them set, the probe sets none, and an agent that chooses its client by which key it finds takes the branch your key selects.
 It sends nothing.
@@ -135,6 +137,9 @@ The probe stops at the first model request that offers tools. That request is re
 A chat request that offers no tools and is not streamed, such as a guardrail check, is let through with a canned reply that the provider's own reply builder makes, so nothing is sent and nothing costs.
 The probe passes up to 5 such requests, then stops at the next one and says so.
 An agent that cannot use the canned reply, such as a guardrail that parses JSON from it, may end or crash there; the outcome says how many requests were passed.
+An agent built on the OpenAI Agents SDK sends its traces to `api.openai.com`, in a background thread, through the same gated client.
+The probe refuses that request like any other web write, and the refusal ends the program, so the probe can stop there before it reaches the request that offers tools.
+The SDK's own switch for this is the environment variable `OPENAI_AGENTS_DISABLE_TRACING=1`, or `set_tracing_disabled(True)` in code; set one of them for the probe run.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
 With neither key in the environment, the run gets a placeholder `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
