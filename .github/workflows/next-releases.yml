@@ -1,14 +1,21 @@
 name: Next releases
 
-# Once a day, run the gate tests against what each gated library will ship next: its newest
-# pre-release when PyPI has one newer than the stable release, otherwise its default branch
-# on GitHub, pinned to that day's commit (tools/next_releases.py chooses).
-# The log names each library and the exact version or commit it ran.
+# Once a day, run the gate tests against what each gated library will ship next.
+# Each library gets one leg for its default branch on GitHub, pinned to that day's commit,
+# and one more for its newest PyPI pre-release when that was uploaded after the newest
+# stable release. tools/next_releases.py lists the legs. A leg installs only its own
+# library's next version over the lock, so a red leg names the library that broke.
+# The legs run every gate test except tests/test_tested_range.py: that file says a library
+# is newer than the range its gate was tested with, which is a release-time check and not
+# a break. The newest-releases job runs it.
+# The log of each leg names the exact version or commit it ran and ends with `uv pip freeze`.
 # This is a warning, not a gate. It has its own workflow, runs only on a schedule or by
 # hand, and no pull request waits on it. Do not add it to the required checks.
-# A failure goes red on the Actions page, and GitHub emails the owner of the schedule.
-# A red run is a prompt to read the library's changes early, not proof of a break: a default
-# branch can be broken for reasons that never ship.
+# A failed leg goes red on the Actions page, and GitHub emails the owner of the schedule.
+# A red leg is a prompt to read the library's changes early, not proof of a break: a
+# default branch can be broken for reasons that never ship.
+# These legs run code from other projects' default branches. They never use the setup-uv
+# cache: its key is shared with the trusted jobs, and a leg must not write what they restore.
 on:
   schedule:
     - cron: "13 6 * * *"
@@ -23,13 +30,12 @@ env:
   UV_LOCKED: "1"
 
 jobs:
-  next:
-    name: Next releases of the gated libraries, on Python 3.14
+  legs:
+    name: Choose the legs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      UV_PYTHON: "3.14"
-      UV_PYTHON_PREFERENCE: only-managed
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.choose.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -37,13 +43,44 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv sync
-      - name: Choose what each library ships next
-        run: uv run --no-sync python tools/next_releases.py > next-requirements.txt
-      # Each requirement names a pre-release version or a full commit, so the install is exact.
-      - name: Install them past the lock
+          enable-cache: false
+      - id: choose
+        name: Choose what each library ships next
         run: |
-          uv pip install --prerelease allow -r next-requirements.txt
-          uv pip list | grep -E "^(openai|anthropic|httpx|httpx2|httpcore2|langchain-core|langchain-openai|langgraph|mcp) "
-      - name: The gate tests, with the next releases
-        run: uv run --no-sync pytest $(cat tools/gate-tests.txt)
+          matrix="$(uv run --no-project --with packaging python tools/next_releases.py)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  next:
+    name: ${{ matrix.leg.name }}
+    needs: legs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    env:
+      UV_PYTHON: "3.14"
+      UV_PYTHON_PREFERENCE: only-managed
+      LEG_SOURCE: ${{ matrix.leg.source }}
+      LEG_REQUIREMENTS: ${{ matrix.leg.requirements }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - run: uv sync
+      # Each requirement names a pre-release version or a full commit, so the install is exact.
+      # A pre-release is named exactly, so uv installs it with its default pre-release setting.
+      - name: Install this leg's next version past the lock
+        run: |
+          echo "source: $LEG_SOURCE"
+          printf '%s\n' "$LEG_REQUIREMENTS" > leg-requirements.txt
+          cat leg-requirements.txt
+          uv pip install -r leg-requirements.txt
+          uv pip freeze
+      - name: The gate tests, except the range check
+        run: uv run --no-sync pytest $(grep -v '^tests/test_tested_range.py$' tools/gate-tests.txt)

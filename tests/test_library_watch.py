@@ -2,6 +2,7 @@
 
 import importlib.util
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,25 +52,54 @@ def test_every_gate_test_is_in_the_list_and_exists() -> None:
     assert "tests/test_tested_range.py" in listed
 
 
-def test_both_jobs_run_the_listed_gate_tests() -> None:
-    for name, step in [
-        ("newest.yml", "The gate tests, with the newest releases"),
-        ("next-releases.yml", "The gate tests, with the next releases"),
-    ]:
-        assert "$(cat tools/gate-tests.txt)" in run_text(name, step), name
+def test_the_newest_job_runs_the_whole_gate_list() -> None:
+    step = "The gate tests, with the newest releases"
+    assert "$(cat tools/gate-tests.txt)" in run_text("newest.yml", step)
+
+
+def next_jobs() -> dict[str, Any]:
+    return load("next-releases.yml")["jobs"]
 
 
 def test_the_next_releases_job_only_warns() -> None:
     workflow = load("next-releases.yml")
     assert set(triggers(workflow)) == {"schedule", "workflow_dispatch"}, "never a pull request"
     assert workflow["permissions"] == {"contents": "read"}
-    steps = [s for job in workflow["jobs"].values() for s in job["steps"]]
-    used = [s for s in steps if "uses" in s]
+    used = [s for job in next_jobs().values() for s in job["steps"] if "uses" in s]
     assert all(re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", s["uses"]) for s in used)
-    assert all(
-        s["with"].get("persist-credentials") is False for s in used if "checkout" in s["uses"]
-    )
-    assert "next-requirements.txt" in run_text("next-releases.yml", "Install them past the lock")
+    checkouts = [s for s in used if "checkout" in s["uses"]]
+    assert checkouts
+    assert all(s["with"].get("persist-credentials") is False for s in checkouts)
+
+
+def test_the_next_releases_job_never_uses_the_shared_cache() -> None:
+    """It runs other projects' code, and the cache key is shared with the trusted jobs."""
+    setups = [
+        s
+        for job in next_jobs().values()
+        for s in job["steps"]
+        if s.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    assert len(setups) == 2
+    assert all(s["with"]["enable-cache"] is False for s in setups)
+
+
+def test_the_pages_build_never_uses_the_shared_cache() -> None:
+    steps = load("pages.yml")["jobs"]["build"]["steps"]
+    (setup,) = [s for s in steps if s.get("uses", "").startswith("astral-sh/setup-uv@")]
+    assert setup["with"]["enable-cache"] is False
+
+
+def test_each_leg_installs_alone_and_runs_the_gate_tests_without_the_range_check() -> None:
+    next_job = next_jobs()["next"]
+    assert next_job["strategy"]["fail-fast"] is False
+    assert "fromJSON(needs.legs.outputs.matrix)" in next_job["strategy"]["matrix"]["leg"]
+    install = run_text("next-releases.yml", "Install this leg's next version past the lock")
+    assert "uv pip install -r leg-requirements.txt" in install
+    assert "--prerelease allow" not in install
+    assert "uv pip freeze" in install
+    gate = run_text("next-releases.yml", "The gate tests, except the range check")
+    assert "tools/gate-tests.txt" in gate and "test_tested_range" in gate
 
 
 def next_releases() -> Any:
@@ -81,32 +111,52 @@ def next_releases() -> Any:
     return module
 
 
-def versions(*texts: str) -> list[Version]:
-    return sorted(Version(t) for t in texts)
+def release(text: str, uploaded: str) -> Any:
+    return next_releases().Release(Version(text), datetime.fromisoformat(uploaded))
 
 
-def test_a_pre_release_counts_only_when_it_is_newer_than_the_newest_stable() -> None:
+def test_a_pre_release_counts_only_when_it_is_newer_than_the_newest_stable_release() -> None:
     nr = next_releases()
-    assert nr.next_prerelease(versions("0.28.1", "0.29.0", "1.0.dev5", "1.0.dev6")) == Version(
-        "1.0.dev6"
-    )
-    assert nr.next_prerelease(versions("1.0.0rc3", "3.60.0")) is None, "an old release candidate"
-    assert nr.next_prerelease(versions("2.3.0")) is None
-    assert nr.next_prerelease(versions("0.1.0a1", "0.1.0b2")) == Version("0.1.0b2"), "no stable yet"
+    stale = [
+        release("0.28.1", "2025-12-06T00:00:00+00:00"),
+        release("0.29.0", "2026-11-26T00:00:00+00:00"),
+        release("1.0.dev6", "2026-08-10T00:00:00+00:00"),
+    ]
+    assert nr.next_prerelease(stale) is None, "a 1.0 build from before the stable release"
+    fresh = [*stale, release("1.0.dev7", "2026-11-27T00:00:00+00:00")]
+    assert nr.next_prerelease(fresh).version == Version("1.0.dev7")
+    old = [
+        release("1.0.0rc3", "2025-01-01T00:00:00+00:00"),
+        release("3.60.0", "2026-11-01T00:00:00+00:00"),
+    ]
+    assert nr.next_prerelease(old) is None
+    assert nr.next_prerelease([release("0.1.0b2", "2026-01-01T00:00:00+00:00")]) is not None
 
 
-def test_the_requirement_is_a_pre_release_or_the_default_branch_at_one_commit(
+def test_each_library_gets_a_default_branch_leg_and_a_pre_release_leg_only_when_fresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     nr = next_releases()
     commit = "a" * 40
     monkeypatch.setattr(nr, "head", lambda repo: ("main", commit))
-    monkeypatch.setattr(nr, "releases", lambda name: versions("1.0", "2.0b1"))
-    assert nr.requirement("lib", "o/r", "") == ("lib==2.0b1", "lib: pre-release 2.0b1 from PyPI")
-    monkeypatch.setattr(nr, "releases", lambda name: versions("1.0", "1.1"))
-    line, said = nr.requirement("lib", "o/r", "libs/lib")
-    assert line == f"lib @ git+https://github.com/o/r@{commit}#subdirectory=libs/lib"
-    assert said == f"lib: no pre-release, default branch main of o/r at commit {commit}"
+    stable = release("1.0", "2026-01-01T00:00:00+00:00")
+    monkeypatch.setattr(nr, "releases", lambda name: [stable])
+    (branch,) = nr.legs("langchain-openai")
+    assert branch["library"] == "langchain-openai"
+    assert branch["requirements"].splitlines() == [
+        f"langchain-openai @ git+https://github.com/langchain-ai/langchain@{commit}"
+        "#subdirectory=libs/partners/openai",
+        f"langchain-core @ git+https://github.com/langchain-ai/langchain@{commit}"
+        "#subdirectory=libs/core",
+    ]
+    assert commit in branch["source"] and "main" in branch["source"]
+    monkeypatch.setattr(
+        nr, "releases", lambda name: [stable, release("2.0b1", "2026-02-01T00:00:00+00:00")]
+    )
+    branch, pre = nr.legs("httpx")
+    assert branch["requirements"] == f"httpx @ git+https://github.com/encode/httpx@{commit}"
+    assert pre["requirements"] == "httpx==2.0b1"
+    assert pre["name"] == "httpx, pre-release 2.0b1"
 
 
 @pytest.mark.parametrize("library", [*tested_ranges.ranges(), *THROUGH_HTTPX])
@@ -124,6 +174,7 @@ def test_the_tested_versions_table_lists_every_tested_range() -> None:
         if line.startswith("| ") and not line.startswith("| Library")
     ]
     shown = {library: (low, high) for library, low, high in cells}
+    assert len(cells) == len(shown), "a library has two rows"
     expected = {
         library: (".".join(map(str, low)), ".".join(map(str, high)))
         for library, (low, high) in tested_ranges.ranges().items()

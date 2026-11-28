@@ -42,8 +42,11 @@ The next-release job warns earlier, from a pre-release or the default branch.
 Widen a range only after the steps below, never to make a red job green.
 
 1. Run the gate tests against the new version, with no change to the code:
-   `uv run --with httpx==0.29.0 pytest $(cat tools/gate-tests.txt)`.
+   `uv run --with httpx==0.29.0 pytest $(grep -v test_tested_range tools/gate-tests.txt)`.
    Use the library's own name and the exact new version.
+   Leave out `tests/test_tested_range.py`: it fails on purpose until `TESTED` is widened.
+   For a pre-release, add `--prerelease explicit` to `uv run`.
+   The daily next-release job runs each library's default branch the same way, one leg per library.
 2. Read the library's release notes against what the gate replaces.
    For the web gate that is `Client._send_single_request` and the stream types.
    A renamed or reordered argument can pass a test and still break the gate in a team's agent.
