@@ -11,6 +11,7 @@ Agents SDK: the hook patches it when the agent imports it.
 A handoff runs no I/O, so it is seen and recorded and never refused or faulted.
 """
 
+import dataclasses
 import functools
 import inspect
 import json
@@ -22,6 +23,7 @@ from typing import Any
 from scrimmage import hooks, tool_gate
 from scrimmage.decide import Call
 from scrimmage.errors import ScrimmageRefused
+from scrimmage.http_gate import params
 from scrimmage.state import ProcessState, RunState
 
 LIBRARY = "openai-agents"
@@ -40,6 +42,41 @@ def install(process: ProcessState, stop: Callable[[str], None]) -> None:
     hooks.on_import(HANDOFF_MODULE, lambda module: patch_handoffs(module, process, stop))
 
 
+def missing_in_tools(module: ModuleType) -> str | None:
+    """The first thing the gate relies on that this module lacks, or None."""
+    invoker = getattr(module, INVOKER, None)
+    tool = getattr(module, "FunctionTool", None)
+    if not isinstance(invoker, type):
+        return INVOKER
+    if not isinstance(tool, type) or "on_invoke_tool" not in field_names(tool):
+        return "FunctionTool.on_invoke_tool"
+    init = (params(vars(invoker).get("__init__")) or [])[:3]
+    if init != ["self", "invoke_tool_impl", "on_handled_error"]:
+        return f"{INVOKER}.__init__(invoke_tool_impl, on_handled_error)"
+    call = vars(invoker).get("__call__")
+    # The failure handling must still call the attribute the gate stands in for.
+    if "_invoke_tool_impl" not in getattr(getattr(call, "__code__", None), "co_names", ()):
+        return f"{INVOKER}._invoke_tool_impl"
+    if params(vars(tool).get("__post_init__")) != ["self"]:
+        return "FunctionTool.__post_init__"
+    return None
+
+
+def missing_in_handoffs(module: ModuleType) -> str | None:
+    handoff = getattr(module, "Handoff", None)
+    if not isinstance(handoff, type):
+        return "Handoff"
+    if "tool_name" not in field_names(handoff):
+        return "Handoff.tool_name"
+    if "on_invoke_handoff" not in field_names(handoff):
+        return "Handoff.on_invoke_handoff"
+    return None
+
+
+def field_names(cls: type) -> set[str]:
+    return {f.name for f in dataclasses.fields(cls)} if dataclasses.is_dataclass(cls) else set()
+
+
 def version() -> tuple[int, int] | None:
     try:
         # Not at import: the SDK starts without it. A team's stray module of the same name
@@ -52,11 +89,29 @@ def version() -> tuple[int, int] | None:
         return None
 
 
+def broken(process: ProcessState, stop: Callable[[str], None], missing: str) -> None:
+    (oldest, newest) = TESTED
+    message = (
+        f"{LIBRARY} {found_version()} does not have {missing}, which Scrimmage gates (it was "
+        f"tested with {oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]}), so its tools cannot "
+        "be checked, and the program is stopped"
+    )
+    process.structure(LIBRARY, message, stop)
+
+
+def found_version() -> str:
+    found = version()
+    return "?" if found is None else f"{found[0]}.{found[1]}"
+
+
 def patch_tools(
     module: ModuleType, owner: ProcessState | RunState, stop: Callable[[str], None]
 ) -> None:
     """owner: the process, or a run's own process; the adapter keeps no run."""
     process = owner.process if isinstance(owner, RunState) else owner
+    if (missing := missing_in_tools(module)) is not None:
+        broken(process, stop, missing)
+        return
     process.newer_version(LIBRARY, version(), TESTED)
     invoker = getattr(module, INVOKER)
     tool_class = module.FunctionTool
@@ -170,6 +225,9 @@ def patch_handoffs(
     module: ModuleType, owner: ProcessState | RunState, stop: Callable[[str], None]
 ) -> None:
     process = owner.process if isinstance(owner, RunState) else owner
+    if (missing := missing_in_handoffs(module)) is not None:
+        broken(process, stop, missing)
+        return
     handoff = module.Handoff
     made = handoff.__init__
     if getattr(made, RAW, False):

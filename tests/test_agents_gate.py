@@ -1,15 +1,19 @@
 """The order bot on the OpenAI Agents SDK: the team writes no tools list, the adapter finds the
 function tools, and a handoff is seen and recorded, never refused."""
 
+import asyncio
+import types
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import fakes
 from conftest import EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage import agents_gate
+from scrimmage import agents_gate, state, tool_gate
+from scrimmage.plan import Plan
 
 Fake = Callable[..., FakeOpenAI]
 TOOLS_LINE = (
@@ -479,6 +483,175 @@ def test_an_implementation_replaced_after_the_tool_was_made_is_refused_with_the_
 
 
 # The unit tests below patch stand-ins, so no library is imported.
+
+
+class Seen:
+    def __init__(self) -> None:
+        self.lines: list[dict[str, object]] = []
+
+    def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+        del keep
+        self.lines.append(line)
+
+
+def fresh_run() -> tuple[state.RunState, Seen]:
+    sink = Seen()
+    return state.RunState(Plan("r", "t", "baseline", (), (), (), (), 60.0), sink, []), sink
+
+
+def tool_module(**drop: bool) -> types.ModuleType:
+    """What the gate expects of agents.tool, with named parts left out."""
+    import dataclasses
+
+    class Invoker:
+        def __init__(
+            self, invoke_tool_impl: Any, on_handled_error: Any, *, function_tool: Any = None
+        ):
+            del on_handled_error
+            self._invoke_tool_impl = invoke_tool_impl
+            self._function_tool = function_tool
+
+        async def __call__(self, ctx: Any, input: str) -> Any:
+            return await self._invoke_tool_impl(ctx, input)
+
+    @dataclasses.dataclass
+    class FunctionTool:
+        name: str
+        on_invoke_tool: Any
+
+        def __post_init__(self) -> None:
+            pass
+
+    if drop.get("call"):
+
+        async def call(self: Any, ctx: Any, input: str) -> Any:
+            return None
+
+        Invoker.__call__ = call  # type: ignore[method-assign]
+    if drop.get("post_init"):
+        del FunctionTool.__post_init__
+    if drop.get("field"):
+        FunctionTool = dataclasses.make_dataclass("FunctionTool", ["name"])  # type: ignore[misc]
+    shim = types.ModuleType("agents.tool")
+    if not drop.get("invoker"):
+        vars(shim)["_FailureHandlingFunctionToolInvoker"] = Invoker
+    vars(shim)["FunctionTool"] = FunctionTool
+    return shim
+
+
+def handoff_module(*, field: bool = True) -> types.ModuleType:
+    import dataclasses
+
+    names = ["tool_name", "on_invoke_handoff"] if field else ["on_invoke_handoff"]
+    shim = types.ModuleType("agents.handoffs")
+    vars(shim)["Handoff"] = dataclasses.make_dataclass("Handoff", names)
+    return shim
+
+
+@pytest.mark.design("adapter.agents_structural_check")
+@pytest.mark.parametrize(
+    ("missing", "named"),
+    [
+        ({"invoker": True}, "_FailureHandlingFunctionToolInvoker"),
+        ({"call": True}, "_invoke_tool_impl"),
+        ({"post_init": True}, "FunctionTool.__post_init__"),
+        ({"field": True}, "FunctionTool.on_invoke_tool"),
+    ],
+)
+def test_a_library_without_the_tool_classes_stops_the_program_naming_the_symbol(
+    missing: dict[str, bool], named: str
+) -> None:
+    run, sink = fresh_run()
+    stopped: list[str] = []
+    agents_gate.patch_tools(tool_module(**missing), run, stopped.append)
+    assert stopped and named in stopped[0], stopped
+    assert "the program is stopped" in stopped[0]
+    assert "tested with 0.20 to 0.26" in stopped[0]
+    assert sink.lines[0]["notice"] == "structure"
+
+
+@pytest.mark.design("adapter.agents_structural_check")
+def test_a_library_without_a_handoff_name_stops_the_program_naming_the_symbol() -> None:
+    run, _ = fresh_run()
+    stopped: list[str] = []
+    agents_gate.patch_handoffs(handoff_module(field=False), run, stopped.append)
+    assert stopped and "Handoff.tool_name" in stopped[0], stopped
+    stopped.clear()
+    agents_gate.patch_handoffs(types.ModuleType("agents.handoffs"), run, stopped.append)
+    assert stopped and "Handoff" in stopped[0]
+
+
+@pytest.mark.design("adapter.agents_structural_check")
+@pytest.mark.slow
+def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
+    bot(project)
+    project.edit("acme.agents_bot:answer", "acme.agents_probe:answer")
+    (project.root / "acme" / "agents_probe.py").write_text(
+        "import agents.tool\n\n\ndef answer(question):\n    return 'ran'\n"
+    )
+    package = project.root / "agents"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "tool.py").write_text("class FunctionTool:\n    pass\n")
+    result = project.test()
+    assert result.code == 3, result.out + result.err
+    assert "_FailureHandlingFunctionToolInvoker" in result.out
+    assert "the program is stopped" in result.out
+
+
+@pytest.mark.design("adapter.agents_tested_range")
+def test_a_newer_library_gets_a_notice_and_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agents_gate, "version", lambda: (99, 0))
+    run, sink = fresh_run()
+    stopped: list[str] = []
+    shim = tool_module()
+    agents_gate.patch_tools(shim, run, stopped.append)
+    assert not stopped
+    assert sink.lines[0]["notice"] == "newer_version"
+    assert "openai-agents 99.0 is newer than the versions" in str(sink.lines[0]["message"])
+    invoker = vars(shim)["_FailureHandlingFunctionToolInvoker"]
+    made = vars(shim)["FunctionTool"](name="later", on_invoke_tool=None)
+    assert made.name == "later"
+    assert tool_gate.is_gate(invoker(_Impl(), None)._invoke_tool_impl)
+
+
+async def _impl(ctx: Any, text: str) -> str:
+    return "real"
+
+
+class _Impl:
+    """Callable the invoker takes as its implementation."""
+
+    async def __call__(self, ctx: Any, text: str) -> str:
+        return "real"
+
+
+def test_the_invoker_gate_lets_a_call_through_when_no_run_is_going() -> None:
+    run, _ = fresh_run()
+    shim = tool_module()
+    agents_gate.patch_tools(shim, run, pytest.fail)
+    invoker = vars(shim)["_FailureHandlingFunctionToolInvoker"](_impl, None)
+    assert asyncio.run(invoker(None, "{}")) == "real"
+
+
+def test_a_callable_object_as_the_implementation_is_gated_and_awaited() -> None:
+    plan = Plan("r", "t", "baseline", (), (), (), ("tool:later",), 60.0)
+    sink = Seen()
+    run = state.RunState(plan, sink, [])
+    state.install(run)
+    try:
+        shim = tool_module()
+        agents_gate.patch_tools(shim, run, pytest.fail)
+        tool = vars(shim)["FunctionTool"](name="later", on_invoke_tool=None)
+        invoker = vars(shim)["_FailureHandlingFunctionToolInvoker"](
+            _Impl(), None, function_tool=tool
+        )
+        assert asyncio.run(invoker(None, "{}")) == "real"
+    finally:
+        state.install(None)
+    assert [(x["call"], x["action"]) for x in sink.lines if x.get("kind") == "tool"] == [
+        ("tool:later", "real")
+    ]
 
 
 def test_arguments_are_parsed_from_the_models_json_and_bad_text_matches_no_args() -> None:
