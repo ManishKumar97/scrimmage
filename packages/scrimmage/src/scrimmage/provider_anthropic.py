@@ -172,8 +172,9 @@ def broken_body(path: str, op: str) -> bytes:
     return BROKEN_COUNT if op == "input_tokens" else BROKEN_BODY
 
 
-def context_too_long_body() -> bytes:
+def context_too_long_body(path: str) -> bytes:
     """What Anthropic sends, with status 400, for a prompt longer than the context window."""
+    del path
     error = {"type": "invalid_request_error", "message": CONTEXT_TOO_LONG}
     return _error_json(error)
 

@@ -52,6 +52,6 @@ def test_the_context_length_message_is_the_captured_one() -> None:
     assert "UNCONFIRMED" not in (DIRECTORY / "SOURCE.md").read_text()
     assert "UNCONFIRMED" not in Path(provider_anthropic.__file__).read_text()
     real = json.loads((DIRECTORY / "real_context_too_long.json").read_text())
-    sent = json.loads(provider_anthropic.context_too_long_body())
+    sent = json.loads(provider_anthropic.context_too_long_body("/v1/messages"))
     assert sent["error"] == real["body"]["error"]
     assert sent["type"] == real["body"]["type"]

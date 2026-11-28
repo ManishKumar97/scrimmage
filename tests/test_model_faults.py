@@ -16,10 +16,9 @@ import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage import config, suggest
+from scrimmage import config
 from scrimmage import runner as runner_module
-from scrimmage.decide import MISTAKE_REFUSAL
-from scrimmage.errors import ConfigError, ScrimmageMockError
+from scrimmage.errors import ConfigError
 from scrimmage.runner import Runner
 from test_connection_faults import gated, install
 from test_http_gate import Sink
@@ -501,22 +500,24 @@ def test_context_too_long_raises_bad_request_with_the_real_code(gated: None, syn
 
 @pytest.mark.design("model.context_too_long")
 @pytest.mark.parametrize("sync", **SYNC)
-def test_context_too_long_on_a_responses_call_is_a_mistake_and_not_fired(
+def test_context_too_long_on_a_responses_call_raises_the_real_responses_error(
     gated: None, sync: bool
 ) -> None:
+    real = captured("real_response_error_context_length")["body"]["error"]
+    chat = captured("real_error_context_length")["body"]["error"]
+    assert real["param"] == "input" != chat["param"], "Responses names its own parameter"
     sink, budget = install("context too long", "model")
     reached: list[object] = []
     error = raised_by(sync, reached, responses=True)
-    assert isinstance(error, ScrimmageMockError), repr(error)
-    assert "is a Responses call" in str(error)
-    assert reached == [] and budget.asked == 0
-    [line] = model_lines(sink)  # one attempt: the library does not retry a mistake
-    # Not a fired fault, and not a real call the provider failed: nothing was sent.
-    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
-    assert runner_module.real_error(line) is None
-    assert suggest.refused_mistakes([line]) == [line] and suggest.unchanged_lines([line]) == []
-    unchanged = line["unchanged"]
-    assert isinstance(unchanged, dict) and unchanged["do"] == "context too long"
+    assert type(error) is openai.BadRequestError
+    assert error.code == "context_length_exceeded" == real["code"]
+    assert error.param == "input" == real["param"]
+    assert error.type == real["type"]
+    assert error.message == f"Error code: 400 - {real['message']}"
+    assert reached == [], "the faulted request reached the provider"
+    # Fired, once: the library does not retry a 400.
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 400)]
+    assert budget.asked == 0 and sink.settles == []
 
 
 @pytest.mark.design("model.context_too_long")

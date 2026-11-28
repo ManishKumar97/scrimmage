@@ -804,7 +804,7 @@ def fault(
         if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
             not_carried_out(run, step, why)
         headers = provider.fault_headers("application/json")
-        body = provider.context_too_long_body()
+        body = provider.context_too_long_body(str(request.url.path))
         return reply(ctx, module, client, step, request, extra, (400, headers, body))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":

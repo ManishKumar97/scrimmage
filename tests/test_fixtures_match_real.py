@@ -118,6 +118,21 @@ def test_a_responses_401_is_the_chat_completions_401(gated: None) -> None:
 
 
 @pytest.mark.design("fixtures.match_real_errors")
+def test_a_responses_context_error_is_not_the_chat_completions_one(gated: None) -> None:
+    """Captured 28 November 2026: the two APIs word it differently, so `context too long`
+    sends the Responses reply on a Responses path, and the chat one on a chat path."""
+    want, chat = load("real_response_error_context_length"), load("real_error_context_length")
+    assert want["body"]["error"]["param"] == "input"
+    assert chat["body"]["error"]["param"] == "messages"
+    assert want["body"] != chat["body"]
+    install("context too long", "model")
+    got = send_responses()
+    assert got.status_code == want["status"] == 400
+    assert got.headers["content-type"] == want["headers"]["content-type"]
+    assert got.json() == want["body"]
+
+
+@pytest.mark.design("fixtures.match_real_errors")
 @pytest.mark.parametrize(
     ("status", "real"), [(404, "real_response_error_404"), (400, "real_response_error_400")]
 )

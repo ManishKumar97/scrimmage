@@ -75,6 +75,18 @@ CONTEXT_TOO_LONG = {
     "param": "messages",
     "code": "context_length_exceeded",
 }
+# A real reply to a Responses request of about 140000 tokens to gpt-4o-mini, saved on
+# 28 November 2026. It differs from Chat Completions': the parameter is input, and the
+# message holds no counts.
+RESPONSES_CONTEXT_TOO_LONG = {
+    "message": (
+        "Your input exceeds the context window of this model. "
+        "Please adjust your input and try again."
+    ),
+    "type": "invalid_request_error",
+    "param": "input",
+    "code": "context_length_exceeded",
+}
 
 
 # Tool types, per API: run at the provider and only read; run at the provider and can
@@ -165,9 +177,11 @@ def error_content_type(status: int) -> str:
     return "text/plain" if status in TEXT_PLAIN else "application/json"
 
 
-def context_too_long_body() -> bytes:
-    """What OpenAI sends, with status 400, for a chat request longer than the context."""
-    return json.dumps({"error": CONTEXT_TOO_LONG}).encode()
+def context_too_long_body(path: str) -> bytes:
+    """What OpenAI sends, with status 400, for a request longer than the context: the form
+    of the API the path names, as the two differ."""
+    error = RESPONSES_CONTEXT_TOO_LONG if is_responses(path) else CONTEXT_TOO_LONG
+    return json.dumps({"error": error}).encode()
 
 
 # A real gpt-4o-mini reply, saved on 6 November 2026 (tests/fixtures/openai/real_chat_answer.json
@@ -434,10 +448,7 @@ def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
     if not is_responses(path):
         return None
     if word == "context too long":
-        return (
-            "is a Responses call, and context too long sends Chat Completions' error; "
-            "fault a chat call, or use a status on this one"
-        )
+        return None  # OpenAI refuses the request, so no reply is left in a conversation
     if fields.get("conversation") is not None:
         return (
             f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "
