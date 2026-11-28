@@ -297,7 +297,10 @@ class ProcessState:
         """A notice that may come with no run: it goes to the run, if there is one, else to
         the startup report and stderr."""
         run = self.current()
-        if run is not None:
+        if isinstance(run, Orphan):  # decided once, there: a close cannot come between two checks
+            if run.tell_target(kind, library, message):
+                return
+        elif run is not None:
             run.notice(kind, library, message)
             return
         with self.lock:
@@ -1391,6 +1394,16 @@ class Orphan(RunState):
             f"{step.call.label}: this call was made in a thread run {self.name} started, but "
             "outside that run's context, so it is refused; the run is an infrastructure error"
         )
+
+    def tell_target(self, kind: str, library: str, message: str) -> bool:
+        """Give a notice to the run while its record is open; False if there is no such run.
+        The one check: a close after it never prints a refusal. The line is handed to the run,
+        which may drop it if its record has already sent its last batch."""
+        target = self.target
+        if target is None or target.refused == CLOSED:
+            return False
+        target.notice(kind, library, message)
+        return True
 
     def put(self, line: dict[str, object], *, keep: bool) -> None:
         target = self.target
