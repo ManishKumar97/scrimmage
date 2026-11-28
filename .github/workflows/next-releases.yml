@@ -1,0 +1,49 @@
+name: Next releases
+
+# Once a day, run the gate tests against what each gated library will ship next: its newest
+# pre-release when PyPI has one newer than the stable release, otherwise its default branch
+# on GitHub, pinned to that day's commit (tools/next_releases.py chooses).
+# The log names each library and the exact version or commit it ran.
+# This is a warning, not a gate. It has its own workflow, runs only on a schedule or by
+# hand, and no pull request waits on it. Do not add it to the required checks.
+# A failure goes red on the Actions page, and GitHub emails the owner of the schedule.
+# A red run is a prompt to read the library's changes early, not proof of a break: a default
+# branch can be broken for reasons that never ship.
+on:
+  schedule:
+    - cron: "13 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.13.0"
+  # uv run never re-locks; a stale uv.lock fails the job.
+  UV_LOCKED: "1"
+
+jobs:
+  next:
+    name: Next releases of the gated libraries, on Python 3.14
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.14"
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync
+      - name: Choose what each library ships next
+        run: uv run --no-sync python tools/next_releases.py > next-requirements.txt
+      # Each requirement names a pre-release version or a full commit, so the install is exact.
+      - name: Install them past the lock
+        run: |
+          uv pip install --prerelease allow -r next-requirements.txt
+          uv pip list | grep -E "^(openai|anthropic|httpx|httpx2|httpcore2|langchain-core|langchain-openai|langgraph|mcp) "
+      - name: The gate tests, with the next releases
+        run: uv run --no-sync pytest $(cat tools/gate-tests.txt)
