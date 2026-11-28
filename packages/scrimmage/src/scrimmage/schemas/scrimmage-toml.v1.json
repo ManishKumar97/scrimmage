@@ -72,7 +72,7 @@
     },
     "real_label": {
       "type": "string",
-      "pattern": "^(tool:([A-Za-z0-9_-]+|\\*)|mcp:[^\\s/*]([^*]*[^\\s/*])?|hosted:mcp/[A-Za-z0-9_.-]+|process:[A-Za-z0-9_][A-Za-z0-9._+-]*|http:([A-Za-z0-9][A-Za-z0-9._-]*|\\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\\]?)( [A-Za-z][A-Za-z-]*( /[!\"$->@-~]*)?)?)$"
+      "pattern": "^(tool:([A-Za-z0-9_-]+|\\*)|handoff:[A-Za-z0-9_-]+|mcp:[^\\s/*]([^*]*[^\\s/*])?|hosted:mcp/[A-Za-z0-9_.-]+|process:[A-Za-z0-9_][A-Za-z0-9._+-]*|http:([A-Za-z0-9][A-Za-z0-9._-]*|\\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\\]?)( [A-Za-z][A-Za-z-]*( /[!\"$->@-~]*)?)?)$"
     },
     "method": {
       "type": "string",

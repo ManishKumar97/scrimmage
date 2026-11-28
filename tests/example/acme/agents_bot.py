@@ -18,6 +18,9 @@ from agents import (
     handoff,
     set_tracing_disabled,
 )
+from agents.mcp import MCPServer
+from mcp.types import CallToolResult, TextContent
+from mcp.types import Tool as McpTool
 
 from acme.models import Stock
 
@@ -187,3 +190,111 @@ async def ask_through_mcp(question: str) -> str:
 def answer_mcp(question: str) -> str:
     """The same bot with its tools from an MCP server, which the SDK turns into function tools."""
     return asyncio.run(ask_through_mcp(question))
+
+
+class InProcessServer(MCPServer):
+    """An MCP server of the team's own: its call_tool never goes through an MCP session."""
+
+    @property
+    def name(self) -> str:
+        return "inproc"
+
+    async def connect(self) -> None:
+        return None
+
+    async def cleanup(self) -> None:
+        return None
+
+    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[McpTool]:
+        del run_context, agent
+        schema = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+        return [McpTool(name="search", description="Search the documents.", input_schema=schema)]
+
+    async def call_tool(
+        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+    ) -> CallToolResult:
+        touch("server")
+        return CallToolResult(content=[TextContent(type="text", text="REAL SERVER RAN")])
+
+    async def list_prompts(self) -> Any:
+        return None
+
+    async def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        return None
+
+
+def touch(who: str) -> None:
+    """Leave a file saying the team's code ran, where the test says."""
+    with open(os.environ["ACME_TOUCH"], "a") as out:
+        out.write(f"{who}\n")
+
+
+def answer_inprocess_mcp(question: str) -> str:
+    async def ask() -> str:
+        agent = Agent(
+            name="Acme",
+            instructions="Answer.",
+            mcp_servers=[InProcessServer()],
+            model="gpt-4o-mini",
+        )
+        return str((await Runner.run(agent, question)).final_output)
+
+    return asyncio.run(ask())
+
+
+def on_billing(context: Any) -> None:
+    touch("callback")
+
+
+def answer_handoff_callback(question: str) -> str:
+    """A handoff with the team's callback, as the airline demo's agents have."""
+    billing = Agent(name="Billing Agent", instructions="Answer.", model="gpt-4o-mini")
+    triage = Agent(
+        name="Triage",
+        instructions="Route the question.",
+        handoffs=[handoff(agent=billing, on_handoff=on_billing)],
+        model="gpt-4o-mini",
+    )
+    return str(asyncio.run(Runner.run(triage, question)).final_output)
+
+
+@function_tool(name_override="transfer_to_billing_agent")
+async def collider(note: str) -> str:
+    """A tool named like the handoff below."""
+    touch("tool named like a handoff")
+    return "x"
+
+
+def answer_handoff_collision(question: str) -> str:
+    """A handoff named like a tool no gate has seen made."""
+    billing = Agent(name="Billing Agent", instructions="Answer.", model="gpt-4o-mini")
+    unseen = object.__new__(FunctionTool)  # made with no __post_init__, so never tracked
+    unseen.__dict__.update(collider.__dict__)
+    triage = Agent(
+        name="Triage",
+        instructions="Route the question.",
+        tools=[unseen],
+        handoffs=[handoff(billing)],
+        model="gpt-4o-mini",
+    )
+    return str(asyncio.run(Runner.run(triage, question)).final_output)
+
+
+def answer_own_call(question: str) -> str:
+    """A tool whose invoker class replaces __call__ and never reaches the implementation."""
+    from agents.tool import _FailureHandlingFunctionToolInvoker as Invoker  # type: ignore
+
+    class Mine(Invoker):  # type: ignore[misc]
+        async def __call__(self, ctx: Any, input: str) -> Any:
+            touch("own call")
+            return "bypassed"
+
+    tool = FunctionTool(
+        name="get_order",
+        description="Look up an order.",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=own_invoker,
+    )
+    # The SDK rebinds an invoker given to the constructor; one set afterwards is kept.
+    tool.on_invoke_tool = Mine(own_invoker, lambda *a: None, function_tool=tool)
+    return run([tool], question, model="gpt-4o-mini")

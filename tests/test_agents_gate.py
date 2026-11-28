@@ -12,7 +12,7 @@ import pytest
 import fakes
 from conftest import EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage import agents_gate, state, tool_gate
+from scrimmage import agents_gate, errors, http_gate, state, tool_gate
 from scrimmage.plan import Plan
 
 Fake = Callable[..., FakeOpenAI]
@@ -482,6 +482,180 @@ def test_an_implementation_replaced_after_the_tool_was_made_is_refused_with_the_
     assert not fake.requests
 
 
+def touched(project: Project) -> str:
+    path = project.root / "touched.log"
+    project.monkeypatch.setenv("ACME_TOUCH", str(path))
+    return str(path)
+
+
+def what_ran(path: str) -> str:
+    return Path(path).read_text() if Path(path).exists() else ""
+
+
+def inprocess(project: Project, body: str) -> str:
+    path = touched(project)
+    project.toml.write_text(
+        '[agent]\nfunction = "acme.agents_bot:answer_inprocess_mcp"\nruns = 1\nparallel = 1\n'
+        'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
+        '[[test]]\nname = "docs"\nquestion = "Find refunds"\nexpect = ["x"]\n' + body
+    )
+    return path
+
+
+@pytest.mark.design("adapter.agents_mcp_own_server")
+@pytest.mark.slow
+def test_a_tool_from_an_mcp_server_of_the_teams_own_is_refused_unless_listed(
+    project: Project, fake_openai: Fake
+) -> None:
+    ran = inprocess(project, "")
+    result = project.test(fake_openai([], responses=["agents_search"]))
+    line = tool_lines(result.records()[0])[0]
+    assert (line["call"], line["action"]) == ("tool:search", "refused")
+    assert what_ran(ran) == ""  # the server's call_tool never ran
+
+
+@pytest.mark.design("adapter.agents_mcp_own_server")
+@pytest.mark.slow
+def test_a_tool_from_an_mcp_server_of_the_teams_own_can_be_mocked(
+    project: Project, fake_openai: Fake
+) -> None:
+    ran = inprocess(project, '[[test.mock]]\ncall = "tool:search"\nreturns = "mocked docs"\n')
+    fake = fake_openai([], responses=["agents_search", "agents_answer"])
+    result = project.test(fake)
+    lines = result.records()[0]
+    assert [(x["call"], x["action"]) for x in tool_lines(lines)] == [("tool:search", "mock")]
+    assert what_ran(ran) == ""
+    assert "mocked docs" in "".join(told(fake))
+
+
+@pytest.mark.design("adapter.agents_mcp_own_server")
+@pytest.mark.slow
+def test_a_tool_from_an_mcp_server_of_the_teams_own_runs_when_listed_real(
+    project: Project, fake_openai: Fake
+) -> None:
+    ran = inprocess(project, "")
+    project.edit("runs = 1\n", 'runs = 1\nreal = ["tool:search"]\n')
+    result = project.test(fake_openai([], responses=["agents_search", "agents_answer"]))
+    assert [x["action"] for x in tool_lines(result.records()[0])] == ["real"]
+    assert what_ran(ran) == "server\n"
+
+
+def handoff_project(project: Project, real: str = "") -> str:
+    ran = touched(project)
+    bot(project, "answer_handoff_callback")
+    project.edit('expect   = ["shipped", ["Oct 30", "October 30"]]', 'expect   = ["paid"]')
+    project.edit('[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n', "")
+    project.edit(
+        '[[test.mock]]\ncall    = "tool:get_stock"             # returns an acme.models.Stock'
+        ' object\nreturns = {sku = "SKU-42", count = 12}\n',
+        "",
+    )
+    project.edit('real     = ["tool:check_inventory"]', f"real = [{real}]")
+    return ran
+
+
+@pytest.mark.design("adapter.agents_handoff_callback")
+@pytest.mark.slow
+def test_a_handoff_with_a_callback_is_refused_unless_listed_real(
+    project: Project, fake_openai: Fake
+) -> None:
+    ran = handoff_project(project)
+    result = project.test(fake_openai([], responses=["agents_handoff"]))
+    line = tool_lines(result.records()[0])[0]
+    assert (line["call"], line["action"]) == ("handoff:transfer_to_billing_agent", "refused")
+    assert 'add "handoff:transfer_to_billing_agent" to real' in str(line["error"])
+    assert what_ran(ran) == ""  # the team's callback never ran
+
+
+@pytest.mark.design("adapter.agents_handoff_callback")
+@pytest.mark.slow
+def test_a_handoff_with_a_callback_runs_it_when_listed_real(
+    project: Project, fake_openai: Fake
+) -> None:
+    ran = handoff_project(project, '"handoff:transfer_to_billing_agent"')
+    result = project.test(fake_openai([], responses=["agents_handoff", "agents_billing_answer"]))
+    assert result.code == 0, result.out + result.err
+    line = tool_lines(row(result, "baseline"))[0]
+    assert (line["call"], line["action"]) == ("handoff:transfer_to_billing_agent", "real")
+    assert what_ran(ran) == "callback\n"
+
+
+@pytest.mark.design("adapter.agents_handoff_callback")
+@pytest.mark.slow
+def test_a_mock_or_a_fault_cannot_name_a_handoff(project: Project) -> None:
+    handoff_project(project)
+    project.toml.write_text(
+        project.toml.read_text()
+        + '[[test.mock]]\ncall = "handoff:transfer_to_billing_agent"\nreturns = "x"\n'
+    )
+    result = project.test()
+    assert result.code != 0
+    assert "handoff:transfer_to_billing_agent" in result.out + result.err
+
+
+@pytest.mark.design("adapter.agents_handoff_name_collision")
+@pytest.mark.slow
+def test_a_tool_named_like_a_handoff_never_runs_in_its_place(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The SDK routes a call to the handoff first, so the tool of the same name is never run."""
+    ran = touched(project)
+    bot(project, "answer_handoff_collision")
+    project.edit('expect   = ["shipped", ["Oct 30", "October 30"]]', 'expect   = ["paid"]')
+    fake = fake_openai([], responses=["agents_handoff", "agents_billing_answer"])
+    result = project.test(fake)
+    calls = [x["call"] for x in tool_lines(result.records()[0])]
+    assert calls == ["handoff:transfer_to_billing_agent"], calls
+    assert what_ran(ran) == ""
+
+
+@pytest.mark.design("adapter.agents_handoff_name_collision")
+def test_a_handoff_name_vouches_for_one_offered_tool_and_never_a_second() -> None:
+    run, _ = fresh_run()
+    run.handoffs.add("wire")
+    run.adapted.add("tool")
+    assert http_gate.vouched_once(["wire", "tool"], run) == set()
+    assert http_gate.vouched_once(["wire", "wire"], run) == {"wire"}
+    run.adapted.add("wire")  # a tool of that name that a gate does see
+    assert http_gate.vouched_once(["wire", "wire"], run) == set()
+    assert "wire" in run.seen
+
+
+@pytest.mark.design("adapter.agents_own_call")
+@pytest.mark.slow
+def test_an_invoker_that_replaces_call_is_refused_by_the_model_gate_with_the_reason(
+    project: Project,
+) -> None:
+    ran = touched(project)
+    bot(project, "answer_own_call")
+    fake = FakeOpenAI([], responses=TURNS)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert "its invoker replaces the SDK's __call__" in result.out + result.err
+    assert not fake.requests
+    assert what_ran(ran) == ""
+
+
+@pytest.mark.design("adapter.agents_run_ending_errors")
+@pytest.mark.slow
+def test_a_fault_that_cannot_be_raised_ends_the_run_and_is_not_told_to_the_model(
+    project: Project,
+) -> None:
+    bot(project, fault=fault(extra='raises = "acme.nowhere:Missing"\n'))
+    fake = FakeOpenAI([], responses=TURNS)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    line = tool_lines(row(result, "fault 1"))[0]
+    assert str(line["error"]).startswith("ScrimmageMockError")
+    assert DEFAULT_TEXT not in told(fake)  # no text for the model: the run ended
+
+
 # The unit tests below patch stand-ins, so no library is imported.
 
 
@@ -499,43 +673,54 @@ def fresh_run() -> tuple[state.RunState, Seen]:
     return state.RunState(Plan("r", "t", "baseline", (), (), (), (), 60.0), sink, []), sink
 
 
+STAND_IN = """
+import dataclasses
+
+async def maybe_invoke_function_tool_failure_error_function(*, function_tool, context, error):
+    return "formatted"
+
+class _FailureHandlingFunctionToolInvoker:
+    def __init__(self, invoke_tool_impl, on_handled_error, *, function_tool=None):
+        self._invoke_tool_impl = invoke_tool_impl
+        self._function_tool = function_tool
+
+    async def __call__(self, ctx, input):
+        try:
+            return await self._invoke_tool_impl(ctx, input)
+        except Exception as error:
+            return await maybe_invoke_function_tool_failure_error_function(
+                function_tool=self._function_tool, context=ctx, error=error
+            )
+
+@dataclasses.dataclass
+class FunctionTool:
+    name: str
+    on_invoke_tool: object
+
+    def __post_init__(self):
+        pass
+"""
+CUTS = {
+    "invoker": ("class _FailureHandlingFunctionToolInvoker:", "class _Gone:"),
+    "call": ("return await self._invoke_tool_impl(ctx, input)", "return None"),
+    "post_init": ("def __post_init__(self):", "def __other__(self):"),
+    "field": ("    on_invoke_tool: object\n", ""),
+    "format": (
+        "async def maybe_invoke_function_tool_failure_error_function",
+        "async def other_function",
+    ),
+}
+
+
 def tool_module(**drop: bool) -> types.ModuleType:
     """What the gate expects of agents.tool, with named parts left out."""
-    import dataclasses
-
-    class Invoker:
-        def __init__(
-            self, invoke_tool_impl: Any, on_handled_error: Any, *, function_tool: Any = None
-        ):
-            del on_handled_error
-            self._invoke_tool_impl = invoke_tool_impl
-            self._function_tool = function_tool
-
-        async def __call__(self, ctx: Any, input: str) -> Any:
-            return await self._invoke_tool_impl(ctx, input)
-
-    @dataclasses.dataclass
-    class FunctionTool:
-        name: str
-        on_invoke_tool: Any
-
-        def __post_init__(self) -> None:
-            pass
-
-    if drop.get("call"):
-
-        async def call(self: Any, ctx: Any, input: str) -> Any:
-            return None
-
-        Invoker.__call__ = call  # type: ignore[method-assign]
-    if drop.get("post_init"):
-        del FunctionTool.__post_init__
-    if drop.get("field"):
-        FunctionTool = dataclasses.make_dataclass("FunctionTool", ["name"])  # type: ignore[misc]
+    source = STAND_IN
+    for name, (old, new) in CUTS.items():
+        if drop.get(name):
+            assert old in source, old
+            source = source.replace(old, new, 1)
     shim = types.ModuleType("agents.tool")
-    if not drop.get("invoker"):
-        vars(shim)["_FailureHandlingFunctionToolInvoker"] = Invoker
-    vars(shim)["FunctionTool"] = FunctionTool
+    exec(source, vars(shim))
     return shim
 
 
@@ -556,6 +741,7 @@ def handoff_module(*, field: bool = True) -> types.ModuleType:
         ({"call": True}, "_invoke_tool_impl"),
         ({"post_init": True}, "FunctionTool.__post_init__"),
         ({"field": True}, "FunctionTool.on_invoke_tool"),
+        ({"format": True}, "maybe_invoke_function_tool_failure_error_function"),
     ],
 )
 def test_a_library_without_the_tool_classes_stops_the_program_naming_the_symbol(
@@ -652,6 +838,45 @@ def test_a_callable_object_as_the_implementation_is_gated_and_awaited() -> None:
     assert [(x["call"], x["action"]) for x in sink.lines if x.get("kind") == "tool"] == [
         ("tool:later", "real")
     ]
+
+
+@pytest.mark.design("adapter.agents_run_ending_errors")
+@pytest.mark.parametrize(
+    "error",
+    [
+        errors.ScrimmageTimeLimit("the run's time is up"),
+        errors.ScrimmageStopped("the run was stopped"),
+        errors.ScrimmageMockError("the mock does not fit"),
+    ],
+)
+def test_an_error_that_ends_the_run_is_never_turned_into_text_for_the_model(
+    error: Exception,
+) -> None:
+    shim = tool_module()
+    run, _ = fresh_run()
+    agents_gate.patch_tools(shim, run, pytest.fail)
+
+    async def boom(ctx: Any, text: str) -> str:
+        raise error
+
+    tool = vars(shim)["FunctionTool"](name="t", on_invoke_tool=None)
+    invoker = vars(shim)["_FailureHandlingFunctionToolInvoker"](boom, None, function_tool=tool)
+    with pytest.raises(type(error)):
+        asyncio.run(invoker(None, "{}"))
+
+
+@pytest.mark.design("adapter.agents_run_ending_errors")
+def test_an_ordinary_error_still_goes_to_the_failure_function() -> None:
+    shim = tool_module()
+    run, _ = fresh_run()
+    agents_gate.patch_tools(shim, run, pytest.fail)
+
+    async def boom(ctx: Any, text: str) -> str:
+        raise ValueError("a failure of the tool")
+
+    tool = vars(shim)["FunctionTool"](name="t", on_invoke_tool=None)
+    invoker = vars(shim)["_FailureHandlingFunctionToolInvoker"](boom, None, function_tool=tool)
+    assert asyncio.run(invoker(None, "{}")) == "formatted"
 
 
 def test_arguments_are_parsed_from_the_models_json_and_bad_text_matches_no_args() -> None:

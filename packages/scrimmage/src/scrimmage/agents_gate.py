@@ -8,7 +8,9 @@ injected failure reaches the model as a real failure of that tool does, by the S
 text or the team's own function. The team writes no tools list. The SDK never imports the
 Agents SDK: the hook patches it when the agent imports it.
 
-A handoff runs no I/O, so it is seen and recorded and never refused or faulted.
+A handoff with no callback of the team's runs no team code, so it is seen and recorded and
+never refused. One with a callback, or an invoker that is not the SDK's, is decided like a
+tool call under the label handoff:<name>: it runs only when [agent] real lists it.
 """
 
 import dataclasses
@@ -22,7 +24,12 @@ from typing import Any
 
 from scrimmage import hooks, tool_gate
 from scrimmage.decide import Call
-from scrimmage.errors import ScrimmageRefused
+from scrimmage.errors import (
+    ScrimmageMockError,
+    ScrimmageRefused,
+    ScrimmageStopped,
+    ScrimmageTimeLimit,
+)
 from scrimmage.http_gate import params
 from scrimmage.state import ProcessState, RunState
 
@@ -31,6 +38,11 @@ TOOL_MODULE = "agents.tool"
 HANDOFF_MODULE = "agents.handoffs"
 TESTED = ((0, 20), (0, 26))  # the minor versions this release was tested with
 INVOKER = "_FailureHandlingFunctionToolInvoker"
+FORMAT = "maybe_invoke_function_tool_failure_error_function"  # the SDK's failure handler
+# What ends a run and must never be turned into text for the model, as under LangChain.
+ENDS_RUN = (ScrimmageTimeLimit, ScrimmageStopped, ScrimmageMockError)
+INNER = "__scrimmage_inner_handoff__"  # on a handoff gate: the SDK's own invoker it wraps
+SESSION_CALL = "_MCPServerWithClientSession.call_tool"  # the server call the MCP gate sees
 # The team's function, kept on the SDK's invoker implementation: a mock is typed from it.
 WRAPPED = "__agents_function_tool_wrapped_callable__"
 RAW = "__scrimmage_raw_invoker__"  # on a gate: the SDK's own implementation it wraps
@@ -59,6 +71,8 @@ def missing_in_tools(module: ModuleType) -> str | None:
         return f"{INVOKER}._invoke_tool_impl"
     if params(vars(tool).get("__post_init__")) != ["self"]:
         return "FunctionTool.__post_init__"
+    if not inspect.iscoroutinefunction(getattr(module, FORMAT, None)):
+        return FORMAT
     return None
 
 
@@ -119,6 +133,7 @@ def patch_tools(
         return
     made = invoker.__init__
     created = tool_class.__post_init__
+    formatter = getattr(module, FORMAT)
     # By id: a dataclass with eq has no hash, so a WeakSet cannot hold one.
     tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
 
@@ -140,7 +155,10 @@ def patch_tools(
         """Record whether a call to this tool reaches the gate. Says why not, if it does not."""
         reason = skips_gate(tool, invoker)
         if reason is None:
-            process.adapted.add(tool.name)  # offered to the model, it will reach the gate
+            # A tool the MCP gate decides is named by it, from a real tools/list reply: a
+            # server of the team's own never goes through that gate, so this one decides it.
+            if not handed_to_mcp(tool):
+                process.adapted.add(tool.name)  # offered to the model, it will reach the gate
         else:
             process.blocked[tool.name] = reason
         return reason
@@ -151,7 +169,14 @@ def patch_tools(
         for tool in live:
             vet(tool)
 
+    async def failure_text(**kwargs: Any) -> Any:
+        error = kwargs.get("error")
+        if isinstance(error, ENDS_RUN):
+            raise error  # not for the model to read: the run is over
+        return await formatter(**kwargs)
+
     process.rechecks.append(recheck)
+    module.__dict__[FORMAT] = functools.wraps(formatter)(failure_text)
     setattr(invoker, RAW, True)
     invoker.__init__ = gated_init
     tool_class.__post_init__ = tracked_post_init
@@ -165,6 +190,8 @@ def skips_gate(tool: Any, invoker: type) -> str | None:
             f"{tool.name} cannot be gated, because its on_invoke_tool is the team's own "
             "function and not the Agents SDK's"
         )
+    if type(own).__call__ is not invoker.__call__:
+        return f"{tool.name} cannot be gated, because its invoker replaces the SDK's __call__"
     if not tool_gate.is_gate(getattr(own, "_invoke_tool_impl", None)):
         return f"{tool.name} cannot be gated, because its _invoke_tool_impl was replaced"
     return None
@@ -188,6 +215,37 @@ def from_mcp(tool: Any) -> bool:
     return str(getattr(getattr(origin, "type", None), "value", "")) == MCP
 
 
+def mcp_server(tool: Any) -> object | None:
+    """The MCP server an MCP-derived tool calls: the SDK's implementation closes over it."""
+    impl = getattr(getattr(tool, "on_invoke_tool", None), "_invoke_tool_impl", None)
+    raw = getattr(impl, RAW, impl)
+    names = getattr(getattr(raw, "__code__", None), "co_freevars", ())
+    cells = getattr(raw, "__closure__", None) or ()
+    for name, cell in zip(names, cells, strict=False):
+        if name == "server":
+            try:
+                return cell.cell_contents
+            except ValueError:
+                return None
+    return None
+
+
+def session_backed(server: object) -> bool:
+    """Whether the server's calls go through an mcp.ClientSession, where the MCP gate sits:
+    its call_tool is the SDK's own, defined on _MCPServerWithClientSession and not replaced."""
+    call = getattr(type(server), "call_tool", None)
+    return getattr(call, "__qualname__", "") == SESSION_CALL
+
+
+def handed_to_mcp(tool: Any) -> bool:
+    """A tool whose call the MCP gate decides. Any doubt, such as no server found or a server
+    of the team's own, leaves the call to this gate, which is the safe side."""
+    if not from_mcp(tool):
+        return False
+    server = mcp_server(tool)
+    return server is not None and session_backed(server)
+
+
 def awaiting(impl: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(impl)
     async def awaited(*args: Any, **kwargs: Any) -> Any:
@@ -209,7 +267,7 @@ def gate_impl(impl: Callable[..., Any], own: Callable[[], Any]) -> Callable[...,
     def describe(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tool_gate.Gated | None:
         context, text = args[0], args[1]
         tool = own()
-        if tool is not None and from_mcp(tool):
+        if tool is not None and handed_to_mcp(tool):
             return None  # the MCP gate sees the call of the server's tool, which is this one
         name = tool.name if tool is not None else getattr(context, "tool_name", None)
         if not isinstance(name, str) or not name:
@@ -236,20 +294,48 @@ def patch_handoffs(
     @functools.wraps(made)
     def seen_init(self: Any, *args: Any, **kwargs: Any) -> None:
         made(self, *args, **kwargs)
-        # A handoff is a function tool to the model: its name is one a gate sees.
-        process.adapted.add(self.tool_name)
+        # A handoff is a function tool to the model: its name is one a gate sees, kept apart
+        # from the tools, so it never vouches for a tool of the same name.
+        process.handoffs.add(self.tool_name)
         self.on_invoke_handoff = recorded(self.on_invoke_handoff, process, self)
 
     setattr(seen_init, RAW, True)
     handoff.__init__ = seen_init
 
 
+def runs_team_code(invoke: Callable[..., Any]) -> bool:
+    """Whether a handoff's invoker could run code of the team's. The SDK's own, made by
+    handoff() with no on_handoff callback, runs none; any other shape is taken to."""
+    if not isinstance(invoke, functools.partial) or len(invoke.args) != 1:
+        return True
+    redacting, impl = invoke.func, invoke.args[0]
+    if getattr(redacting, "__name__", "") != "_invoke_handoff_with_redaction":
+        return True
+    if getattr(impl, "__name__", "") != "_invoke_handoff_impl":
+        return True
+    names = getattr(getattr(impl, "__code__", None), "co_freevars", ())
+    cells = getattr(impl, "__closure__", None) or ()
+    for name, cell in zip(names, cells, strict=False):
+        if name == "on_handoff":
+            try:
+                return cell.cell_contents is not None
+            except ValueError:
+                return True
+    return True
+
+
+CALLBACK = (
+    "; a handoff with a callback runs the team's code, so it cannot be mocked: list it "
+    "under [agent] real if the callback is safe"
+)
+
+
 def recorded(invoke: Callable[..., Any], process: ProcessState, handoff: Any) -> Callable[..., Any]:
-    """The handoff's own invoker, leaving a line for each switch. It decides nothing: a
-    handoff runs no code of the team's that touches the world, and a refusal would break
-    every agent that has one."""
-    if getattr(invoke, RAW, False):
-        return invoke
+    """The handoff's invoker, leaving a line for each switch. A plain handoff is not decided,
+    and a refusal would break every agent that has one. One that runs the team's code is
+    decided like a tool call, as handoff:<name>, and runs only when [agent] real lists it."""
+    invoke = getattr(invoke, INNER, invoke)  # a clone of a handoff is made again from the first
+    team = runs_team_code(invoke)
 
     @functools.wraps(invoke)
     async def switch(*args: Any, **kwargs: Any) -> Any:
@@ -257,7 +343,13 @@ def recorded(invoke: Callable[..., Any], process: ProcessState, handoff: Any) ->
         if run is None:  # code outside any run, or a plain request to a service
             return await invoke(*args, **kwargs)
         name = handoff.tool_name
-        step = run.passed(Call("tool", f"handoff:{name}", name))
+        call = Call("tool", f"handoff:{name}", name)
+        if team:
+            step = run.decide(run.with_args(call, {}), {})
+            if step.decision.action != "real":
+                run.fail(step, run.refusal(step, CALLBACK))
+        else:
+            step = run.passed(call)
         try:
             result = await invoke(*args, **kwargs)
         except BaseException as exc:
@@ -267,4 +359,5 @@ def recorded(invoke: Callable[..., Any], process: ProcessState, handoff: Any) ->
         return result
 
     setattr(switch, RAW, True)
+    setattr(switch, INNER, invoke)
     return switch

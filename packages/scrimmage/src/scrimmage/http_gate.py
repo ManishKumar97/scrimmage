@@ -10,6 +10,7 @@ imports either library: the hook patches one when the agent imports it.
 """
 
 import atexit
+import collections
 import contextlib
 import dataclasses
 import datetime
@@ -585,6 +586,12 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
     )
 
 
+def vouched_once(offered: list[str], run: RunState) -> set[str]:
+    """Names offered twice that only a handoff vouches for: it covers one tool, not two."""
+    twice = {n for n, c in collections.Counter(offered).items() if c > 1}
+    return (twice & run.handoffs) - run.listed - run.adapted
+
+
 def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = provider_for(run, step).offered(path, fields)
@@ -619,6 +626,8 @@ def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str
     run.recheck_tools()
     seen = run.seen
     unseen = sorted(name for name in set(tools.agent) if name not in seen)
+    # A handoff vouches for one tool of its name only: another of the same name is unseen.
+    unseen = sorted({*unseen, *vouched_once(tools.agent, run)})
     if unseen:
         why = "; ".join(run.blocked[name] for name in unseen if name in run.blocked)
         fix = (
