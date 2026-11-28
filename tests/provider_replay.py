@@ -1845,6 +1845,13 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     add("unlisted host", [(MESSAGES, message())], ["real_answer"], listed=False)
     add("unlisted host probing", [(MESSAGES, message())], ["real_answer"], listed=False, probe=True)
     add(
+        "probe with tools",
+        [(MESSAGES, message(tools=[ORDER]))],
+        ["real_answer"],
+        listed=False,
+        probe=True,
+    )
+    add(
         "model path run for real",
         [(MESSAGES, message())],
         ["real_answer"],

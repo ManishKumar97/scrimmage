@@ -11102,6 +11102,20 @@
   "settles": [],
   "stops": []
 },
+"anthropic probe with tools": {
+  "blobs": ["0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"],
+  "lines": [
+    {"library": "scrimmage", "message": "the probe stopped at POST /v1/messages", "model_request": {"method": "POST", "path": "/v1/messages", "provider": "anthropic"}, "notice": "probe", "passed": 0, "proc": {}, "row": "row", "run": "run-1", "seq": 1, "stopped_at": "model:anthropic POST /v1/messages", "test": "t", "tools": [{"adapter": false, "name": "get_order", "paths": []}], "v": 1},
+    {"action": "refused", "args": {"bytes": 182, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"tools\": [{\"name\": \"get_order\", \"input_schema\": {\"type\": \"object\", \"properties\": {}}}]}", "sha256": "0059d5a3db2b7dcdce28fa471d9292d21050393aaec27291b87fbd09a2034311"}, "call": "model:anthropic", "error": "ScrimmageRefused: model:anthropic POST /v1/messages: scrimmage init --probe stops at the first model request that offers tools, which is refused before it is sent", "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "reason": "probe", "result": null, "retry": 0, "row": "row", "run": "run-1", "seq": 2, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"raised": "ScrimmageRefused", "text": "model:anthropic POST /v1/messages: scrimmage init --probe stops at the first model request that offers tools, which is refused before it is sent"}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
 "anthropic model path run for real": {
   "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "d39a602a23f509a48d3de9a8cf1aca12af6d5d34b9511fe9b709bd6217ea1431"],
   "lines": [
