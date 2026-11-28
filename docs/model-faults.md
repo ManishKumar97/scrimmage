@@ -77,6 +77,8 @@ Neither works on a call that only reads, such as `model:openai/moderations`, who
 
 ## An agent that uses the anthropic library
 
+Example: [An agent written with the anthropic library](examples/anthropic-agent.md) runs on this page's `status 529` row.
+
 An agent written with the `anthropic` library runs under `scrimmage test` the same way.
 Its host, `api.anthropic.com`, is a model host already.
 Behind a gateway, name the gateway under `model_hosts` with `provider = "anthropic"`.
@@ -593,6 +595,8 @@ Give calls with no name a price, as the key `""` under `[agent.prices]`, or set 
 Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
 
 ## Use a gateway
+
+Example: [An agent behind a model gateway](examples/gateway.md) names the host and fails a gateway alias.
 
 If your model calls go through a gateway, such as a LiteLLM proxy, name its host and the format it speaks:
 

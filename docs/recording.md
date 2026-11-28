@@ -208,3 +208,5 @@ When the file writes a test's mocks as an inline array or has a `[[test]]` line 
 A diff of more than 1,000 added lines warns that it is too long to review at once: record in batches with `--test`, and rename each batch's file before the next, as the next record replaces `scrimmage.recorded.toml`.
 A file of that name is replaced only if record wrote it, as its header says, and never by a result with no mocks; any other file is left alone, with exit 2.
 A call listed as `instead` in the JSON needs nothing from you: the text prints it on an `instead:` line.
+
+Example: [Recording what your service answers](examples/recording.md) records a real call and replays it without the service.

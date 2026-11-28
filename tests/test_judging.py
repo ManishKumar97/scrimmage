@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -169,6 +170,121 @@ def test_every_broken_rule_is_named() -> None:
 )
 def test_case_spaces_and_unicode_forms_do_not_decide_a_match(answer: str, rule: str) -> None:
     assert broken_texts(answer, Rules(((rule,),), (), 1.0)) == []
+
+
+# The Default_Ignorable_Code_Point ranges, as Unicode 15.1.0 lists them. Each one is checked
+# at both ends, so a range cut short is seen.
+IGNORABLE_CASES = [
+    "\u00ad", "\u034f", "\u061c", "\u115f", "\u1160", "\u17b4", "\u17b5", "\u180b",
+    "\u180f", "\u200b", "\u200f", "\u202a", "\u202e", "\u2060", "\u2065", "\u206f",
+    "\u3164", "\ufe00", "\ufe0d", "\ufe0f", "\ufeff", "\uffa0", "\ufff0", "\ufff8",
+    "\U0001bca0", "\U0001bca3", "\U0001d173", "\U0001d17a", "\U000e0000", "\U000e0080",
+    "\U000e0100", "\U000e01ef", "\U000e0fff",
+]  # fmt: skip
+HIDDEN_NOT_IGNORABLE = ["\x00", "\x07", "\x1b", "\x7f", "\x9b"]
+SPLIT_WHITESPACE = ["\t", "\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x1f", "\x85"]
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("hidden", [*HIDDEN_NOT_IGNORABLE, *IGNORABLE_CASES])
+def test_a_character_that_is_not_drawn_inside_a_word_hides_nothing(hidden: str) -> None:
+    assert normal(f"sec{hidden}ret") == "secret"
+    assert broken_texts(f"the sec{hidden}ret", Rules((), ("secret",), 1.0)) == [
+        'forbid "secret" found'
+    ]
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("space", SPLIT_WHITESPACE)
+def test_a_control_that_split_reads_as_a_space_is_still_a_space(space: str) -> None:
+    assert normal(f"Oct{space}30") == "oct 30"
+    assert broken_texts(f"Oct{space}30", Rules((("Oct 30",),), (), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize("hidden", ["\x07", "\u200b", "\ufe00"])
+def test_forbid_finds_a_word_split_by_a_hidden_character_whether_it_is_dropped_or_a_space(
+    hidden: str,
+) -> None:
+    rules = Rules((), ("ship soon",), 1.0)
+    assert broken_texts(f"ship{hidden}soon", rules) == ['forbid "ship soon" found']
+    assert broken_texts(f"we will ship{hidden} soon", rules) == ['forbid "ship soon" found']
+    assert broken_texts("shipsoon", Rules((), ("ship soon",), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+def test_forbid_finds_ship_soon_split_by_a_space_like_control() -> None:
+    assert broken_texts("ship\x1fsoon", Rules((), ("ship soon",), 1.0)) == [
+        'forbid "ship soon" found'
+    ]
+
+
+@pytest.mark.design("judge.control_char")
+def test_expect_reads_a_hidden_character_as_dropped_only() -> None:
+    assert broken_texts("Oct\x1c30", Rules((("Oct 30",),), (), 1.0)) == []
+    assert broken_texts("Oct\x0730", Rules((("Oct 30",),), (), 1.0)) == [
+        'expect "Oct 30" not found'
+    ]
+    assert broken_texts("Oct\x0730", Rules((("Oct30",),), (), 1.0)) == []
+
+
+@pytest.mark.design("judge.control_char")
+def test_a_forbid_text_rules_out_an_expect_text_as_expect_reads_it_dropped() -> None:
+    assert judge.impossible(Rules((("ship\x07soon",),), ("ship soon",), 1.0)) is None
+    assert judge.impossible(Rules((("ship\x07soon",),), ("shipsoon",), 1.0)) is not None
+    assert judge.impossible(Rules((("ship soon",),), ("shipsoon",), 1.0)) is None
+
+
+@pytest.mark.design("judge.control_char")
+def test_the_ignorable_table_is_the_unicode_one() -> None:
+    """Python has no Default_Ignorable property, so check what it can.
+
+    Every such character is a format character, a mark, a letter or unassigned.
+    """
+    for code in judge.IGNORABLE:
+        assert unicodedata.category(chr(code)) in {"Cf", "Mn", "Lo", "Cn"}, hex(code)
+    assert len(judge.IGNORABLE) == 4174
+
+
+@pytest.mark.design("judge.control_char")
+def test_no_format_or_control_character_of_this_python_is_outside_the_pinned_table() -> None:
+    """Pinned to Unicode 16.0. A character this Python adds beyond it fails here.
+
+    A Python older than the pinned version lacks some characters, which is no failure.
+    """
+    every = {c for c in range(0x110000) if unicodedata.category(chr(c)) in {"Cf", "Cc"}}
+    outside = every - judge.not_drawn() - set(map(ord, judge.SPLIT_SPACE))
+    assert not outside, (
+        f"unicodedata {unicodedata.unidata_version} has format or control characters "
+        f"{sorted(map(hex, outside))} that FORMAT_AND_CONTROL_RANGES lacks. Update the table "
+        "from the new Unicode version only if it is newer than the one pinned in judge.py."
+    )
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.parametrize(
+    "hidden", ["\ufff9", "\U00013430", "\U0001343f", "\u0600", "\u06dd", "\U000110bd"]
+)
+def test_a_format_character_that_is_not_default_ignorable_is_still_dropped(hidden: str) -> None:
+    assert broken_texts(f"sec{hidden}ret", Rules((), ("secret",), 1.0)) == ['forbid "secret" found']
+
+
+@pytest.mark.design("judge.control_char")
+def test_the_answer_is_normalised_once_not_once_for_each_forbid_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    real = judge.normal
+
+    def counted(text: str, spaced: bool = False) -> str:
+        calls.append(text)
+        return real(text, spaced)
+
+    monkeypatch.setattr(judge, "normal", counted)
+    answer = "Order 1234 shipped on Oct 30."
+    words = tuple(f"never said {i}" for i in range(40))
+    assert broken_texts(answer, Rules((("shipped",),), words, 1.0)) == []
+    assert calls.count(answer) == 2
 
 
 def test_normal_touches_nothing_else() -> None:
@@ -1239,3 +1355,28 @@ def test_a_fault_row_beside_a_failing_baseline_shows_baseline_failed(
     out = Capture()
     assert report(cfg, results, tmp_path, out) == 0  # type: ignore[arg-type]
     assert "baseline failed" not in out.text
+
+
+@pytest.mark.design("judge.control_char")
+@pytest.mark.slow
+def test_a_control_character_inside_a_forbidden_word_does_not_hide_it(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The model writes "sec\x07ret", as hostile tool output can tell it to."""
+    project.edit(
+        'expect   = ["shipped", ["Oct 30", "October 30"]]',
+        'expect   = ["shipped"]\nforbid   = ["secret"]',
+    )
+    project.toml.write_text(project.toml.read_text().split("[[test.fault]]")[0])
+    result = project.test(fake_openai(["acme_get_order", "acme_get_stock", "acme_bell"]))
+    assert result.code == 1, result.out
+    texts = [b["text"] for s in result.summaries() for b in s["broken_rules"]]  # type: ignore[attr-defined]
+    assert texts == ['forbid "secret" found'] * 3
+
+
+@pytest.mark.design("judge.control_char")
+def test_a_format_character_new_in_unicode_15_hides_nothing_on_any_python() -> None:
+    """U+1343F is unassigned in Unicode 14.0, which Python 3.11 has."""
+    assert broken_texts("sec\U0001343fret", Rules((), ("secret",), 1.0)) == [
+        'forbid "secret" found'
+    ]

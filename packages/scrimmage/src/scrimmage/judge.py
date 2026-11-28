@@ -9,6 +9,7 @@ import math
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 
 from scrimmage.redact import redact
 
@@ -23,9 +24,59 @@ NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
-FORMAT = "Cf"  # the Unicode category of characters that do not show
+# The controls Python's str.split() treats as a space, which they stay.
+SPLIT_SPACE = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f\x85"
+# Default_Ignorable_Code_Point, from DerivedCoreProperties.txt of Unicode 15.1.0. Such a
+# character is not drawn, so it can sit inside a word without a reader seeing it.
+IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+# The format (Cf) and control (Cc) characters, as Unicode 16.0 lists them, the same as 15.0 and
+# 15.1. They are pinned here, not read from unicodedata, so that one answer is judged the same
+# on every Python: unicodedata is Unicode 14.0 on Python 3.11 and newer on later ones.
+FORMAT_AND_CONTROL_RANGES = (
+    (0x0000, 0x001F),
+    (0x007F, 0x009F),
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+)
+IGNORABLE = frozenset(code for low, high in IGNORABLE_RANGES for code in range(low, high + 1))
 COMBINING_DOT = "\u0307"
-BLANK = dict.fromkeys(map(ord, "\u034f\ufe0e\ufe0f\u1160"))  # blank, yet not of that category
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
 ENDED_BADLY = ("crashed", "timed out")
@@ -79,15 +130,35 @@ class RowResult:
     floor: int  # the judged runs this row needs for any verdict
 
 
-def normal(text: str) -> str:
+@cache
+def not_drawn() -> frozenset[int]:
+    """The code points a reader does not see, bar the ones str.split reads as a space.
+
+    Unicode lists some as default ignorable, and the rest are format or control characters.
+    """
+    found = IGNORABLE | {
+        code for low, high in FORMAT_AND_CONTROL_RANGES for code in range(low, high + 1)
+    }
+    return frozenset(found - set(map(ord, SPLIT_SPACE)))
+
+
+@cache
+def gaps(spaced: bool) -> dict[int, str]:
+    """What each character that is not drawn becomes, as a table for str.translate."""
+    table = dict.fromkeys(not_drawn(), " " if spaced else "")
+    return table | dict.fromkeys(map(ord, SPLIT_SPACE), " ")
+
+
+def normal(text: str, spaced: bool = False) -> str:
     """Text as it is compared: one form for each character, no case, single spaces.
 
-    Format characters such as a zero-width space leave no mark, so they cannot hide a word.
+    A character that is not drawn, an ignorable one such as a zero-width space or a control
+    such as a bell, is dropped, so it cannot hide a word. Spaced, it is a space instead,
+    which is the other way a reader may take it. A tab or a line break is a space either way.
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
-    plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    shown = "".join(char for char in plain.translate(BLANK) if unicodedata.category(char) != FORMAT)
-    return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
+    plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS).translate(gaps(spaced))
+    return " ".join(plain.casefold().replace(COMBINING_DOT, "").split())
 
 
 def quoted(item: tuple[str, ...]) -> str:
@@ -99,6 +170,7 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     text = normal(answer)
     if not text:
         return (Broken("empty", EMPTY),)
+    spaced = normal(answer, spaced=True)  # once for the answer, not once for each word
     # A team may forbid a secret by its value, so a rule can hold what a record must not.
     expect = [
         Broken("expect", redact(f"expect {quoted(item)} not found"))
@@ -108,7 +180,7 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     forbid = [
         Broken("forbid", redact(f'forbid "{word}" found'))
         for word in rules.forbid
-        if normal(word) in text
+        if normal(word) in text or normal(word) in spaced
     ]
     return (*expect, *forbid)
 

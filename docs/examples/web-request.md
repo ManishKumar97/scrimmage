@@ -8,7 +8,7 @@ Scrimmage gates requests sent with httpx, a common Python HTTP client, and httpx
 The `openai` library uses httpx too.
 
 Libraries this example needs: `openai` and `httpx`.
-This page was checked with openai 3.46 and httpx 0.28.
+This page was checked with openai 3.46 and httpx 0.28 and 0.29.
 
 ## The files
 
