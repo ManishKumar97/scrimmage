@@ -10,6 +10,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import math
 import re
 import secrets
 import socket as socket_module
@@ -258,6 +259,13 @@ class ControlServer:
             return 400, {"error": "bad_request"}
         if not usd >= 0:  # NaN too
             return 400, {"error": "bad_request"}
+        settles = self._settles(request)
+        if settles is None:
+            return 400, {"error": "bad_request"}
+        # The run's finished calls first: money spent is spent, so they count even if the run
+        # has closed, and the reservation below is checked against what they really cost.
+        for reservation, spent in settles:
+            self.ledger.settle(reservation, spent)
         # Answered at once, never held: a waiter asks again, and one that has gone stops
         # asking. Under the run lock, so a run that has closed is granted nothing.
         with self.lock:
@@ -268,6 +276,31 @@ class ControlServer:
         if isinstance(reservation, Shortfall):
             return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
+
+    @staticmethod
+    def _settles(request: dict[str, object]) -> list[tuple[int, float]] | None:
+        """The settles a reserve carries, or None if one is not valid, so none is applied. A
+        settle is not valid if its cost is not a finite number of at least 0. One whose hold
+        is gone is valid: it was settled already, and the ledger ignores it."""
+        carried = request.get("settles")
+        if carried is None:
+            return []
+        if not isinstance(carried, list):
+            return None
+        settles: list[tuple[int, float]] = []
+        try:
+            for item in cast(list[object], carried):
+                line = obj(item)
+                spent = number(line, "usd")
+                if not (math.isfinite(spent) and spent >= 0):
+                    return None
+                # No check that the hold belongs to this run: reservation numbers are unique
+                # and only a holder of the token calls this, who could as well send the same
+                # settle to /v1/budget/settle, which does not check either.
+                settles.append((int(str(line["reservation"])), spent))
+        except (ValueError, KeyError):
+            return None
+        return settles
 
     def _release(self, body: bytes) -> tuple[int, dict[str, object]]:
         try:
@@ -284,7 +317,7 @@ class ControlServer:
             reservation = int(str(request["reservation"]))
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
-        if usd < 0:
+        if not (math.isfinite(usd) and usd >= 0):
             return 400, {"error": "bad_request"}
         # Money spent is spent: a settle is kept even if its run has just closed.
         self.ledger.settle(reservation, usd)
