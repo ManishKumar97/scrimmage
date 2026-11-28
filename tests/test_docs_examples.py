@@ -8,21 +8,28 @@ The model is the fake OpenAI server, scripted per page below, so no key is neede
 """
 
 import contextlib
+import difflib
 import json
 import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from conftest import ACME, EXAMPLE, doc_pages
+from fakes.anthropic_server import FakeAnthropic
 from fakes.openai_server import FakeOpenAI, Guard, Reply, Rule, text_of, tool_failed
+from ports import free_port
 from scrimmage.cli import main
 from scrimmage.managed import Managed
 from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
@@ -32,7 +39,7 @@ DOCS = Path(__file__).parents[1] / "docs"
 OUTPUT = "Output"
 FENCE = re.compile(r'^```(\w+)(?: title="([^"]+)")?\n(.*?)^```\n', re.M | re.S)
 # The fake model server listens on 127.0.0.1, which a team would name as its gateway.
-FAKE_HOST = 'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
+FAKE_HOST = 'model_hosts = [{{host = "127.0.0.1", provider = "{provider}"}}]\n'
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,9 @@ class Example:
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
     logs: dict[int, str] | None = None  # an Output's number -> text one of its run logs holds
+    provider: str = "openai"  # the API the agent speaks, so the fake server that answers it
+    own_host: bool = False  # the page names its model host itself, so the test adds no line
+    port: int = 0  # the port the page's address names, which a run copy moves to a free one
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,13 @@ EXAMPLES = {
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
+    # The same bot over the anthropic library, on the fake Anthropic server.
+    "examples/anthropic-agent.md": Example(
+        ["made_order_tool_use", "made_order_answer|made_order_admits"],
+        [OK],
+        base="examples/function-agent.md",
+        provider="anthropic",
+    ),
 }
 
 
@@ -155,10 +172,22 @@ def apply(root: Path, block: Block) -> None:
     path.write_text(text.replace(old, new))
 
 
-def with_fake_host(toml: Path) -> None:
+def with_fake_host(toml: Path, provider: str | None = "openai") -> None:
+    if provider is None:  # the page's own line does this work
+        return
     text = toml.read_text()
     if not re.search(r"^model_hosts", text, re.M):  # a commented line names nothing
-        toml.write_text(text.replace("[agent]\n", "[agent]\n" + FAKE_HOST, 1))
+        host = FAKE_HOST.format(provider=provider)
+        toml.write_text(text.replace("[agent]\n", "[agent]\n" + host, 1))
+
+
+def retarget(root: Path, page_port: int, port: int) -> None:
+    """Move the port a page's address names to a free one, in the run copy only, so two test
+    processes never ask for the same fixed port. The page itself keeps the familiar number."""
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+        if f"localhost:{page_port}" in text:
+            path.write_text(text.replace(f"localhost:{page_port}", f"localhost:{port}"))
 
 
 def check_page(
@@ -168,7 +197,9 @@ def check_page(
     fake_openai: Callable[..., FakeOpenAI],
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    fake_anthropic: Callable[..., FakeAnthropic] | None = None,
+) -> int:
+    """Run the page's blocks. Returns the port its fake model listens on."""
     root = tmp_path / "project"
     if example.start:
         shutil.copytree(example.start, root, ignore=shutil.ignore_patterns("__pycache__"))
@@ -176,21 +207,39 @@ def check_page(
     for block in blocks(example.base) if example.base else []:
         if block.title != OUTPUT:
             apply(root, block)
-    fake = fake_openai(example.replies, by_model=example.by_model)
-    monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    moved = 0
+    if example.provider == "anthropic":
+        assert fake_anthropic is not None, "an Anthropic page needs the fake Anthropic server"
+        claude = fake_anthropic(example.replies)
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", claude.base_url)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    else:
+        moved = free_port() if example.port else 0
+        fake = fake_openai(example.replies, by_model=example.by_model, port=moved)
+        monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
     # A page runs `python`: the venv's, whatever else PATH holds.
     monkeypatch.setenv(
         "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    run_blocks(name, root, codes, capsys, example.logs or {})
+    ports = (example.port, moved) if example.port else None
+    run_blocks(
+        name,
+        root,
+        codes,
+        capsys,
+        example.logs or {},
+        None if example.own_host else example.provider,
+        ports,
+    )
     assert codes == example.codes
     for rule in (example.by_model or {}).values():
         assert not isinstance(rule, ByTools) or not rule.unused, (
             f"script entries never asked for: {rule.unused}"
         )
+    return moved
 
 
 def run_blocks(
@@ -199,6 +248,8 @@ def run_blocks(
     codes: list[int],
     capsys: pytest.CaptureFixture[str],
     logs: dict[int, str],
+    provider: str | None = "openai",
+    ports: tuple[int, int] | None = None,
 ) -> None:
     """Each block of the page in order: a file is written, an Output is the command run.
 
@@ -216,7 +267,9 @@ def run_blocks(
         if block.title != OUTPUT:
             apply(root, block)
             continue
-        with_fake_host(root / "scrimmage.toml")
+        with_fake_host(root / "scrimmage.toml", provider)
+        if ports:
+            retarget(root, *ports)
         capsys.readouterr()
         codes.append(main(command))
         out = capsys.readouterr().out
@@ -236,10 +289,11 @@ def test_the_page_runs_and_prints_what_it_shows(
     name: str,
     tmp_path: Path,
     fake_openai: Callable[..., FakeOpenAI],
+    fake_anthropic: Callable[..., FakeAnthropic],
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch)
+    check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch, fake_anthropic)
 
 
 # The service page: Scrimmage starts the service with [agent] start, so the page has no line
@@ -361,13 +415,284 @@ def test_the_guardrails_page_runs_and_prints_its_table(
     check_page(GUARDRAILS, GUARDRAILS_RUN, tmp_path, fake_openai, capsys, monkeypatch)
 
 
+# The gateway page names its own model host, so the test adds no line. The fake listens where
+# the page's address says, port 4000, which the run copy moves to a free port. The test runs the
+# page, and then runs it again with the `model_hosts` line cut out, which must not give the same
+# result.
+GATEWAY = "examples/gateway.md"
+GATEWAY_RUN = Example(
+    ["gateway_get_order", "gateway_answer"],
+    [OK],
+    base="examples/function-agent.md",
+    own_host=True,
+    port=4000,
+)
+HOST_LINE = re.compile(r"^model_hosts.*\n", re.M)
+
+
+@pytest.mark.slow
+def test_the_gateway_page_runs_on_its_own_model_hosts_line(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    moved = check_page(GATEWAY, GATEWAY_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+    page = (DOCS / GATEWAY).read_text()
+    assert len(HOST_LINE.findall(re.search(r"```toml.*?```", page, re.S).group(0))) == 1  # type: ignore[union-attr]
+    # The same page without that line: its calls are no model calls to Scrimmage.
+    root = tmp_path / "without"
+    root.mkdir()
+    for block in blocks(GATEWAY_RUN.base or ""):
+        if block.title != OUTPUT:
+            apply(root, block)
+    for block in blocks(GATEWAY):
+        if block.title != OUTPUT:
+            apply(root, block)
+    toml = root / "scrimmage.toml"
+    toml.write_text(HOST_LINE.sub("", toml.read_text()))
+    retarget(root, GATEWAY_RUN.port, moved)
+    monkeypatch.chdir(root)
+    capsys.readouterr()
+    code = main(["test"])
+    out = capsys.readouterr().out
+    shown = next(b.body for b in blocks(GATEWAY) if b.title == OUTPUT)
+    assert code == MISTAKE and normal(out) != normal(shown), out
+    refusal = next(b for lang, title, b in FENCE.findall(page) if lang == "text" and not title)
+    assert normal(refusal)[0] in normal(out), "the refusal the page quotes is not what ran"
+
+
+# The CI page: each Output is a `run:` step of the page's own workflow file, run in a shell in the
+# project as the runner would. `uv run X` runs as X in this environment, and `uv sync` is the
+# step left out, as it installs an environment this test cannot stand in for.
+CI = "examples/ci.md"
+CI_CODES = [OK, OK, ROW_FAILED]
+SECRET = re.compile(r"\$\{\{ secrets\.\w+ \}\}")
+WORKFLOW = Path(".github") / "workflows" / "scrimmage.yml"
+
+
+def workflow_steps(root: Path) -> dict[str, dict[str, Any]]:
+    workflow = yaml.safe_load((root / WORKFLOW).read_text())
+    (job,) = workflow["jobs"].values()
+    return {step["run"]: step for step in job["steps"] if "run" in step}
+
+
+def run_step(root: Path, step: dict[str, Any], base_url: str) -> subprocess.CompletedProcess[str]:
+    """One `run:` step, with the step's own env and the job's secret, and no key but that."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("SCRIMMAGE_", "OPENAI_", "ANTHROPIC_"))
+    }
+    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
+    env["OPENAI_BASE_URL"] = base_url  # the stand-in for the model, where a job has the real one
+    for key, value in step.get("env", {}).items():
+        env[key] = SECRET.sub("test-key", str(value))
+    line = step["run"]
+    assert line.startswith("uv run "), line
+    return subprocess.run(
+        line.removeprefix("uv run "),
+        shell=True,
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+@pytest.mark.slow
+def test_the_ci_page_runs_its_workflow_steps_and_a_failed_row_fails_the_job(
+    tmp_path: Path, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    fake = fake_openai(ONE_TOOL)
+    root = tmp_path / "project"
+    root.mkdir()
+    for block in blocks("examples/function-agent.md"):
+        if block.title != OUTPUT:
+            apply(root, block)
+    command, ran, codes = "", set[str](), list[int]()
+    for lang, title, body in FENCE.findall((DOCS / CI).read_text()):
+        if lang == "bash":
+            command = body.strip()
+            continue
+        if not title:
+            continue
+        if title != OUTPUT:
+            apply(root, Block(lang, title, body))
+            continue
+        with_fake_host(root / "scrimmage.toml")
+        done = run_step(root, workflow_steps(root)[command], fake.base_url)
+        assert normal(done.stdout) == normal(body), f"{command}:\n{done.stdout}{done.stderr}"
+        ran.add(command)
+        codes.append(done.returncode)
+    assert codes == CI_CODES
+    # Every step that runs a command ran, but the one that installs the environment.
+    assert set(workflow_steps(root)) - ran == {"uv sync"}
+
+
+# The recording page: `scrimmage record` runs the baseline with a tool under `real`, and the
+# request inside the tool goes to a stand-in for the orders service on the port the page names.
+# The recorded file the page shows must be the one the run wrote, and the service is stopped
+# before the replay, so the replay can only pass on the mock.
+RECORDING = "examples/recording.md"
+RECORDED = "scrimmage.recorded.toml"
+ORDERS_PORT = 8765
+ORDER = b'{"status": "shipped", "date": "Oct 30"}'
+
+
+def masked(text: str) -> list[str]:
+    """Text without the model host line the test adds, and with the date and run id masked."""
+    text = text.replace(FAKE_HOST.format(provider="openai"), "")
+    return normal(re.sub(r"\d{4}-\d\d-\d\d", "<date>", text))
+
+
+def unified(old: str, new: str) -> str:
+    """The diff `scrimmage record` prints, worked out here from the two files, header lines and
+    hunk headers included."""
+    lines = difflib.unified_diff(
+        old.splitlines(), new.splitlines(), "scrimmage.toml", RECORDED, lineterm=""
+    )
+    return "\n".join(lines)
+
+
+def split_diff(out: str) -> tuple[str, str]:
+    """What a record run printed before its diff, and the diff."""
+    head, found, diff = out.partition("--- scrimmage.toml\n")
+    assert found, f"no diff in:\n{out}"
+    return head, found + diff
+
+
+class OrdersService:
+    """A stand-in for the orders service, on the port the run copy of the page's tool asks."""
+
+    def __init__(self, port: int) -> None:
+        self.asked: list[str] = []
+        asked = self.asked
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                asked.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(ORDER)))
+                self.end_headers()
+                self.wfile.write(ORDER)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                del format, args
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.running = True
+
+    def stop(self) -> None:
+        if self.running:
+            self.running = False
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+
+
+def check_record_output(root: Path, before: str, out: str, shown: str) -> None:
+    """The run's text and diff, and the page's, each exact.
+
+    The run's diff is the diff of the two files on disk, host line and all. The page's diff is
+    the diff of the page's own two blocks, which hold no such line. So a changed context line or
+    hunk header on the page, or in what record printed, fails; nothing in a diff is masked but
+    the date and the run id."""
+    head, diff = split_diff(out)
+    page_head, page_diff = split_diff(shown)
+    assert masked(head) == masked(page_head), out
+    assert masked(diff) == masked(unified(before, (root / RECORDED).read_text())), out
+    page = {b.title: b.body for b in blocks(RECORDING)}
+    assert masked(page_diff) == masked(unified(page["scrimmage.toml"], page[RECORDED])), shown
+
+
+@pytest.mark.slow
+def test_the_recording_page_records_a_real_call_and_replays_it_without_the_service(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port = free_port()
+    service = OrdersService(port)
+    try:
+        root = tmp_path / "project"
+        root.mkdir()
+        for block in blocks("examples/function-agent.md"):
+            if block.title != OUTPUT:
+                apply(root, block)
+        fake = fake_openai(ONE_TOOL)
+        monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        monkeypatch.setenv(
+            "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
+        )
+        monkeypatch.chdir(root)
+        command: list[str] = []
+        codes: list[int] = []
+        for lang, title, body in FENCE.findall((DOCS / RECORDING).read_text()):
+            if lang == "bash":
+                command = body.strip().split()[1:]
+                continue
+            if not title:
+                continue
+            if title == RECORDED:
+                assert masked((root / RECORDED).read_text()) == masked(body)
+                continue
+            if title != OUTPUT:
+                apply(root, Block(lang, title, body))
+                continue
+            retarget(root, ORDERS_PORT, port)
+            if command[0] == "test":  # the replay: the service is gone
+                service.stop()
+                assert service.asked == ["/orders/1234"]  # record asked once
+            with_fake_host(root / "scrimmage.toml")
+            before = (root / "scrimmage.toml").read_text()
+            capsys.readouterr()
+            codes.append(main(command))
+            out = capsys.readouterr().out
+            if command[0] == "record":
+                check_record_output(root, before, out, body)
+            else:
+                assert masked(out) == masked(body), f"{command}:\n{out}"
+        assert codes == [OK, OK]
+        assert service.asked == ["/orders/1234"]  # and the replay asked nobody
+    finally:
+        service.stop()
+
+
+# The budget page: the model is scripted to ask for the order again after every failure, as a
+# bot with a retry loop does, so a failed row spends until the budget is reached. The cap and
+# the holds are chosen so that one reply crosses the cap whether or not its settle has landed.
+BUDGET = "examples/budget.md"
+BUDGET_RUN = Example(
+    ["budget_get_order", *["acme_answer|budget_get_order"] * 7],
+    [MISTAKE, MISTAKE],
+    base="examples/function-agent.md",
+)
+
+
+@pytest.mark.slow
+def test_the_budget_page_stops_the_loop_at_its_budget_and_refuses_an_unpriced_model(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(BUDGET, BUDGET_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS, GATEWAY, CI, RECORDING, BUDGET}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:

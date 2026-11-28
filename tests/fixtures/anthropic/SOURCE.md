@@ -59,6 +59,18 @@ The models named in them are the docs' own.
 | `doc_cached.json` | Messages examples, "Hello, Claude", with a `usage` from Prompt caching, "Output" | `usage` is the caching page's: 2048 input, 1800 read, 248 written, 148 for 5 minutes and 100 for 1 hour, 503 output | `75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176` |
 | `doc_stream_cached.sse` | Streaming, "Streaming request", with the same counts | `message_start` carries those counts, and `message_delta` carries them as `null` with 503 output, as the docs say its other fields may; the real stream repeats them, which is why this one is kept: it tests the null | `9325eaa7b6adb599ee44b50414466323726f497c580d441c4398534972ea53ff` |
 
+## Derived from captures
+
+Each file below is a real capture above with its content block changed, so a docs page can show an order bot.
+Nothing else is changed: the envelope, the ids and the `usage` are the capture's own.
+These are not captures, and nothing here may be called real.
+
+| File | Derived from | What changed | sha256 |
+|---|---|---|---|
+| `made_order_tool_use.json` | `real_tool_use.json` | The tool is `get_order` with `{"order_id": "1234"}` | `0f937c0750ac039a7834c61106706a7a9a731c6977b802c949628adff5c5823a` |
+| `made_order_answer.json` | `real_answer.json` | The text is "Order 1234 shipped on Oct 30." | `dbc243e8304160764c470b24ed5703da369e86a5703471608d116ae65429fcee` |
+| `made_order_admits.json` | `real_answer.json` | The text is "Sorry, I am unable to look up order 1234 right now." | `03df1995fecac14070e7f896cd0273d45abfc9be57d54eada1f2807a6766c01f` |
+
 ## What the real replies showed that the docs did not
 
 - A real reply puts `model` first, then `id`; the docs' example starts with `id`.

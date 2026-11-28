@@ -230,3 +230,5 @@ Each `long` rate must be at least the same rate of the model, so a long call nev
 A rate that `long` leaves out costs its `input`, as it does for the model.
 A tier may have its own long rates, such as `[openai.models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
 `long` works the same in a price file and in `[agent.prices]`.
+
+Example: [A budget that stops a looping agent](examples/budget.md) sets a price of your own and shows an unpriced model refused.

@@ -142,3 +142,5 @@ They are the calls that spend the key.
 - [Safety](safety.md) has the rules a test applies call by call.
 - [Security](security.md) says where your data goes and what a record keeps.
 - [Configuration](configuration.md) lists every setting of `scrimmage.toml`.
+
+Example: [Scrimmage in CI](examples/ci.md) runs this workflow's steps and shows a failed row failing the job.
