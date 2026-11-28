@@ -142,6 +142,12 @@ class Ledger:
                 self.reserved = 0.0  # no rounding left over for a waiter to wait on
             self.spent += usd
 
+    def holder(self, reservation: int) -> str | None:
+        """The run that holds this reservation, or None if it is not held."""
+        with self._lock:
+            hold = self._held.get(reservation)
+            return None if hold is None else hold.run
+
     def close_run(self, run: str) -> None:
         """The run's program has ended. Its tickets go; its holds stay, as a call that was
         sent may have spent the money, and a late settle still replaces them."""

@@ -2,6 +2,8 @@
 
 import asyncio
 import threading
+import time
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -12,7 +14,7 @@ import pytest
 from scrimmage import client as client_module
 from scrimmage import http_gate, state
 from scrimmage.budget import Ledger
-from scrimmage.client import ControlClient, ControlError, Sender
+from scrimmage.client import ControlClient, ControlError, RunSender, Sender
 from scrimmage.control import ControlServer
 from scrimmage.errors import ScrimmageRefused
 from scrimmage.records import RecordStore
@@ -222,10 +224,8 @@ def test_a_forked_childs_queued_settle_rides_on_its_reserve(stack: Stack) -> Non
     assert not stack.sender.settles and stack.ledger.spent == pytest.approx(0.002)
 
 
-def test_a_reserve_waits_for_the_settle_the_sender_is_sending(stack: Stack) -> None:
-    """The sender thread has a settle in flight when the agent's next call is reserved: the
-    reserve is checked after that settle, not against its hold."""
-    held = queue_settle(stack)
+def sending_slowly(stack: Stack) -> tuple[threading.Thread, threading.Event]:
+    """The sender thread, stopped inside the send of one settle until the event is set."""
     in_flight, let_go = threading.Event(), threading.Event()
     request = stack.client.request
 
@@ -239,16 +239,143 @@ def test_a_reserve_waits_for_the_settle_the_sender_is_sending(stack: Stack) -> N
     sending = threading.Thread(target=stack.sender._send_posts)  # type: ignore[reportPrivateUsage]
     sending.start()
     assert in_flight.wait(10)
-    reserving = threading.Thread(target=stack.client.reserve, args=("run-1", 0.001))
-    reserving.start()
-    reserving.join(0.3)
-    assert reserving.is_alive()  # it waits for the settle, which is not yet counted
-    let_go.set()
-    reserving.join(10)
+    return sending, let_go
+
+
+def test_a_reserve_waits_briefly_for_the_settle_the_sender_is_sending(stack: Stack) -> None:
+    """The sender has a settle in flight when the next call is reserved, and finishes it
+    within the wait: the reserve is checked after it, not against its hold."""
+    held = queue_settle(stack)
+    sending, let_go = sending_slowly(stack)
+    threading.Timer(client_module.SETTLE_WAIT_S / 5, let_go.set).start()
+    stack.client.reserve("run-1", 0.001)
     sending.join(10)
     assert held not in stack.ledger._held  # type: ignore[reportPrivateUsage]
     assert stack.spent_at_reserve[-1] == pytest.approx(0.002)
     assert not stack.sender.settles
+
+
+def test_a_reserve_does_not_wait_for_a_whole_settle_request(stack: Stack) -> None:
+    """A claim thread must not wait for a request: past SETTLE_WAIT_S the reserve goes on
+    carrying nothing, and the sender delivers the settle it was sending."""
+    held = queue_settle(stack)
+    other = queue_settle(stack, 0.003)
+    sending, let_go = sending_slowly(stack)
+    began = time.monotonic()
+    stack.client.reserve("run-1", 0.001)
+    assert time.monotonic() - began < 5
+    assert [line["reservation"] for line in stack.sender.settles] == [other]  # not taken
+    let_go.set()
+    sending.join(10)
+    assert held not in stack.ledger._held and not stack.sender.settles  # type: ignore[reportPrivateUsage]
+    assert stack.ledger.spent == pytest.approx(0.005)
+
+
+def failing(client: ControlClient, error: str) -> Any:
+    """A request that fails as the real one does, giving back the slot it was handed."""
+
+    def request(*_: object, **__: object) -> tuple[int, dict[str, object]]:
+        client.slots.release()
+        if error == "raises":
+            raise ControlError("down")
+        return int(error), {"error": "no"}
+
+    return request
+
+
+@pytest.mark.parametrize("error", ["raises", "503", "400"])
+def test_a_settle_the_runner_did_not_accept_stays_queued_in_order(stack: Stack, error: str) -> None:
+    first, second = queue_settle(stack, 0.002), queue_settle(stack, 0.003)
+    request = stack.client.request
+    stack.client.request = failing(stack.client, error)  # type: ignore[method-assign]
+    stack.sender._send_posts()  # type: ignore[reportPrivateUsage]
+    assert [line["reservation"] for line in stack.sender.settles] == [first, second]
+    assert stack.client.slots._value == client_module.CAP  # type: ignore[reportPrivateUsage]
+    stack.client.request = request  # type: ignore[method-assign]
+    stack.sender._send_posts()  # type: ignore[reportPrivateUsage]
+    assert not stack.sender.settles and stack.ledger.spent == pytest.approx(0.005)
+
+
+def test_a_settle_interrupted_in_the_sender_is_queued_again_and_the_slot_returns(
+    stack: Stack,
+) -> None:
+    held = queue_settle(stack)
+
+    def interrupted(*_: object, **__: object) -> tuple[int, dict[str, object]]:
+        stack.client.slots.release()  # as the real request does for a held slot
+        raise KeyboardInterrupt
+
+    request = stack.client.request
+    stack.client.request = interrupted  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        stack.sender._send_posts()  # type: ignore[reportPrivateUsage]
+    assert [line["reservation"] for line in stack.sender.settles] == [held]
+    assert stack.client.slots._value == client_module.CAP  # type: ignore[reportPrivateUsage]
+    stack.client.request = request  # type: ignore[method-assign]
+
+
+class Interrupting(deque[dict[str, object]]):
+    """A queue whose second pop is an exception landing in the middle of taking."""
+
+    def popleft(self) -> dict[str, object]:
+        if self.armed and len(self) < self.armed:
+            raise KeyboardInterrupt
+        return super().popleft()
+
+    armed = 0
+
+
+def test_an_exception_while_settles_are_taken_gives_back_those_taken(stack: Stack) -> None:
+    first, second = queue_settle(stack, 0.002), queue_settle(stack, 0.003)
+    queue = Interrupting(stack.sender.settles)
+    queue.armed = 2  # the first pop works; the second raises
+    stack.sender.settles = queue
+    with pytest.raises(KeyboardInterrupt):
+        stack.client.reserve("run-1", 0.001)
+    assert [line["reservation"] for line in stack.sender.settles] == [first, second]
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), -1.0])
+def test_a_non_finite_or_negative_settle_is_rejected_by_both_endpoints(
+    stack: Stack, bad: float
+) -> None:
+    held = queue_settle(stack)
+    carried = [{"reservation": held, "usd": 0.002}, {"reservation": held, "usd": bad}]
+    status, _ = stack.client.request(
+        "POST", "/v1/budget/reserve", {"run": "run-1", "usd": 0.001, "settles": carried}
+    )
+    assert status == 400 and stack.ledger.spent == 0.0
+    status, _ = stack.client.request(
+        "POST", "/v1/budget/settle", {"run": "run-1", "reservation": held, "usd": bad}
+    )
+    assert status == 400 and stack.ledger.spent == 0.0
+
+
+def test_a_carried_settle_for_another_runs_hold_is_rejected_and_none_applied(
+    stack: Stack,
+) -> None:
+    mine = queue_settle(stack)
+    theirs = stack.ledger.reserve(0.001, "run-2")
+    assert isinstance(theirs, int)
+    carried = [{"reservation": mine, "usd": 0.002}, {"reservation": theirs, "usd": 0.0}]
+    status, _ = stack.client.request(
+        "POST", "/v1/budget/reserve", {"run": "run-1", "usd": 0.001, "settles": carried}
+    )
+    assert status == 400
+    assert stack.ledger.spent == 0.0 and stack.ledger.holder(theirs) == "run-2"
+
+
+def test_closing_a_run_sender_forgets_it_even_when_the_last_batch_fails(stack: Stack) -> None:
+    sender = RunSender(stack.client, "run-9")
+    assert stack.client.senders["run-9"] is sender
+
+    def fail(**_: object) -> bool:
+        raise OSError("down")
+
+    sender._send_batch = fail  # type: ignore[method-assign, assignment]
+    with pytest.raises(OSError):
+        sender.close()
+    assert "run-9" not in stack.client.senders
 
 
 def test_a_settle_sent_by_the_sender_and_a_reserve_at_once_is_sent_once(stack: Stack) -> None:
