@@ -130,6 +130,7 @@ ALL_TITLES = [
     "LangChain versions.",
     "MCP through the official client or a client built on it, such as FastMCP's.",
     "MCP tools under another name.",
+    "Matching is substring matching, and an unlisted negation is not caught.",
     "Methods stored as the class is made.",
     "Mocks with `args` match arguments exactly.",
     "NeMo Guardrails' usage statistics.",

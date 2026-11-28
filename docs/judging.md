@@ -36,13 +36,41 @@ The rule and the answer go through the same steps first:
 
 Then the rule must appear in the answer as plain text. It is not a word match, so:
 
-- `"shipped"` is found in "has not shipped"; add a `forbid` for what must not be said;
+- `"shipped"` is found in "has not shipped"; add a `forbid` for what must not be said, as in [Guard a word against its negation](#guard-a-word-against-its-negation);
 - `"12"` is found in "123";
 - Markdown stays, so `"Oct 30"` is not found in `Oct **30**`;
 - `2²` reads as `22`, because Unicode folds a superscript to its digit.
 
 Scrimmage compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it.
 A rule goes through the same removal before it is printed or recorded. That catches only known shapes, such as an API key or a bearer token. A secret with no known shape, such as `hunter2-password`, prints as written, so keep such a rule out of a file you share.
+
+## Guard a word against its negation
+
+An `expect` of `"shipped"` is met by "Your order has not shipped yet.".
+Add a `forbid` that lists the negations you foresee:
+
+```toml
+[[test]]
+name     = "order-shipped"
+question = "Has order 1234 shipped?"
+expect   = ["shipped"]
+forbid   = ["not shipped", "never shipped", "hasn't shipped"]
+```
+
+These answers are judged by those rules:
+
+| Answer | Result |
+|---|---|
+| Your order has not shipped yet. | fail |
+| It never shipped. | fail |
+| Your order hasn’t shipped. | fail |
+| Your order has shipped. | pass |
+| Your order is not yet shipped. | pass |
+
+The third answer fails because a curly quote becomes a straight one first.
+The last answer passes because the list does not name "not yet shipped".
+The list catches only the wordings you wrote.
+See [Limits: judging and records](limits/judging.md).
 
 ## Rules for a fault row
 
