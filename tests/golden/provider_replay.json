@@ -1263,6 +1263,32 @@
   "settles": [],
   "stops": []
 },
+"fault context too long responses stream": {
+  "blobs": ["3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a", "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 55, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\", \"stream\": true}", "sha256": "3473db21811dd828036192e7642f434ed3620c62916986120e52ea08a786458a"}, "call": "model:openai", "error": null, "fault": {"do": "context too long", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 204, "preview": "{\"error\": {\"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\", \"type\": \"invalid_request_error\", \"param\": \"input\", \"code\": \"context_length_exceede", "sha256": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 400, "stream": true, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "6d6063b2a4acdd59b2c03811eeef5a45ec01951b2a866abd44f039566d2cf774", "headers": {"content-length": "204", "content-type": "application/json", "x-request-id": "req_scrimmage_injected"}, "length": 204, "status": 400}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
+"fault status 401 on responses": {
+  "blobs": ["ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8", "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"],
+  "lines": [
+    {"action": "fault", "args": {"bytes": 39, "preview": "{\"model\": \"gpt-4o-mini\", \"input\": \"hi\"}", "sha256": "b01d2807de4baad2b64e4fe73425e591f5811a8caf07dc12969545cc2142fd54"}, "call": "model:openai", "error": null, "fault": {"do": "status 401", "n": 1, "when": "always"}, "kind": "model", "method": "POST", "model": "gpt-4o-mini", "path": "/v1/responses", "proc": {}, "provider": "openai", "result": {"bytes": 276, "preview": "{\"error\": {\"message\": \"Incorrect API key provided: sk-proj-********************************************xxxx. You can find your API key at https://platform.openai.com/account/api-keys.\", \"type\": \"inval", "sha256": "ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 401, "stream": false, "test": "t", "v": 1}
+  ],
+  "replies": [
+    {"body": "ab33775145fe390afabaa0529a7c08464a881a3925c9449af102a73532b5bfc8", "headers": {"content-length": "276", "content-type": "text/plain", "x-request-id": "req_scrimmage_injected"}, "length": 276, "status": 401}
+  ],
+  "reserved": [],
+  "sent": [],
+  "settles": [],
+  "stops": []
+},
 "fault model narrowed": {
   "blobs": ["45f8858cb4e0aa936ef7b304ce7ec1f74e96458e08b657193cd36e4cb8fdfc39", "7df193fbe3e9a32777409a926904cf48cb8a525cdefe591ac58da25f5265ad81"],
   "lines": [

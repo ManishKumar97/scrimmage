@@ -46,6 +46,9 @@ def test_the_replay_is_deterministic() -> None:
 PINNED = [
     "chat chat_answer",
     "fault refuse chat",
+    "fault context too long responses",
+    "fault context too long responses stream",
+    "fault status 401 on responses",
     "marker chat",
     # The paths the first capture was blind to.
     "httpx2 async: chat answer",

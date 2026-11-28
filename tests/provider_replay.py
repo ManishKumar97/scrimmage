@@ -397,6 +397,18 @@ def scenarios() -> list[Scenario]:
         faults=fault("context too long"),
     )
     add(
+        "fault context too long responses stream",
+        [(RESPONSES, responses(stream=True))],
+        response="response_stream",
+        faults=fault("context too long"),
+    )
+    add(
+        "fault status 401 on responses",
+        [(RESPONSES, responses())],
+        response="response_text",
+        faults=fault("status 401"),
+    )
+    add(
         "fault model narrowed",
         [(CHAT, chat())],
         ["chat_answer"],

@@ -74,7 +74,9 @@ Limits of the faults on a model call, of the providers Scrimmage reads, and of t
 ## Faults on a model reply
 
 - **`replace` on a model reply is for text replies.** It changes the text of an OpenAI Chat Completions reply and of each `text` block of an Anthropic Messages reply.
-  A streamed reply and an OpenAI Responses API call are a test mistake, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
+  A streamed reply is a test mistake.
+  So is an OpenAI Responses API call, because a Responses message has typed `output_text` parts and annotations, and changing them honestly needs a design of its own.
+  A reply with no text is left as it is, and a moderation or embedding result cannot take it.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`bad body` on a streamed model request.** It is a test mistake: the call fails at once and the fault is not counted as fired.
