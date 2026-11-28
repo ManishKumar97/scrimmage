@@ -56,6 +56,12 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
                 "the program a start runs, such as process:git"
             )
         return text
+    if kind == "handoff" and sep:
+        if not pattern:
+            raise ConfigError(f"{where}: {text!r} is allowed only under [agent] real")
+        if not TOOL_NAME.fullmatch(name):
+            raise ConfigError(f"{where}: {name!r} in {text!r} is not a handoff name")
+        return text
     if kind == "http" and sep:
         return check_web(text, where, pattern=pattern)
     if kind == "mcp" and sep:

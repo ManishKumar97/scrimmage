@@ -35,6 +35,20 @@ _.nested  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.sync_tool_through_arun  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.async_tool  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.handle_tool_error  # tests/example/acme/graph.py: LangChain reads it on the tool
+_.answer_told  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_raises  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_timed  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_sync  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff_with_tool  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_custom  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_replaced  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_mcp  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_inprocess_mcp  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff_callback  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_handoff_collision  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_own_call  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
+_.answer_impl_replaced  # tests/example/acme/agents_bot.py: a test's scrimmage.toml names it
 _._arun  # tests/test_langgraph.py: a stand-in for LangChain's own, read by the structural check
 _.mixin_tool  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.answer_overridden  # tests/example/acme/graph.py: a test's scrimmage.toml names it
@@ -197,3 +211,4 @@ _.CallbackManagerForToolRun  # tests/test_tool_gate.py: named only in a string a
 _.https_open  # scrimmage/prices_update.py: urllib calls an HTTPS handler's https_open by name
 _.do_DELETE  # tests/test_ungated.py: http.server calls do_<METHOD> by name
 _.total_spend  # tests/test_docs_examples_real.py: pytest runs an autouse fixture by itself
+_.list_prompts  # tests/example/acme/agents_bot.py: abstract in the SDK's MCPServer

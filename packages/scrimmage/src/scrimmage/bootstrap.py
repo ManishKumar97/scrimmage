@@ -24,6 +24,7 @@ from typing import Literal, NoReturn
 from urllib.parse import urlsplit
 
 from scrimmage import (
+    agents_gate,
     hooks,
     http_gate,
     labels,
@@ -378,6 +379,7 @@ def start_service() -> None:
     http_gate.install(process, client, None, structure_stop)
     ungated.install(process)
     langchain_gate.install(process, structure_stop)
+    agents_gate.install(process, structure_stop)
     mcp_gate.install(process, None, structure_stop)
     process_gate.install(lambda: None)
     process_gate.install_service()
@@ -473,6 +475,7 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
     ctx = http_gate.install(process, client, sender, cannot_gate)
     ungated.install(process)
     langchain_gate.install(process, cannot_gate)
+    agents_gate.install(process, cannot_gate)
     mcp_gate.install(process, sender, cannot_gate)
 
     def forked() -> None:

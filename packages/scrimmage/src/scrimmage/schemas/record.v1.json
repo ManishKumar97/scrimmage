@@ -122,7 +122,7 @@
         },
         "call": {
           "type": "string",
-          "pattern": "^(tool:[A-Za-z0-9_-]+|model:[a-z*]+(/[a-z_]+)?|http:.+|mcp:.+|process:(?:[A-Za-z0-9_][A-Za-z0-9._+-]*|\\?)(?![\\s\\S]))$"
+          "pattern": "^(tool:[A-Za-z0-9_-]+|handoff:[A-Za-z0-9_-]+|model:[a-z*]+(/[a-z_]+)?|http:.+|mcp:.+|process:(?:[A-Za-z0-9_][A-Za-z0-9._+-]*|\\?)(?![\\s\\S]))$"
         },
         "kind": {
           "enum": [

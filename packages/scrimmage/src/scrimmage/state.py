@@ -247,6 +247,7 @@ class ProcessState:
     def __init__(self, tools: Iterable[str] = (), *, service: bool = False) -> None:
         self.listed = set(tools)  # names gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
+        self.handoffs: set[str] = set()  # handoff names, which no tool is behind
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
         self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.service = service
@@ -457,6 +458,10 @@ class RunState:
         return self.process.adapted
 
     @property
+    def handoffs(self) -> set[str]:
+        return self.process.handoffs
+
+    @property
     def blocked(self) -> dict[str, str]:
         return self.process.blocked
 
@@ -469,7 +474,7 @@ class RunState:
         """Names a gate reaches, as the model sees them, as the process knows them: a tool
         learned before any run is seen by every run. A request carries only names, so one
         tool that can skip its gate blocks every tool of that name."""
-        return (self.listed | self.adapted) - self.blocked.keys()
+        return (self.listed | self.adapted | self.handoffs) - self.blocked.keys()
 
     def recheck_tools(self) -> None:
         """Bring the names up to date: a class can change after its tools were made."""

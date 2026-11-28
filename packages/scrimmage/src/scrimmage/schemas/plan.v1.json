@@ -246,6 +246,10 @@
           },
           {
             "type": "string",
+            "pattern": "^handoff:[A-Za-z0-9_-]+$"
+          },
+          {
+            "type": "string",
             "pattern": "^process:[A-Za-z0-9_][A-Za-z0-9._+-]*(?![\\s\\S])$"
           },
           {
