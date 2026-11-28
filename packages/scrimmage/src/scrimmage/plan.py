@@ -73,7 +73,9 @@ class Plan:
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
     record: bool = False  # scrimmage record: real calls' lines carry what a mock needs
-    probe: bool = False  # scrimmage init --probe: the first model request ends the run
+    probe: bool = (
+        False  # scrimmage init --probe: the first model request that offers tools ends the run
+    )
     # How long the run had been going when the runner sent this copy, on the runner's clock.
     # The runner adds it to each copy it serves, so the SDK's time limit counts from the
     # runner's start, however long the program took to load.

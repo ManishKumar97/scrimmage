@@ -1300,7 +1300,9 @@ def test_the_named_function_runs_and_nothing_else(
     code = cli.main(["init", str(tmp_path), "--probe", "agent:answer"])
     out = capsys.readouterr().out
     assert code == OK
-    assert out.splitlines()[0] == "probe: running agent:answer up to its first model request"
+    assert out.splitlines()[0] == (
+        "probe: running agent:answer up to the first model request that offers tools"
+    )
     assert not (tmp_path / "DELETED").exists()
     data = agent_table(tmp_path / "scrimmage.toml")
     assert data["function"] == "agent:answer"

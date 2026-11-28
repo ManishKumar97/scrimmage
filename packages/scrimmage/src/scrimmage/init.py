@@ -1,10 +1,11 @@
 """scrimmage init: draft a scrimmage.toml from reading the code, and from a probe if asked.
 
 The read uses ast and imports nothing, so none of the team's code runs. The entry point it
-finds is a guess, and a guess is never run. The probe takes the function to run by name, runs
-it up to its first model request, which is refused before it is sent, and reads the tools
-that request offers. A script is never probed. The draft never holds a real tool, a test or
-a mock, as those are the team's to say, and it never replaces a file.
+finds is a guess, and a guess is never run. The probe takes the function to run by name and
+runs it up to the first model request that offers tools (passing up to 5 that offer none).
+That request is refused before it is sent, and the tools it offers are read. A script is never
+probed. The draft never holds a real tool, a test or a mock, as those are the team's to say,
+and it never replaces a file.
 """
 
 import ast
@@ -60,8 +61,9 @@ READ_PREFIXES = ("get_", "list_", "search_", "find_", "lookup_", "read_", "check
 FOUND_BY = ("probe", "static")  # how a tool or a model host was found
 PROBLEMS = ("ambiguous", "nested", "not_found")  # why a tool could not be mapped to one path
 RISK_NOTE = (
-    "the probe ran your code up to its first model request; a tool function called before "
-    "then, or a write through a library Scrimmage does not gate, would have run for real"
+    "the probe ran your code up to the first model request that offers tools (passing up to 5 "
+    "that offer none); a tool function called before then, code after a passed request, or a "
+    "write through a library Scrimmage does not gate, would have run for real"
 )
 BAD_PROBE = (
     "--probe takes the function to run, as module:function, such as acme.agent:answer; "
@@ -249,7 +251,7 @@ def prepare(
     chosen = entries[0] if entries else None
     result = Probe()
     if probe is not None:
-        announce(f"probe: running {probe} up to its first model request")
+        announce(f"probe: running {probe} up to the first model request that offers tools")
         result = run_probe(probe, root, stop_flag)
     if probe is not None and result.missing is not None:
         return refused(
@@ -712,8 +714,9 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
 
 
 def run_probe(function: str, folder: Path, stop_flag: list[str] | None) -> Probe:
-    """One run of the function the team named, with no tools, no mocks and no budget. Its
-    first model request is refused before it is sent, and any refusal ends the program."""
+    """One run of the function the team named, with no tools, no mocks and no budget. The
+    first model request that offers tools is refused before it is sent, and any refusal ends
+    the program. Up to 5 chat requests that offer none get a canned reply first."""
     agent = Agent(function, 1, 1, PROBE_TIMEOUT_S, (), (), max_cost_usd=None)
     config = Config(agent, (Test("init-probe", PROBE_QUESTION, (), (), ()),), folder)
     runner = Runner(config, stop_flag=stop_flag, probe=True)
@@ -953,7 +956,10 @@ def probe_line(found: Findings) -> str:
     run as given would run the guess, which may be the wrong function."""
     result, chosen = found.result, found.chosen
     if result.ran and chosen is not None:
-        return f"probe: ran {chosen.value} up to its first model request; {result.outcome}"
+        return (
+            f"probe: ran {chosen.value} up to the first model request that offers tools; "
+            f"{result.outcome}"
+        )
     if chosen is not None and chosen.kind == "command":
         return "probe: not run; a script is never probed"
     return (
@@ -1009,7 +1015,7 @@ def add_notes(draft: Draft, found: Findings) -> None:
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:
         notes.append(
-            "not offered in the first model request, so left out of the draft: "
+            "not offered in the request the probe read, so left out of the draft: "
             + ", ".join(left_out)
         )
     draft.messages += [(NOTES, note) for note in notes]

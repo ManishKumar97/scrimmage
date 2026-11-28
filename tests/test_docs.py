@@ -368,7 +368,8 @@ def test_init_its_probe_and_the_probe_s_limits_are_documented() -> None:
         "`--json` never turns it on",
         "refused before it is sent",
         "imports nothing",
-        "A plain tool function called before the first model request runs for real",
+        "A plain tool function called before the first model request that offers tools runs "
+        "for real",
         "never runs its own guess",
         "`requests`, `urllib` or a `curl` subprocess",
         "A script entry point is never probed",

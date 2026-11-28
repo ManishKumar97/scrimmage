@@ -643,8 +643,8 @@ class RunState:
             "blind_child": detail,
             "orphan": detail,
             "probe": (
-                f"{label} {detail}: scrimmage init --probe stops at the first model request, "
-                "which is refused before it is sent"
+                f"{label} {detail}: scrimmage init --probe stops at the first model request "
+                "that offers tools, which is refused before it is sent"
             ),
         }
         return ScrimmageRefused(messages.get(reason, f"{label} is refused: {detail}"))

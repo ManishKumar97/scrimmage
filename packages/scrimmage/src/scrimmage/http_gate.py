@@ -563,7 +563,7 @@ def passes_probe(
 
 
 def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url: Any) -> NoReturn:
-    """Note the tools this first model request offers, refuse it unsent, and end the program.
+    """Note the tools this model request offers, refuse it unsent, and end the program.
 
     The note is put before the refusal, so the runner has it when the refusal stops the run.
     A body that cannot be read offers tools no one can name, which is said, not guessed.
