@@ -286,3 +286,16 @@ def test_a_full_real_answer_ends_in_a_sentence_end() -> None:
     for status, answer in REAL:
         if status == "full":
             assert re.search(r"[.!?][\"')]?$", answer), f"labelled full but cut: {answer}"
+
+
+def test_the_negation_guard_on_the_judging_page_gives_the_results_it_states() -> None:
+    page = (DOCS / "judging.md").read_text()
+    section = page.split("## Guard a word against its negation", 1)[1].split("\n## ", 1)[0]
+    (toml,) = [body for lang, _, body in FENCE.findall(section) if lang == "toml"]
+    (test,) = tomllib.loads(toml)["test"]
+    rules = Rules(tuple(tuple(item) for item in test["expect"]), tuple(test["forbid"]), 1.0)
+    rows = re.findall(r"^\| (.+?) \| (pass|fail) \|$", section, re.M)
+    assert len(rows) == 5
+    for answer, stated in rows:
+        found = "pass" if not broken_rules(answer, rules) else "fail"
+        assert found == stated, answer
