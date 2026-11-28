@@ -367,29 +367,41 @@ def parse(path: Path) -> ast.Module | None:
 
 def module_name(folder: Path, path: Path, reading: Reading) -> str:
     """Its import name once its package is installed. A src layout's folder is not a package,
-    and a folder that is itself inside a package keeps its packages' names."""
+    and a folder that is itself inside a package keeps its packages' names. A folder anywhere
+    on the way whose name cannot be imported is where the top level starts: no code can name
+    it, so what is under it is named as when the team runs from inside it."""
     parts = list(path.relative_to(folder).with_suffix("").parts)
     if parts[0] == "src" and len(parts) > 1:
         parts = parts[1:]
         reading.src_dropped = True
     if parts[-1] == "__init__":
         parts.pop()
+        dirs = parts
+    else:
+        dirs = parts[:-1]
+    for index in range(len(dirs) - 1, -1, -1):
+        if not dirs[index].isidentifier():
+            return read_as_top_level(reading, dirs[index], parts[index + 1 :])
     packages: list[str] = []
     above = folder
     while (above / "__init__.py").is_file():
         if not above.name.isidentifier():
-            # No code can import this folder by name, so its children are the top level, as
-            # they are when the team runs from inside it.
-            name = ".".join([*packages, *parts])
-            if name:
-                reading.top_modules[name] = above.name
-            shown = reading.top_level.get(above.name)
-            if importable(name) and (shown is None or name.count(".") > shown.count(".")):
-                reading.top_level[above.name] = name  # the deepest is the best example
-            break
+            return read_as_top_level(reading, above.name, [*packages, *parts])
         packages.insert(0, above.name)
         above = above.parent
     return ".".join([*packages, *parts])
+
+
+def read_as_top_level(reading: Reading, folder: str, parts: list[str]) -> str:
+    """The module's name under a folder that cannot be imported, which is kept so the note and
+    the draft can say where to run from. The deepest name seen is the example."""
+    name = ".".join(parts)
+    if name:
+        reading.top_modules[name] = folder
+        shown = reading.top_level.get(folder)
+        if importable(name) and (shown is None or name.count(".") > shown.count(".")):
+            reading.top_level[folder] = name
+    return name
 
 
 def importable(module: str) -> bool:
@@ -412,7 +424,8 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
         reading.candidates.append(script_candidate(relative))
     if not importable(module):
         if any(
-            isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) for s in tree.body
+            isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            for s in top_level(tree.body)
         ):
             reading.unimportable.append(relative)
         return
@@ -1000,6 +1013,11 @@ def add_notes(draft: Draft, found: Findings) -> None:
             f"{printable(folder)} is not an importable package name, so its modules are read as "
             f"top-level ({printable(example)}); run scrimmage from inside {printable(folder)}"
         )
+    for folder, names in shadowing(reading).items():
+        notes.append(
+            f"{printable(folder)} is read as top-level, and its {printable(', '.join(names))} "
+            "shadow the standard library when run from inside it; rename them"
+        )
     if reading.unimportable:
         shown = ", ".join(printable(n) for n in reading.unimportable[:5])
         notes.append(
@@ -1021,6 +1039,17 @@ def add_notes(draft: Draft, found: Findings) -> None:
     draft.messages += [(NOTES, note) for note in notes]
 
 
+def shadowing(reading: Reading) -> dict[str, list[str]]:
+    """For each folder read as top-level, its top-level names that are standard library
+    modules, which they would hide when the team runs from inside the folder."""
+    found: dict[str, set[str]] = {}
+    for module, folder in reading.top_modules.items():
+        top = module.split(".")[0]
+        if top in sys.stdlib_module_names:
+            found.setdefault(folder, set()).add(top)
+    return {folder: sorted(names) for folder, names in found.items()}
+
+
 def install_notes(found: Findings) -> list[str]:
     """What the module names assume. A run imports from the read folder or the environment."""
     notes: list[str] = []
@@ -1029,6 +1058,8 @@ def install_notes(found: Findings) -> list[str]:
     paths = [t.path for t in found.tools.mapped]
     if found.chosen is not None and found.chosen.kind == "function":
         paths.append(found.chosen.value)
+    # A path read as top-level has its own note: it is imported from inside its folder.
+    paths = [p for p in paths if p.split(":")[0] not in found.reading.top_modules]
     root = found.folder.resolve()
     missing = sorted(
         {
@@ -1113,18 +1144,23 @@ def render(found: Findings) -> str:
 
 
 def top_level_comments(found: Findings) -> list[str]:
-    """One comment for each drafted path whose module was read as top-level, because the
-    folder it sits in has a name that cannot be imported."""
+    """One comment for each folder whose name cannot be imported, above the paths read under
+    it as top-level: they name modules as when the team runs from inside it."""
     paths = [t.path for t in found.tools.mapped]
     if found.chosen is not None and found.chosen.kind == "function":
         paths.insert(0, found.chosen.value)
-    lines: list[str] = []
+    under: dict[str, list[str]] = {}
     for path in paths:
         folder = found.reading.top_modules.get(path.split(":")[0])
         if folder is not None:
-            note = f"read as top-level: {path}; run scrimmage from inside {folder}"
-            lines.append(toml_write.comment(note))
-    return lines
+            under.setdefault(folder, []).append(path)
+    return [
+        toml_write.comment(
+            f"read as top-level: {len(held)} path{'s' if len(held) != 1 else ''} under {folder}, "
+            f"such as {held[0]}; run scrimmage from inside {folder}"
+        )
+        for folder, held in under.items()
+    ]
 
 
 def real_lines(tools: Tools) -> list[str]:

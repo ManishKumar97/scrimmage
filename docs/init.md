@@ -36,9 +36,12 @@ That count is by name alone, with no stat, and stops at 100000 names, then says 
 Counting 100000 names took about 1.2 seconds on a busy 4-core machine.
 Reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
-A folder with an `__init__.py` whose name cannot be imported, such as `python-backend`, is read with its children as top-level modules, as they are when you run from inside it.
-A note says so, for example `python-backend is not an importable package name, so its modules are read as top-level (airline.tools); run scrimmage from inside python-backend`.
-Each drafted path read this way gets a comment, such as `# read as top-level: airline.tools:lookup; run scrimmage from inside python-backend`.
+A folder whose name cannot be imported, such as `python-backend`, is where the top level starts.
+It may be the folder you read, a folder above it with an `__init__.py`, or any folder below it, such as the one under a repository's root.
+What is under it is read as top-level modules, as it is when you run from inside it.
+A note names the folder, for example `python-backend is not an importable package name, so its modules are read as top-level (airline.tools); run scrimmage from inside python-backend`.
+The draft has one comment for each such folder, above `tools`, such as `# read as top-level: 11 paths under python-backend, such as airline.tools:lookup; run scrimmage from inside python-backend`.
+When a top-level name there is a standard library module, such as `platform`, a note says it would hide the standard library when you run from inside the folder.
 A file with definitions whose own name cannot be imported, such as `my-helpers.py`, is not mapped, and a note counts it and names it.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.

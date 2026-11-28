@@ -393,11 +393,77 @@ def test_a_folder_whose_name_cannot_be_imported_is_read_as_top_level(
         "top-level (airline.tools); run scrimmage from inside python-backend" in notes
     )
     text = (tmp_path / "d.toml").read_text()
-    for path in ("airline.tools:cancel", "airline.tools:lookup"):
-        assert f"# read as top-level: {path}; run scrimmage from inside python-backend\n" in text
+    # One comment for the folder, not one for each tool.
+    assert text.count("# read as top-level:") == 1
+    assert (
+        "# read as top-level: 2 paths under python-backend, such as airline.tools:cancel; "
+        "run scrimmage from inside python-backend\n" in text
+    )
     assert tomllib.loads(text)["agent"]["tools"] == ["airline.tools:cancel", "airline.tools:lookup"]
     # A file the read cannot name is counted, never dropped without a word.
     assert "skipped definitions in 1 files whose names cannot be imported: my-helpers.py" in notes
+
+
+TOOLS = (
+    "from tau.toolkit import is_tool\n\n\n@is_tool(1)\ndef lookup(x):\n    return x\n\n\n"
+    "@is_tool(1)\ndef cancel(x):\n    return x\n"
+)
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_that_cannot_be_imported_below_the_folder_read_is_the_top_level(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command from the README: run in the repository's root, whose child holds the code."""
+    repo = tmp_path / "my-repo"
+    write(
+        repo,
+        {
+            "python-backend/__init__.py": "",
+            "python-backend/airline/__init__.py": "",
+            "python-backend/airline/tools.py": TOOLS,
+            "ui/readme.py": "x = 1\n",
+        },
+    )
+    _, doc = run(capsys, str(repo), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["airline.tools:cancel", "airline.tools:lookup"]
+    notes = messages(doc, "notes")
+    assert "python-backend is not an importable package name, so its modules are read as" in notes
+    assert "run scrimmage from inside python-backend" in notes
+    assert "skipped definitions" not in notes
+    assert "cannot be imported from" not in notes
+    assert "# read as top-level: 2 paths under python-backend" in (tmp_path / "d.toml").read_text()
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_folder_with_no_init_and_a_name_that_cannot_be_imported_is_the_top_level_too(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"my-service/app/tools.py": TOOLS})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert sorted(tool_paths(doc)) == ["app.tools:cancel", "app.tools:lookup"]
+    assert "my-service is not an importable package name" in messages(doc, "notes")
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_file_that_cannot_be_named_is_counted_when_its_definitions_are_in_an_if(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = "import sys\n\nif sys.platform:\n    def lookup(x):\n        return x\n"
+    write(tmp_path, {"my-helpers.py": code})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert "skipped definitions in 1 files whose names cannot be imported" in messages(doc, "notes")
+
+
+@pytest.mark.design("init.unimportable_folder")
+def test_a_top_level_name_that_hides_the_standard_library_is_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"py-app/platform/__init__.py": "", "py-app/platform/tools.py": TOOLS})
+    _, doc = run(capsys, str(tmp_path), "--out", str(tmp_path / "d.toml"))
+    assert "py-app is read as top-level, and its platform shadow the standard library" in (
+        messages(doc, "notes")
+    )
 
 
 @pytest.mark.design("init.nested_listed")
