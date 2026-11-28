@@ -481,7 +481,8 @@ See [The budget](budget.md).
   A service that changes data on a `GET` is not caught.
   Mock it.
 - **Code that is not a gated call.** Only listed tools, LangChain tools, httpx and httpx2 requests, MCP tool calls and model calls are gated.
-  A database driver, boto3 and other cloud SDKs, urllib3, `requests`, gRPC or a raw socket inside code that is not a listed tool runs untouched and is not recorded.
+  A database driver, boto3 and other cloud SDKs, gRPC or a raw socket inside code that is not a listed tool runs untouched and is not recorded.
+  A request there through `http.client`, `requests`, `urllib3`, `urllib.request` or `aiohttp` is sent for real and leaves only an `ungated` notice line.
   A gated tool, which is any tool listed under `tools`, that is neither mocked nor under `real` never runs, so a write inside it never happens.
 - **MCP requests that are not tool calls.** They pass, and a server can act on them; see [Limits](limits/calls.md#mcp-tools).
   What a stdio MCP server does by itself, such as writing to its own database, is not gated.

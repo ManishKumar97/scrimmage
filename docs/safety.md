@@ -56,7 +56,7 @@ A refusal here ends the run, as it does for a tool.
 
 A `GET` that changes data, which some services allow, is not caught. Mock it.
 Other HTTP libraries are not gated. Only your listed tools guard a write sent with one: a gated tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens.
-A run that sends a request through requests, urllib3, urllib or aiohttp says so in the report, with the library, the host and the method.
+A run that sends a request through http.client, requests, urllib3, urllib.request or aiohttp says so in the report, with the library, the host and the method.
 A write sent that way is not stopped.
 A raw socket, pycurl or grpc is not reported at all.
 See [Limits](limits/calls.md#web-requests-and-recorded-mocks).

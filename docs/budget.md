@@ -86,3 +86,5 @@ It counts as spent from then on: a call it keeps out is refused at once, and the
 The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
 
 To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
+
+Example: [A budget that stops a looping agent](examples/budget.md) reaches its cap and shows a model with no price refused.

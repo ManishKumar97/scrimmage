@@ -29,10 +29,11 @@ def test_every_fixture_has_a_sha256_line_and_the_hash_matches() -> None:
 
 
 def test_a_file_named_real_is_a_capture_and_one_named_doc_is_not() -> None:
-    """real_* files are saved replies; doc_* files come from the docs. SOURCE.md says which."""
+    """real_* files are saved replies, doc_* files come from the docs, and made_* files are a
+    capture with its content changed. SOURCE.md says which."""
     text = (DIRECTORY / "SOURCE.md").read_text()
     for name in listed():
-        assert name.startswith(("real_", "doc_")), name
+        assert name.startswith(("real_", "doc_", "made_")), name
     real_section = text.split("## Not obtained")[0]
     for name in listed():
         if name.startswith("real_"):
