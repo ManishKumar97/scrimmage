@@ -45,6 +45,9 @@ dev = [
     "fastapi==0.162.5",
     "uvicorn==0.54.0",
     "joblib==1.6.0",
+    # tests/test_ungated.py sends a request through each client the web gate does not cover.
+    "requests>=2.32",
+    "aiohttp>=3.10",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]

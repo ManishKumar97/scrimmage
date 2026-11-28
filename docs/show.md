@@ -54,6 +54,8 @@ A call that had a mock on its label and matched none says `real (no mock matched
 On a model reply a fault changed, it is what the model said, then what the agent got, read from the two replies the line keeps: `the model said Or...; garble gave the agent: Order 1234 has been สวัสดี and i...`.
 The model's part is cut first, so the agent's part still shows.
 When the agent got an error in place of the model's tool calls, it names the tool: `the model called get_order; truncate gave the agent: a 400 error`.
+A web request sent through a client Scrimmage does not gate, such as `requests`, is a line in the gate column called `ungated`, with the library, the method and the host, and `sent around the gate` for a read or `not stopped by Scrimmage` for a write in the last column.
+No gate decided it, so it is not a fault, a mock or a refusal.
 At most 200 calls print for one run, and the rest are counted.
 A run that crashed or timed out also prints the last line of its `.log`, cut at 200 characters, and the log's path.
 

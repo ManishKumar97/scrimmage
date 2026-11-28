@@ -65,6 +65,9 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
         ("control.py", "wrap_socket"),  # each accepted connection, in TLS
         # The runner's own request to a team's service, at the address its file names.
         ("service_client.py", "HTTPConnection"),
+        # The observer wraps http.client's putrequest to name a request the web gate does not
+        # cover. It opens no connection and sends nothing.
+        ("ungated.py", "HTTPConnection"),
         # It binds 127.0.0.1 port 0 and closes it, to pick the port of a service it starts.
         ("managed.py", "socket"),
         # The one fetch: `scrimmage prices update` reads prices.toml from the repository's main

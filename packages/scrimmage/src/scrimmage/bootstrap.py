@@ -37,6 +37,7 @@ from scrimmage import (
     threads,
     tls,
     tool_gate,
+    ungated,
 )
 from scrimmage.client import ControlClient, ControlError, Sender, Senders
 from scrimmage.mocks import allowed
@@ -375,6 +376,7 @@ def start_service() -> None:
         del tool_names
     tool_gate.install(tools, dict(renames))
     http_gate.install(process, client, None, structure_stop)
+    ungated.install(process)
     langchain_gate.install(process, structure_stop)
     mcp_gate.install(process, None, structure_stop)
     process_gate.install(lambda: None)
@@ -469,6 +471,7 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
         stop(message)
 
     ctx = http_gate.install(process, client, sender, cannot_gate)
+    ungated.install(process)
     langchain_gate.install(process, cannot_gate)
     mcp_gate.install(process, sender, cannot_gate)
 

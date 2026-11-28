@@ -530,3 +530,41 @@ def test_well_formed_json_of_the_wrong_shape_is_never_exit_3(
         assert "is damaged" in str(bad.doc["mistakes"]), rows
     result.write_text(json.dumps({**doc, "tests": "many"}))
     assert shown(capsys, str(folder)).code == 2
+
+
+def test_a_request_sent_around_the_gate_is_on_the_timeline_as_ungated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = BASELINE_FAIL
+    folder, _, _ = write_folder(tmp_path)
+    path = folder / f"{run}.jsonl"
+    notice = {
+        **at(2, 300),
+        "notice": "ungated",
+        "library": "requests",
+        "host": "api.acme.com",
+        "method": "POST",
+        "message": "requests sent a POST request to api.acme.com",
+    }
+    for key in ("call", "kind", "action", "args", "result", "error", "ms"):
+        notice.pop(key)
+    lines = [json.loads(x) for x in path.read_text().splitlines()]
+    write_lines(folder, run, [lines[0], notice, *lines[1:]])
+    done = shown(capsys, str(folder))
+    row = next(x for x in done.out.splitlines() if "requests POST api.acme.com" in x)
+    assert row.split()[1:] == [
+        "requests",
+        "POST",
+        "api.acme.com",
+        "ungated",
+        "not",
+        "stopped",
+        "by",
+        "Scrimmage",
+    ]
+    as_json = shown(capsys, str(folder), "--json")
+    first = cast("list[Doc]", as_json.doc["runs"])[0]
+    web = [x for x in cast("list[Doc]", first["lines"]) if x["action"] == "ungated"]
+    assert [(x["call"], x["kind"], x["came_back"]) for x in web] == [
+        ("requests POST api.acme.com", "web", "not stopped by Scrimmage")
+    ]

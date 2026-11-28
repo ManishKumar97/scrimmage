@@ -117,6 +117,7 @@
         "cost_usd",
         "budget_usd",
         "stopped_by",
+        "notices",
         "mistakes",
         "notes",
         "warnings",
@@ -232,6 +233,38 @@
         "mock_misses_left_out": {
           "type": "integer",
           "minimum": 0
+        },
+        "notices": {
+          "type": "array",
+          "description": "Facts about what the runs did that no row's result depends on. Today one kind: ungated, a web request sent through a client Scrimmage does not gate, so it ran for real. One object per library and host.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "library", "host", "methods", "runs"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "What the notice says. Today `ungated`; read any other value as other."
+              },
+              "library": {
+                "type": "string",
+                "description": "The outermost client that sent it: requests, urllib3, urllib.request, aiohttp or http.client."
+              },
+              "host": {
+                "type": "string",
+                "description": "The host only: never a path, a query, a header or a body."
+              },
+              "methods": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The methods sent to that host, sorted, such as GET and POST."
+              },
+              "runs": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "How many runs sent a request through that library to that host."
+              }
+            }
+          }
         },
         "runs_sent": {
           "type": "integer",
